@@ -4,9 +4,9 @@
  */
 
 import { useEffect, useState } from 'react';
-import { PanelotDB } from '../../src/db/schema';
-import { exportAll, importBundle, type ExportBundle } from '../../src/data/exportImport';
-import { getQuotaStatus, type QuotaStatus } from '../../src/data/quota';
+import { PanelotDB } from '../../db/schema';
+import { exportAll, importBundle, type ExportBundle } from '../../data/exportImport';
+import { getQuotaStatus, type QuotaStatus } from '../../data/quota';
 
 const db = new PanelotDB();
 

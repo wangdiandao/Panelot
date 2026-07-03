@@ -71,55 +71,65 @@ export function PromptInput({
   };
 
   return (
-    <div className="border-t border-border bg-surface p-3">
-      {contextChips.length > 0 && (
-        <div className="mb-2 flex flex-wrap gap-1">
-          {contextChips.map((chip, i) => (
-            <span key={i} className="flex items-center gap-1 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-[11px]">
-              📎 {chip.label}
-              {chip.approxTokens !== undefined && <span className="text-text-dim">~{chip.approxTokens}tok</span>}
-              <button type="button" onClick={() => onRemoveChip(i)} className="text-text-dim hover:text-danger" aria-label={`移除 ${chip.label}`}>
-                ×
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-      {steerHint && <div className="mb-1 text-[11px] text-agent">{steerHint}</div>}
-      {queuedInputs > 0 && (
-        <div className="mb-1 text-[11px] text-text-dim">队列中 {queuedInputs} 条消息</div>
-      )}
-      <div className="flex items-end gap-2">
-        <textarea
-          ref={textareaRef}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={onKeyDown}
-          disabled={disabled}
-          placeholder={disabled ? (disabledHint ?? '先在设置中添加模型 →') : running ? '输入以插话，Esc 停止…' : '问点什么… (@ 引用 / 命令)'}
-          rows={Math.min(6, Math.max(1, text.split('\n').length))}
-          className="min-h-[38px] flex-1 resize-none rounded-[12px] border border-border bg-surface-2 px-3 py-2 text-[14px] leading-[1.5] outline-none placeholder:text-text-dim focus:border-accent/60 disabled:opacity-50"
-        />
-        {running ? (
-          <button
-            type="button"
-            onClick={onStop}
-            aria-label="停止"
-            className="flex h-[38px] w-[38px] items-center justify-center rounded-[12px] border border-danger/40 text-danger hover:bg-danger/10"
-          >
-            ⏹
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={() => submit('send')}
-            disabled={disabled || !text.trim()}
-            aria-label="发送"
-            className="flex h-[38px] w-[38px] items-center justify-center rounded-[12px] bg-accent text-black hover:brightness-110 disabled:opacity-40"
-          >
-            ➤
-          </button>
+    <div className="px-4 pb-4 pt-1">
+      {steerHint && <div className="mb-1.5 px-1 text-[11px] text-agent">{steerHint}</div>}
+      {queuedInputs > 0 && <div className="mb-1.5 px-1 text-[11px] text-text-dim">队列中 {queuedInputs} 条消息</div>}
+
+      <div
+        className={`flex flex-col rounded-[24px] border bg-surface-2 px-2 py-1.5 shadow-soft transition-colors ${
+          disabled ? 'border-border opacity-70' : 'border-border focus-within:border-accent/60'
+        }`}
+      >
+        {contextChips.length > 0 && (
+          <div className="flex flex-wrap gap-1 px-2 pb-1.5 pt-1">
+            {contextChips.map((chip, i) => (
+              <span key={i} className="flex items-center gap-1 rounded-full bg-surface-3 px-2 py-0.5 text-[11px]">
+                📎 {chip.label}
+                {chip.approxTokens !== undefined && <span className="text-text-faint">~{chip.approxTokens}tok</span>}
+                <button type="button" onClick={() => onRemoveChip(i)} className="text-text-faint hover:text-danger" aria-label={`移除 ${chip.label}`}>
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
         )}
+        <div className="flex items-end gap-2">
+          <textarea
+            ref={textareaRef}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={onKeyDown}
+            disabled={disabled}
+            placeholder={disabled ? (disabledHint ?? '先在设置中添加模型 →') : running ? '输入以插话，Esc 停止…' : '给 Panelot 发消息…'}
+            rows={Math.min(8, Math.max(1, text.split('\n').length))}
+            className="max-h-48 min-h-[36px] flex-1 resize-none bg-transparent px-2.5 py-1.5 text-[14.5px] leading-[1.5] outline-none placeholder:text-text-faint disabled:cursor-not-allowed"
+          />
+          {running ? (
+            <button
+              type="button"
+              onClick={onStop}
+              aria-label="停止"
+              title="停止 (Esc)"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-text text-bg transition-transform hover:scale-105"
+            >
+              <span className="block h-2.5 w-2.5 rounded-[2px] bg-bg" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => submit('send')}
+              disabled={disabled || !text.trim()}
+              aria-label="发送"
+              title="发送 (Enter)"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-black transition-all hover:brightness-110 disabled:bg-surface-3 disabled:text-text-faint"
+            >
+              ↑
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="mt-1.5 px-2 text-center text-[10.5px] text-text-faint">
+        {running ? 'Enter 插话 · Shift+Alt+Enter 排队 · Esc 停止' : 'Enter 发送 · Shift+Enter 换行'}
       </div>
     </div>
   );

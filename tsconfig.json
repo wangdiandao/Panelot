@@ -13,5 +13,5 @@
     "moduleResolution": "Bundler",
     "verbatimModuleSyntax": true
   },
-  "exclude": ["dist", "node_modules", "e2e"]
+  "exclude": ["dist", "node_modules", "e2e", "preview"]
 }

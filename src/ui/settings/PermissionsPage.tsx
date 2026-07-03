@@ -5,9 +5,9 @@
  */
 
 import { useEffect, useState } from 'react';
-import { GatekeeperService } from '../../src/gatekeeper/service';
-import { DEFAULT_SENSITIVE_PATTERNS, type PermissionRule } from '../../src/gatekeeper/rules';
-import { SettingsStore, type GlobalSettings, storageGet, storageSet } from '../../src/settings/store';
+import { GatekeeperService } from '../../gatekeeper/service';
+import { DEFAULT_SENSITIVE_PATTERNS, type PermissionRule } from '../../gatekeeper/rules';
+import { SettingsStore, type GlobalSettings, storageGet, storageSet } from '../../settings/store';
 
 const POLICY_DESC: Record<string, string> = {
   untrusted: '只自动放行只读操作，其余一律弹审批（推荐默认）',

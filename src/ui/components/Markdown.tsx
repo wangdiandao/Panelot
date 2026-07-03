@@ -82,7 +82,7 @@ export const Markdown = memo(function Markdown({ content, streaming }: MarkdownP
   const { closed, openTail } = streaming ? splitUnclosedFence(content) : { closed: content, openTail: null };
 
   return (
-    <div className="markdown-body space-y-2 text-[14px] leading-[1.6]">
+    <div className="markdown-body text-[14.5px] leading-[1.7] [&>*+*]:mt-3 [&_h1]:mt-4 [&_h1]:text-[18px] [&_h1]:font-semibold [&_h2]:mt-4 [&_h2]:text-[16px] [&_h2]:font-semibold [&_h3]:mt-3 [&_h3]:text-[15px] [&_h3]:font-semibold [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5 [&_li]:my-0.5 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-text-dim">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}

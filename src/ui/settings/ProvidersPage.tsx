@@ -5,10 +5,10 @@
  */
 
 import { useEffect, useState } from 'react';
-import { CONNECTION_TEMPLATES, createAdapter, normalizeBaseUrl } from '../../src/providers/registry';
-import type { Connection, QuirkFlags, VerifyResult } from '../../src/providers/types';
-import { SettingsStore } from '../../src/settings/store';
-import { decryptSecret, encryptSecret, isEncrypted } from '../../src/settings/crypto';
+import { CONNECTION_TEMPLATES, createAdapter, normalizeBaseUrl } from '../../providers/registry';
+import type { Connection, QuirkFlags, VerifyResult } from '../../providers/types';
+import { SettingsStore } from '../../settings/store';
+import { decryptSecret, encryptSecret, isEncrypted } from '../../settings/crypto';
 
 const FAILURE_TEXT: Record<NonNullable<VerifyResult['failure']>, string> = {
   invalid_key: 'API Key 无效 — 检查 Key 是否正确、是否有余额',

@@ -41,7 +41,7 @@ export function ThreadView({ session, providerConfigured, onOpenSettings, staged
   return (
     <div className="flex h-full flex-col bg-bg text-text">
       {!state.connected && (
-        <div className="border-b border-border bg-surface px-3 py-1 text-center text-[11px] text-text-dim">
+        <div className="border-b border-border-soft bg-surface px-3 py-1 text-center text-[11px] text-text-dim">
           重新连接引擎…
         </div>
       )}
@@ -64,12 +64,12 @@ export function ThreadView({ session, providerConfigured, onOpenSettings, staged
         </div>
       )}
       {state.wasInterrupted && (
-        <div className="mx-4 mb-2 flex items-center gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-[12px] text-warn">
+        <div className="mx-4 mb-2 flex items-center gap-2 rounded-xl border border-warn/40 bg-warn/10 px-3 py-2 text-[12px] text-warn">
           <span>任务此前被中断（可能是浏览器休眠）。</span>
           <button
             type="button"
             onClick={() => session.enqueue({ text: '继续刚才的任务' })}
-            className="ml-auto rounded-md bg-warn px-2 py-0.5 text-[11px] font-medium text-black hover:brightness-110"
+            className="ml-auto rounded-lg bg-warn px-2.5 py-1 text-[11px] font-medium text-black transition-[filter] hover:brightness-110"
           >
             继续
           </button>
@@ -79,7 +79,7 @@ export function ThreadView({ session, providerConfigured, onOpenSettings, staged
         <button
           type="button"
           onClick={onOpenSettings}
-          className="mx-4 mb-2 rounded-md border border-accent/40 bg-accent/10 px-3 py-2 text-[12px] text-accent hover:bg-accent/20"
+          className="mx-4 mb-2 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-[12px] text-accent transition-colors hover:bg-accent/20"
         >
           先在设置中添加模型 →
         </button>

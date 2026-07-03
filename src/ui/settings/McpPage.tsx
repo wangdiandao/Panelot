@@ -5,8 +5,8 @@
  */
 
 import { useEffect, useState } from 'react';
-import { parseMcpJson, type McpServerConfig } from '../../src/mcp/types';
-import { storageGet, storageSet } from '../../src/settings/store';
+import { parseMcpJson, type McpServerConfig } from '../../mcp/types';
+import { storageGet, storageSet } from '../../settings/store';
 
 const SERVERS_KEY = 'mcp_servers';
 

@@ -1,41 +1,111 @@
 @import 'tailwindcss';
 
 /*
- * Design tokens (docs/09 §1) — neutral dark base + amber accent.
- * Both themes share the same variable names; components are theme-agnostic.
+ * Design tokens — refined toward the ChatGPT / OpenWebUI / CodeX feel:
+ * near-neutral graphite dark base, generous surfaces, a restrained amber accent.
+ * Both themes share variable names; components stay theme-agnostic.
  */
 @theme {
-  --color-bg: #101014;
-  --color-surface: #18181d;
-  --color-surface-2: #202028;
-  --color-border: #2a2a33;
-  --color-text: #e8e8ed;
-  --color-text-dim: #8b8b96;
+  /* Dark (default) — graphite, softer than pure black, like ChatGPT dark */
+  --color-bg: #0d0d0f;
+  --color-surface: #171719;
+  --color-surface-2: #212124;
+  --color-surface-3: #2b2b2f;
+  --color-border: #2e2e33;
+  --color-border-soft: #232327;
+  --color-text: #ececf1;
+  --color-text-dim: #9a9aa6;
+  --color-text-faint: #6a6a75;
   --color-accent: #f5a623;
-  --color-ok: #34c77b;
+  --color-accent-soft: #f5a62322;
+  --color-ok: #3fb950;
   --color-warn: #f5a623;
   --color-danger: #f0524f;
-  --color-agent: #6c8cff;
+  --color-agent: #7c93ff;
+  --color-user-bubble: #2b2b2f;
 
-  --font-ui: Inter, 'PingFang SC', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --font-ui: 'Inter', -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
 
-  --radius-card: 10px;
-  --radius-input: 12px;
+  --radius-card: 12px;
+  --radius-input: 24px;
   --radius-chip: 999px;
+
+  --shadow-pop: 0 8px 30px rgba(0, 0, 0, 0.4);
+  --shadow-soft: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
 [data-theme='light'] {
-  --color-bg: #fafafa;
-  --color-surface: #ffffff;
-  --color-surface-2: #f2f2f4;
-  --color-border: #e4e4e9;
-  --color-text: #1a1a1f;
+  --color-bg: #ffffff;
+  --color-surface: #f7f7f8;
+  --color-surface-2: #ececf1;
+  --color-surface-3: #e0e0e6;
+  --color-border: #e3e3e8;
+  --color-border-soft: #ededf0;
+  --color-text: #1f1f24;
   --color-text-dim: #6b6b76;
+  --color-text-faint: #9a9aa6;
+  --color-user-bubble: #ececf1;
+  --shadow-pop: 0 8px 30px rgba(0, 0, 0, 0.12);
+  --shadow-soft: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+html,
+body {
+  height: 100%;
 }
 
 body {
   font-family: var(--font-ui);
   background: var(--color-bg);
   color: var(--color-text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Slim, unobtrusive scrollbars (ChatGPT-style) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-surface-3) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-surface-3);
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-faint);
+}
+
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.2;
+  }
 }

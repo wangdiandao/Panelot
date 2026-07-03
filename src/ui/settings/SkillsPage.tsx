@@ -5,10 +5,10 @@
  */
 
 import { useEffect, useState } from 'react';
-import { PanelotDB } from '../../src/db/schema';
-import { SkillManager } from '../../src/skills/manager';
-import { parseSkill } from '../../src/skills/parse';
-import type { SkillRecord } from '../../src/db/types';
+import { PanelotDB } from '../../db/schema';
+import { SkillManager } from '../../skills/manager';
+import { parseSkill } from '../../skills/parse';
+import type { SkillRecord } from '../../db/types';
 
 const db = new PanelotDB();
 const manager = new SkillManager(db);
