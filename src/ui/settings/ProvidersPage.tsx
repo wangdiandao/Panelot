@@ -8,7 +8,6 @@ import { useEffect, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '../components/ui/button';
-import { Badge } from '../components/ui/badge';
 import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
 import { Label } from '../components/ui/label';
@@ -33,7 +32,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../components/ui/select';
-import { CONNECTION_TEMPLATES, createAdapter, normalizeBaseUrl } from '../../providers/registry';
+import { createAdapter, normalizeBaseUrl } from '../../providers/registry';
 import type { Connection, QuirkFlags, VerifyResult } from '../../providers/types';
 import { SettingsStore } from '../../settings/store';
 import { decryptSecret, encryptSecret, isEncrypted } from '../../settings/crypto';
@@ -181,17 +180,20 @@ function ConnectionForm({
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
   const [urlHint, setUrlHint] = useState<string | undefined>();
 
-  const applyTemplate = (name: string) => {
-    const tpl = CONNECTION_TEMPLATES.find((t) => t.name === name);
-    if (!tpl) return;
-    setConn((c) => ({ ...c, name: tpl.name === 'Custom' ? '' : tpl.name, kind: tpl.kind, baseUrl: tpl.baseUrl, quirks: tpl.quirks }));
-  };
-
   const built = (): Connection => {
     const { url, hint } = normalizeBaseUrl(conn.baseUrl, conn.kind);
     setUrlHint(hint);
+    // Name is optional — default to the endpoint hostname.
+    const name = conn.name.trim() || (() => {
+      try {
+        return new URL(url).hostname;
+      } catch {
+        return url;
+      }
+    })();
     return {
       ...conn,
+      name,
       baseUrl: url,
       apiKeys: keysText.split('\n').map((k) => k.trim()).filter(Boolean),
       modelIds: modelsText.trim() ? modelsText.split('\n').map((m) => m.trim()).filter(Boolean) : undefined,
@@ -235,8 +237,8 @@ function ConnectionForm({
     <div className="max-w-xl space-y-4">
       <h2 className="text-[15px] font-semibold">{connection.name ? `编辑 ${connection.name}` : '添加连接'}</h2>
 
-      {/* Classified by interface type, not vendor: pick the wire protocol
-          first, then an optional endpoint preset within it. */}
+      {/* Classified by interface type, not vendor: pick the wire protocol,
+          then enter the endpoint domain + key. */}
       <div>
         <Label className={labelCls}>接口类型</Label>
         <Select value={conn.kind} onValueChange={(v) => setConn({ ...conn, kind: v as Connection['kind'] })}>
@@ -249,23 +251,7 @@ function ConnectionForm({
       </div>
 
       <div>
-        <Label className={labelCls}>常用端点（可选，点选自动填 Base URL）</Label>
-        <div className="flex flex-wrap gap-1">
-          {CONNECTION_TEMPLATES.filter((t) => t.kind === conn.kind && t.name !== 'Custom').map((t) => (
-            <Badge
-              key={t.name}
-              asChild
-              variant={conn.name === t.name ? 'default' : 'outline'}
-              className={conn.name === t.name ? '' : 'text-muted-foreground hover:border-primary/60'}
-            >
-              <button type="button" onClick={() => applyTemplate(t.name)}>{t.name}</button>
-            </Badge>
-          ))}
-        </div>
-      </div>
-
-      <div>
-        <Label className={labelCls} htmlFor="conn-name">名称</Label>
+        <Label className={labelCls} htmlFor="conn-name">名称（可选，留空自动取域名）</Label>
         <Input id="conn-name" value={conn.name} onChange={(e) => setConn({ ...conn, name: e.target.value })} placeholder="给这个连接起个名字" />
       </div>
 

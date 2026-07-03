@@ -1,10 +1,12 @@
 /**
  * Onboarding (docs/09 §3.3, OB-1 "first answer ≤2min"): three-step flow shown
  * in the empty conversation when no provider is configured.
- *   ① pick a template + paste a key, inline Verify (turns green on success)
+ *   ① pick the interface type + base URL + key, inline Verify (green on success)
  *   ② choose the approval tier (two-axis semantic cards)
  *   ③ demo prompt card ("try: @当前页面 总结一下")
  * Skippable — a "稍后配置" link falls back to the settings modal.
+ * No vendor list here: the wire protocol is the only fork that matters, so
+ * the flow is interface type → endpoint domain → key.
  */
 
 import { useState } from 'react';
@@ -13,9 +15,15 @@ import { toast } from 'sonner';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
-import { Badge } from './ui/badge';
 import { RadioGroup, RadioGroupItem } from './ui/radio-group';
-import { CONNECTION_TEMPLATES, createAdapter, normalizeBaseUrl } from '../../providers/registry';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from './ui/select';
+import { createAdapter, normalizeBaseUrl } from '../../providers/registry';
 import type { Connection, VerifyResult } from '../../providers/types';
 import { SettingsStore, type GlobalSettings } from '../../settings/store';
 import { encryptSecret } from '../../settings/crypto';
@@ -52,31 +60,35 @@ interface Props {
 
 export function Onboarding({ onConfigured, onOpenSettings, onTryDemo }: Props) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
-  const [templateName, setTemplateName] = useState<string>(CONNECTION_TEMPLATES[0]?.name ?? '');
+  const [kind, setKind] = useState<Connection['kind']>('openai');
+  const [baseUrl, setBaseUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [verifying, setVerifying] = useState(false);
   const [verified, setVerified] = useState<VerifyResult | null>(null);
   const [tier, setTier] = useState('safe');
 
-  const template = CONNECTION_TEMPLATES.find((t) => t.name === templateName);
-
   const buildConnection = (): Connection | null => {
-    if (!template) return null;
-    const { url } = normalizeBaseUrl(template.baseUrl, template.kind);
+    if (!baseUrl.trim()) return null;
+    const { url } = normalizeBaseUrl(baseUrl.trim(), kind);
     return {
       id: crypto.randomUUID(),
-      name: template.name,
-      kind: template.kind,
+      name: (() => {
+        try {
+          return new URL(url).hostname;
+        } catch {
+          return url;
+        }
+      })(),
+      kind,
       baseUrl: url,
-      apiKeys: [apiKey.trim()],
+      apiKeys: apiKey.trim() ? [apiKey.trim()] : [],
       enabled: true,
-      quirks: template.quirks,
     };
   };
 
   const verify = async () => {
     const conn = buildConnection();
-    if (!conn || !apiKey.trim()) return;
+    if (!conn) return;
     setVerifying(true);
     setVerified(null);
     try {
@@ -123,21 +135,28 @@ export function Onboarding({ onConfigured, onOpenSettings, onTryDemo }: Props) {
       {step === 1 && (
         <div className="w-full space-y-3 rounded-2xl border border-border bg-card p-5">
           <div className="text-[15px] font-semibold">① 连接你的模型</div>
-          {/* Grouped by interface type (wire protocol), not vendor. */}
-          {([['anthropic', 'Anthropic 接口'], ['openai', 'OpenAI 兼容接口']] as const).map(([kind, label]) => (
-            <div key={kind} className="space-y-1">
-              <div className="text-[11px] text-faint-foreground">{label}</div>
-              <div className="flex flex-wrap gap-1">
-                {CONNECTION_TEMPLATES.filter((t) => t.kind === kind && t.name !== 'Custom').map((t) => (
-                  <Badge key={t.name} asChild variant={templateName === t.name ? 'default' : 'outline'} className="cursor-pointer">
-                    <button type="button" onClick={() => { setTemplateName(t.name); setVerified(null); }}>{t.name}</button>
-                  </Badge>
-                ))}
-              </div>
-            </div>
-          ))}
           <div className="space-y-1.5">
-            <Label htmlFor="ob-key" className="text-[12px] text-muted-foreground">API Key</Label>
+            <Label className="text-[12px] text-muted-foreground">接口类型</Label>
+            <Select value={kind} onValueChange={(v) => { setKind(v as Connection['kind']); setVerified(null); }}>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="openai">OpenAI 兼容（/chat/completions）</SelectItem>
+                <SelectItem value="anthropic">Anthropic（/v1/messages）</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="ob-url" className="text-[12px] text-muted-foreground">接口域名（Base URL）</Label>
+            <Input
+              id="ob-url"
+              value={baseUrl}
+              onChange={(e) => { setBaseUrl(e.target.value); setVerified(null); }}
+              placeholder={kind === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.example.com/v1'}
+              className="font-mono"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="ob-key" className="text-[12px] text-muted-foreground">API Key（本地端点如 Ollama 可留空）</Label>
             <Input
               id="ob-key"
               type="password"
@@ -149,11 +168,11 @@ export function Onboarding({ onConfigured, onOpenSettings, onTryDemo }: Props) {
           </div>
           {verified && (
             <div className={`text-[12px] ${verified.keyValid ? 'text-success' : 'text-destructive'}`}>
-              {verified.keyValid ? '✓ 连接成功，Key 有效' : `✗ ${verified.detail ?? '验证失败，检查 Key 与网络'}`}
+              {verified.keyValid ? '✓ 连接成功，Key 有效' : `✗ ${verified.detail ?? '验证失败，检查域名、Key 与网络'}`}
             </div>
           )}
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" disabled={!apiKey.trim() || verifying} onClick={() => void verify()}>
+            <Button variant="outline" size="sm" disabled={!baseUrl.trim() || verifying} onClick={() => void verify()}>
               {verifying ? <Loader2 className="size-3.5 animate-spin" /> : null}
               {verifying ? '验证中…' : 'Verify'}
             </Button>
@@ -211,7 +230,7 @@ export function Onboarding({ onConfigured, onOpenSettings, onTryDemo }: Props) {
       >
         跳过，稍后在设置中配置
       </button>
-      {step === 1 && !verified?.keyValid && apiKey.trim() && !verifying && (
+      {step === 1 && !verified?.keyValid && baseUrl.trim() && !verifying && (
         <button
           type="button"
           onClick={() => { void saveAndNext(); toast.info('已保存未验证的连接，可稍后在设置中 Verify'); }}
