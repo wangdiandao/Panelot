@@ -1,0 +1,399 @@
+import 'fake-indexeddb/auto';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
+import { PanelotDB } from '../../src/db/schema';
+import { ThreadTree } from '../../src/db/tree';
+import { buildSessionContext } from '../../src/db/sessionContext';
+import { runTurn, type GatekeeperCheck, type TurnEnv } from '../../src/agent/loop';
+import { ToolRegistry, type AgentTool } from '../../src/agent/tool';
+import type { AgentEvent, ApprovalDecision } from '../../src/messaging/protocol';
+import type { FinalResult, ProviderAdapter, ProviderStream, StreamEvent, StreamRequest } from '../../src/providers/types';
+
+// ---------------------------------------------------------------------------
+// Mock provider: scripted responses, records every request it receives.
+// ---------------------------------------------------------------------------
+
+type ScriptedResponse = Partial<FinalResult> & { streamText?: string[] };
+
+class MockProvider implements ProviderAdapter {
+  requests: StreamRequest[] = [];
+  private script: ScriptedResponse[] = [];
+  private callIndex = 0;
+
+  queue(...responses: ScriptedResponse[]): void {
+    this.script.push(...responses);
+  }
+
+  stream(req: StreamRequest): ProviderStream {
+    this.requests.push(req);
+    const scripted = this.script[this.callIndex++] ?? {};
+    const events: StreamEvent[] = (scripted.streamText ?? []).map((t) => ({ type: 'text', delta: t }));
+    const final: FinalResult = {
+      message: scripted.message ?? [{ type: 'text', text: (scripted.streamText ?? []).join('') }],
+      toolCalls: scripted.toolCalls ?? [],
+      usage: scripted.usage ?? { input: 100, output: 20 },
+      stopReason: scripted.stopReason ?? ((scripted.toolCalls?.length ?? 0) > 0 ? 'tool_use' : 'end'),
+      reasoning: scripted.reasoning,
+    };
+    async function* gen(): AsyncGenerator<StreamEvent> {
+      for (const ev of events) {
+        if (req.signal.aborted) throw new DOMException('aborted', 'AbortError');
+        yield ev;
+      }
+    }
+    const iterator = gen();
+    return {
+      [Symbol.asyncIterator]: () => iterator,
+      final: async () => {
+        if (req.signal.aborted) throw new DOMException('aborted', 'AbortError');
+        // drain
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        for await (const _ of iterator) { /* drain */ }
+        return final;
+      },
+    };
+  }
+
+  async verify() {
+    return { reachable: true, keyValid: true, streaming: true, toolUse: true };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+const allowAll: GatekeeperCheck = { check: async () => ({ verdict: 'allow' }) };
+
+function makeEchoTool(overrides?: Partial<AgentTool<{ text: string }, unknown>>): AgentTool<{ text: string }, unknown> {
+  return {
+    name: 'echo',
+    label: 'Echo',
+    description: 'Echo text back.',
+    parameters: z.object({ text: z.string() }),
+    level: 'builtin',
+    effects: 'read',
+    execute: async (_id, params) => ({ content: [{ type: 'text', text: `echo: ${params.text}` }] }),
+    ...overrides,
+  };
+}
+
+let db: PanelotDB;
+let tree: ThreadTree;
+let provider: MockProvider;
+let tools: ToolRegistry;
+let events: AgentEvent[];
+let n = 0;
+
+beforeEach(() => {
+  db = new PanelotDB(`loop-test-${Date.now()}-${n++}`);
+  tree = new ThreadTree(db);
+  provider = new MockProvider();
+  tools = new ToolRegistry();
+  events = [];
+});
+
+function makeEnv(overrides?: Partial<TurnEnv>): TurnEnv {
+  return {
+    tree,
+    tools,
+    gatekeeper: allowAll,
+    requestApproval: async () => ({ kind: 'accept' }),
+    emit: (ev) => events.push(ev),
+    provider,
+    model: 'mock-model',
+    systemPrompt: 'SYSTEM',
+    params: {},
+    ...overrides,
+  };
+}
+
+const eventTypes = () => events.map((e) => e.type);
+
+// ---------------------------------------------------------------------------
+
+describe('agent loop (docs/04 §2)', () => {
+  it('runs a text-only turn: user + assistant persisted, turn completes done', async () => {
+    const thread = await tree.createThread({});
+    provider.queue({ streamText: ['Hello', ' world'] });
+
+    const handle = runTurn(makeEnv(), thread.id, { text: 'hi' });
+    const stop = await handle.done;
+
+    expect(stop).toBe('done');
+    expect(eventTypes()).toEqual([
+      'turn.start', 'item.start', 'item.delta', 'item.delta', 'item.complete', 'token.usage', 'turn.complete',
+    ]);
+
+    const meta = await tree.getThread(thread.id);
+    const ctx = await buildSessionContext(tree, thread.id, meta!.leafId!);
+    expect(ctx.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+  });
+
+  it('loops through tool calls until the model stops calling tools', async () => {
+    tools.register(makeEchoTool());
+    const thread = await tree.createThread({});
+    provider.queue(
+      { toolCalls: [{ id: 'c1', name: 'echo', params: { text: 'one' } }] },
+      { toolCalls: [{ id: 'c2', name: 'echo', params: { text: 'two' } }] },
+      { streamText: ['done'] },
+    );
+
+    const stop = await runTurn(makeEnv(), thread.id, { text: 'go' }).done;
+    expect(stop).toBe('done');
+    expect(provider.requests).toHaveLength(3);
+
+    // Second request must contain the first tool result.
+    const secondReq = provider.requests[1]!;
+    const resultMsg = secondReq.messages.find((m) => m.role === 'tool_result');
+    expect(resultMsg).toBeDefined();
+    expect((resultMsg!.content[0] as { text: string }).text).toBe('echo: one');
+  });
+
+  it('feeds tool errors back to the model for self-correction instead of crashing', async () => {
+    tools.register(makeEchoTool({
+      execute: async () => {
+        throw new Error('element not found');
+      },
+    }));
+    const thread = await tree.createThread({});
+    provider.queue(
+      { toolCalls: [{ id: 'c1', name: 'echo', params: { text: 'x' } }] },
+      { streamText: ['recovered'] },
+    );
+
+    const stop = await runTurn(makeEnv(), thread.id, { text: 'go' }).done;
+    expect(stop).toBe('done');
+    const secondReq = provider.requests[1]!;
+    const resultMsg = secondReq.messages.find((m) => m.role === 'tool_result')!;
+    expect(resultMsg).toMatchObject({ isError: true });
+    expect((resultMsg.content[0] as { text: string }).text).toMatch(/element not found/);
+  });
+
+  it('returns zod validation errors to the model (not thrown at user)', async () => {
+    tools.register(makeEchoTool());
+    const thread = await tree.createThread({});
+    provider.queue(
+      { toolCalls: [{ id: 'c1', name: 'echo', params: { wrong: 1 } }] },
+      { streamText: ['fixed'] },
+    );
+
+    await runTurn(makeEnv(), thread.id, { text: 'go' }).done;
+    const resultMsg = provider.requests[1]!.messages.find((m) => m.role === 'tool_result')!;
+    expect((resultMsg.content[0] as { text: string }).text).toMatch(/Invalid parameters/);
+  });
+
+  it('handles unknown tools and JSON parse errors gracefully', async () => {
+    const thread = await tree.createThread({});
+    provider.queue(
+      { toolCalls: [
+        { id: 'c1', name: 'nonexistent', params: {} },
+        { id: 'c2', name: 'echo', params: '{broken', parseError: 'tool call arguments were not valid JSON' },
+      ] },
+      { streamText: ['ok'] },
+    );
+
+    const stop = await runTurn(makeEnv(), thread.id, { text: 'go' }).done;
+    expect(stop).toBe('done');
+    const results = provider.requests[1]!.messages.filter((m) => m.role === 'tool_result');
+    expect(results).toHaveLength(2);
+    expect((results[0]!.content[0] as { text: string }).text).toMatch(/Unknown tool/);
+    expect((results[1]!.content[0] as { text: string }).text).toMatch(/not valid JSON/);
+  });
+});
+
+describe('gatekeeper integration', () => {
+  it('deny → tool_result explains the denial, loop continues', async () => {
+    tools.register(makeEchoTool({ effects: 'write' }));
+    const gatekeeper: GatekeeperCheck = {
+      check: async () => ({ verdict: 'deny', reason: 'blocked origin' }),
+    };
+    const thread = await tree.createThread({});
+    provider.queue(
+      { toolCalls: [{ id: 'c1', name: 'echo', params: { text: 'x' } }] },
+      { streamText: ['adapted'] },
+    );
+
+    const stop = await runTurn(makeEnv({ gatekeeper }), thread.id, { text: 'go' }).done;
+    expect(stop).toBe('done');
+    const resultMsg = provider.requests[1]!.messages.find((m) => m.role === 'tool_result')!;
+    expect((resultMsg.content[0] as { text: string }).text).toMatch(/denied by policy: blocked origin/);
+  });
+
+  it('ask → approval accepted → tool executes; decision persisted', async () => {
+    const executed = vi.fn();
+    tools.register(makeEchoTool({
+      effects: 'write',
+      execute: async (_id, params) => {
+        executed(params);
+        return { content: [{ type: 'text', text: 'done' }] };
+      },
+    }));
+    const gatekeeper: GatekeeperCheck = {
+      check: async () => ({
+        verdict: 'ask',
+        request: { tool: 'echo', label: 'Echo', params: { text: 'x' }, targetOrigin: 'https://x.com', flags: [] },
+      }),
+    };
+    const thread = await tree.createThread({});
+    provider.queue(
+      { toolCalls: [{ id: 'c1', name: 'echo', params: { text: 'x' } }] },
+      { streamText: ['finished'] },
+    );
+
+    await runTurn(makeEnv({ gatekeeper }), thread.id, { text: 'go' }).done;
+    expect(executed).toHaveBeenCalledWith({ text: 'x' });
+
+    const meta = await tree.getThread(thread.id);
+    const ctx = await buildSessionContext(tree, thread.id, meta!.leafId!);
+    const approvalNode = ctx.path.find((p) => p.type === 'approval_decision');
+    expect(approvalNode).toBeDefined();
+  });
+
+  it('ask → declined with note → note reaches the model, tool NOT executed', async () => {
+    const executed = vi.fn();
+    tools.register(makeEchoTool({
+      effects: 'write',
+      execute: async () => {
+        executed();
+        return { content: [] };
+      },
+    }));
+    const gatekeeper: GatekeeperCheck = {
+      check: async () => ({
+        verdict: 'ask',
+        request: { tool: 'echo', label: 'Echo', params: {}, targetOrigin: 'https://x.com', flags: [] },
+      }),
+    };
+    const decline: ApprovalDecision = { kind: 'decline', note: '换个方式' };
+    const thread = await tree.createThread({});
+    provider.queue(
+      { toolCalls: [{ id: 'c1', name: 'echo', params: { text: 'x' } }] },
+      { streamText: ['ok I will adapt'] },
+    );
+
+    await runTurn(makeEnv({ gatekeeper, requestApproval: async () => decline }), thread.id, { text: 'go' }).done;
+    expect(executed).not.toHaveBeenCalled();
+    const resultMsg = provider.requests[1]!.messages.find((m) => m.role === 'tool_result')!;
+    expect((resultMsg.content[0] as { text: string }).text).toMatch(/declined.*换个方式/s);
+  });
+
+  it('cancel → declines and interrupts the turn', async () => {
+    tools.register(makeEchoTool({ effects: 'write' }));
+    const gatekeeper: GatekeeperCheck = {
+      check: async () => ({
+        verdict: 'ask',
+        request: { tool: 'echo', label: 'Echo', params: {}, targetOrigin: 'https://x.com', flags: [] },
+      }),
+    };
+    const thread = await tree.createThread({});
+    provider.queue({ toolCalls: [{ id: 'c1', name: 'echo', params: { text: 'x' } }] });
+
+    const stop = await runTurn(
+      makeEnv({ gatekeeper, requestApproval: async () => ({ kind: 'cancel' }) }),
+      thread.id,
+      { text: 'go' },
+    ).done;
+    expect(stop).toBe('interrupted');
+  });
+});
+
+describe('steering & interrupt (docs/04 §3)', () => {
+  it('steer input is appended after the current LLM call and enters the next request', async () => {
+    tools.register(makeEchoTool());
+    const thread = await tree.createThread({});
+    provider.queue(
+      { toolCalls: [{ id: 'c1', name: 'echo', params: { text: 'step1' } }] },
+      { streamText: ['done'] },
+    );
+
+    const handle = runTurn(makeEnv(), thread.id, { text: 'go' });
+    handle.steer({ text: 'also check prices' });
+    await handle.done;
+
+    const secondReq = provider.requests[1]!;
+    const userTexts = secondReq.messages
+      .filter((m) => m.role === 'user')
+      .flatMap((m) => m.content.map((c) => (c.type === 'text' ? c.text : '')));
+    expect(userTexts).toContain('also check prices');
+  });
+
+  it('interrupt aborts promptly with stopReason interrupted', async () => {
+    tools.register(makeEchoTool({
+      execute: (_id, _params, signal) =>
+        new Promise((_, reject) => {
+          signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        }),
+    }));
+    const thread = await tree.createThread({});
+    provider.queue({ toolCalls: [{ id: 'c1', name: 'echo', params: { text: 'x' } }] });
+
+    const handle = runTurn(makeEnv(), thread.id, { text: 'go' });
+    // Let the loop reach the tool, then interrupt.
+    await new Promise((r) => setTimeout(r, 10));
+    handle.interrupt();
+    const stop = await handle.done;
+    expect(stop).toBe('interrupted');
+    const turnComplete = events.find((e) => e.type === 'turn.complete');
+    expect(turnComplete).toMatchObject({ stopReason: 'interrupted' });
+  });
+
+  it('non-user turns are not steerable', async () => {
+    const thread = await tree.createThread({});
+    provider.queue({ streamText: ['summary'] });
+    const handle = runTurn(makeEnv(), thread.id, { text: 'compact' }, 'compaction');
+    expect(handle.steerable).toBe(false);
+    expect(() => handle.steer({ text: 'x' })).toThrow(/not steerable/);
+    await handle.done;
+  });
+});
+
+describe('soft step limit & token budget (docs/04 §1)', () => {
+  it('injects the 25-step reminder without interrupting the task', async () => {
+    tools.register(makeEchoTool());
+    const thread = await tree.createThread({});
+    // 25 calls in one response → reminder pending → next request carries it.
+    provider.queue(
+      { toolCalls: Array.from({ length: 25 }, (_, i) => ({ id: `c${i}`, name: 'echo', params: { text: `${i}` } })) },
+      { streamText: ['continuing'] },
+    );
+
+    const stop = await runTurn(makeEnv(), thread.id, { text: 'go' }).done;
+    expect(stop).toBe('done');
+    const secondReq = provider.requests[1]!;
+    const lastUser = [...secondReq.messages].reverse().find((m) => m.role === 'user')!;
+    expect((lastUser.content[0] as { text: string }).text).toMatch(/25 tool calls/);
+  });
+
+  it('token budget pauses the turn (the only hard gate)', async () => {
+    tools.register(makeEchoTool());
+    const thread = await tree.createThread({});
+    provider.queue(
+      { toolCalls: [{ id: 'c1', name: 'echo', params: { text: 'x' } }], usage: { input: 900, output: 200 } },
+      { streamText: ['never reached'] },
+    );
+
+    const stop = await runTurn(makeEnv({ tokenBudget: 1000 }), thread.id, { text: 'go' }).done;
+    expect(stop).toBe('budget_pause');
+    expect(provider.requests).toHaveLength(1); // no second call
+  });
+});
+
+describe('recovery invariants (docs/04 §5.3)', () => {
+  it('every completed item is persisted before turn.complete (checkpoint replay)', async () => {
+    tools.register(makeEchoTool());
+    const thread = await tree.createThread({});
+    provider.queue(
+      { toolCalls: [{ id: 'c1', name: 'echo', params: { text: 'x' } }] },
+      { streamText: ['final answer'] },
+    );
+
+    await runTurn(makeEnv(), thread.id, { text: 'go' }).done;
+
+    // Replay from DB: full history is reconstructible.
+    const meta = await tree.getThread(thread.id);
+    const ctx = await buildSessionContext(tree, thread.id, meta!.leafId!);
+    expect(ctx.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'tool_result', 'assistant']);
+    expect(ctx.turnContext).not.toBeNull();
+  });
+});

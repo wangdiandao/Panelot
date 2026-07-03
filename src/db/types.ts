@@ -108,6 +108,12 @@ export interface TurnContextPayload {
   promptVersion?: string;
 }
 
+/** Cumulative operation trail (docs/04 §5.1). */
+export interface TrackedOps {
+  visitedUrls: string[];
+  mutatedTargets: string[];
+}
+
 /** Compaction checkpoint (docs/02 §4) — prevents compound loss. */
 export interface CompactionPayload {
   /** Handoff-document style summary. */
@@ -123,10 +129,7 @@ export interface CompactionPayload {
   tokensBefore: number;
   tokensAfter: number;
   /** Cumulative across all compactions — the operation trail never vanishes. */
-  trackedOps: {
-    visitedUrls: string[];
-    mutatedTargets: string[];
-  };
+  trackedOps: TrackedOps;
 }
 
 export interface BranchSummaryPayload {
