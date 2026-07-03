@@ -15,12 +15,16 @@ import { CdpManager } from '../src/tools/cdp/debugger';
 import { createDownloadTool, createFetchUrlTool, createMemoryTools, createTodoTool } from '../src/tools/builtinTools';
 import { GatekeeperService } from '../src/gatekeeper/service';
 import type { AnyAgentTool } from '../src/agent/tool';
+import { SkillManager, createLoadSkillTool } from '../src/skills/manager';
+import { McpManager } from '../src/mcp/manager';
 
 export default defineBackground(() => {
   const db = new PanelotDB();
   const tree = new ThreadTree(db);
   const gateway = new BrowserToolGateway();
   const cdp = new CdpManager();
+  const skills = new SkillManager(db);
+  const mcp = new McpManager();
 
   // Two-axis Gatekeeper (docs/06): the tool's level rides along so L2 forces
   // escalation and builtins are treated as origin-less.
@@ -52,6 +56,9 @@ export default defineBackground(() => {
       todoStore.set(tid, todos);
     }, getThreadId));
     add(createDownloadTool());
+    add(createLoadSkillTool(skills, getThreadId));
+    // MCP tools (mcp__{server}__{tool}) from connected servers (docs/07 §4).
+    for (const tool of mcp.buildTools()) add(tool);
     return registry;
   };
   const todoStore = new Map<string, unknown>();
@@ -59,14 +66,32 @@ export default defineBackground(() => {
   const resolver = new SettingsProviderResolver(db);
   const core = new RealEngineCore(db, registryFor, gatekeeper, resolver, async () => {
     const settings = await SettingsStore.global.get();
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
+    const url = activeTab?.url;
+    const sitePrompts = await SettingsStore.sitePrompts.get();
     return {
       userGlobalPrompt: settings.userGlobalPrompt,
+      sitePrompts: url
+        ? sitePrompts.filter((sp) => {
+            try {
+              return new URL(url).hostname.includes(sp.pattern.replace(/^\*\./, ''));
+            } catch {
+              return false;
+            }
+          })
+        : [],
+      skillsIndex: await skills.buildIndex(url),
       environment: {
         date: new Date().toISOString().slice(0, 10),
         language: settings.language ?? 'zh-CN',
+        activeTab: activeTab?.url && activeTab.title ? { url: activeTab.url, title: activeTab.title } : undefined,
       },
     };
   });
+
+  // Rebuild the tool registry when MCP servers connect/disconnect (list_changed).
+  mcp.onToolsChanged = () => {/* per-turn registryFor rebuilds from mcp.buildTools() */};
+  void mcp.ensureConnected();
   core.compaction = new CompactionRunner(
     tree,
     (threadId) => resolver.resolveTaskModel(threadId),
@@ -84,6 +109,14 @@ export default defineBackground(() => {
 
   const host = new EngineHost(core);
   core.onBroadcast = (ev) => host.broadcast(ev);
+
+  // MCP OAuth trigger from the settings page (docs/07 §3).
+  chrome.runtime.onMessage.addListener((msg: unknown) => {
+    const m = msg as { type?: string; id?: string };
+    if (m.type === 'panelot.mcpOauth' && m.id) {
+      void mcp.runOAuthFlow(m.id).then(() => mcp.connect(m.id!)).catch(() => {});
+    }
+  });
 
   // Manual operation on a controlled page → pause the owning thread (docs/05 §5).
   gateway.onManualOperation = (tabId) => {

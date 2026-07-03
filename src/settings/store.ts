@@ -72,4 +72,9 @@ export const SettingsStore = {
     get: (threadId: string) => storageGet<GenParams>(`thread_params:${threadId}`, {}),
     set: (threadId: string, v: GenParams) => storageSet(`thread_params:${threadId}`, v),
   },
+  /** Site-level instructions (docs/08 §6). */
+  sitePrompts: {
+    get: () => storageGet<{ pattern: string; prompt: string }[]>('site_prompts', []),
+    set: (v: { pattern: string; prompt: string }[]) => storageSet('site_prompts', v),
+  },
 };

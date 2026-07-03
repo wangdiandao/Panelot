@@ -6,6 +6,8 @@
 import { useEffect, useState } from 'react';
 import { ProvidersPage } from './ProvidersPage';
 import { PermissionsPage } from './PermissionsPage';
+import { SkillsPage } from './SkillsPage';
+import { McpPage } from './McpPage';
 import { SettingsStore, type GlobalSettings } from '../../src/settings/store';
 
 const SECTIONS = [
@@ -44,8 +46,8 @@ export function App() {
         {section === 'general' && <GeneralPage />}
         {section === 'providers' && <ProvidersPage />}
         {section === 'permissions' && <PermissionsPage />}
-        {section === 'skills' && <Placeholder text="Skills 管理将随生态能力一同上线。" />}
-        {section === 'mcp' && <Placeholder text="MCP 服务器管理将随生态能力一同上线。" />}
+        {section === 'skills' && <SkillsPage />}
+        {section === 'mcp' && <McpPage />}
         {section === 'data' && <Placeholder text="导入导出与存储管理将在打磨阶段上线。" />}
         {section === 'about' && <AboutPage />}
       </main>
