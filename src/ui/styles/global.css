@@ -1,0 +1,41 @@
+@import 'tailwindcss';
+
+/*
+ * Design tokens (docs/09 §1) — neutral dark base + amber accent.
+ * Both themes share the same variable names; components are theme-agnostic.
+ */
+@theme {
+  --color-bg: #101014;
+  --color-surface: #18181d;
+  --color-surface-2: #202028;
+  --color-border: #2a2a33;
+  --color-text: #e8e8ed;
+  --color-text-dim: #8b8b96;
+  --color-accent: #f5a623;
+  --color-ok: #34c77b;
+  --color-warn: #f5a623;
+  --color-danger: #f0524f;
+  --color-agent: #6c8cff;
+
+  --font-ui: Inter, 'PingFang SC', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  --radius-card: 10px;
+  --radius-input: 12px;
+  --radius-chip: 999px;
+}
+
+[data-theme='light'] {
+  --color-bg: #fafafa;
+  --color-surface: #ffffff;
+  --color-surface-2: #f2f2f4;
+  --color-border: #e4e4e9;
+  --color-text: #1a1a1f;
+  --color-text-dim: #6b6b76;
+}
+
+body {
+  font-family: var(--font-ui);
+  background: var(--color-bg);
+  color: var(--color-text);
+}

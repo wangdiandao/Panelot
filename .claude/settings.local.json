@@ -3,7 +3,12 @@
     "allow": [
       "Bash(git init *)",
       "Bash(git add *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(pnpm add *)",
+      "Bash(pnpm wxt *)",
+      "Bash(pnpm test *)",
+      "Bash(pnpm compile *)",
+      "Bash(pnpm build *)"
     ]
   }
 }
