@@ -157,12 +157,29 @@ async function waitForTabLoad(tabId: number, timeoutMs = 15_000): Promise<void> 
 // L1 — perception & interaction via content script
 // ---------------------------------------------------------------------------
 
-export function createL1Tools(gateway: BrowserToolGateway, getThreadId: () => string): AnyAgentTool[] {
+export interface L1Deps {
+  /** AXTree fallback for the perception degradation chain (docs/05 §1.4). */
+  axTreeFallback?: (tabId: number) => Promise<string>;
+  getTabId?: (threadId: string) => Promise<number>;
+}
+
+export function createL1Tools(gateway: BrowserToolGateway, getThreadId: () => string, deps: L1Deps = {}): AnyAgentTool[] {
   const call = async (tool: string, params: unknown) => {
     const threadId = getThreadId();
-    const result = await gateway.callContentTool(threadId, tool, params);
-    const origin = await gateway.getTabOrigin(threadId);
-    return contentResult(origin, tool, result);
+    try {
+      const result = await gateway.callContentTool(threadId, tool, params);
+      const origin = await gateway.getTabOrigin(threadId);
+      return contentResult(origin, tool, result);
+    } catch (e) {
+      // Perception degradation: L1 empty tree → CDP AXTree (docs/05 §1.4).
+      if (tool === 'read_page' && /EMPTY_TREE/.test((e as Error).message) && deps.axTreeFallback && deps.getTabId) {
+        const tabId = await deps.getTabId(threadId);
+        const axText = await deps.axTreeFallback(tabId);
+        const origin = await gateway.getTabOrigin(threadId);
+        return contentResult(origin, 'read_page', { resultText: axText });
+      }
+      throw e;
+    }
   };
 
   return [

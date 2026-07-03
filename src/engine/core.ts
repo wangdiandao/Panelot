@@ -373,6 +373,15 @@ export class RealEngineCore {
         requestedAt: p.requestedAt,
       }));
 
+    // Interrupted-mid-turn detection (docs/01 §4, docs/04 §6.2): no live turn
+    // but the checkpointed path ends inside a turn → SW was likely killed.
+    // The UI offers "continue"; replay from the last checkpoint continues.
+    let wasInterrupted = false;
+    if (!active && items.length > 0) {
+      const last = items[items.length - 1]!;
+      wasInterrupted = last.kind === 'tool_call' || last.kind === 'user_message';
+    }
+
     return {
       meta: {
         id: thread.id,
@@ -393,7 +402,9 @@ export class RealEngineCore {
             steerable: active.handle.steerable,
             startedAt: 0,
           }
-        : null,
+        : wasInterrupted
+          ? { turnId: '', turnKind: 'user', steerable: false, startedAt: 0, wasInterrupted: true }
+          : null,
       pendingApprovals,
       queuedInputs: this.queues.get(threadId)?.length ?? 0,
     };

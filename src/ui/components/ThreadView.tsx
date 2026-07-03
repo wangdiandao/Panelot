@@ -63,6 +63,18 @@ export function ThreadView({ session, providerConfigured, onOpenSettings, staged
           ))}
         </div>
       )}
+      {state.wasInterrupted && (
+        <div className="mx-4 mb-2 flex items-center gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-[12px] text-warn">
+          <span>任务此前被中断（可能是浏览器休眠）。</span>
+          <button
+            type="button"
+            onClick={() => session.enqueue({ text: '继续刚才的任务' })}
+            className="ml-auto rounded-md bg-warn px-2 py-0.5 text-[11px] font-medium text-black hover:brightness-110"
+          >
+            继续
+          </button>
+        </div>
+      )}
       {!providerConfigured && (
         <button
           type="button"

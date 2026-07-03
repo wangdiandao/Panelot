@@ -44,9 +44,12 @@ export interface ThreadUiState {
   /** Streaming overlay, keyed in arrival order. */
   liveItems: LiveItem[];
   activeTurn: { turnId: string; steerable: boolean } | null;
+  /** True when the prior SW died mid-turn — UI offers a "continue" button. */
+  wasInterrupted: boolean;
   pendingApprovals: PendingApproval[];
   queuedInputs: number;
   lastUsage: { contextPct: number; costUsd?: number; totalTokens: number } | null;
+  todos: { text: string; done: boolean }[];
   lastError: string | null;
 }
 
@@ -57,9 +60,11 @@ const initialState: ThreadUiState = {
   items: [],
   liveItems: [],
   activeTurn: null,
+  wasInterrupted: false,
   pendingApprovals: [],
   queuedInputs: 0,
   lastUsage: null,
+  todos: [],
   lastError: null,
 };
 
@@ -187,6 +192,7 @@ export class EngineSession {
       case 'turn.start':
         s.setState({
           activeTurn: { turnId: ev.turnId, steerable: ev.steerable },
+          wasInterrupted: false,
           lastError: null,
         });
         break;
@@ -219,15 +225,19 @@ export class EngineSession {
           ),
         }));
         break;
-      case 'item.complete':
+      case 'item.complete': {
+        // todo_write surfaces the plan via the details channel (docs/05 §3).
+        const details = ev.result?.details as { todos?: { text: string; done: boolean }[] } | undefined;
         s.setState((st) => ({
           liveItems: st.liveItems.map((it) =>
             it.itemId === ev.itemId
               ? { ...it, status: ev.result?.ok === false ? 'fail' : 'ok', details: ev.result?.details }
               : it,
           ),
+          todos: details?.todos ?? st.todos,
         }));
         break;
+      }
       case 'token.usage':
         s.setState((st) => ({
           lastUsage: {
@@ -266,9 +276,10 @@ export class EngineSession {
       meta: snap.meta,
       items: snap.items,
       liveItems: [], // snapshot supersedes the overlay
-      activeTurn: snap.activeTurn
+      activeTurn: snap.activeTurn && !snap.activeTurn.wasInterrupted
         ? { turnId: snap.activeTurn.turnId, steerable: snap.activeTurn.steerable }
         : null,
+      wasInterrupted: snap.activeTurn?.wasInterrupted ?? false,
       pendingApprovals: snap.pendingApprovals,
       queuedInputs: snap.queuedInputs,
     });

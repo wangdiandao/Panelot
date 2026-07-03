@@ -10,6 +10,8 @@ import { ENGINE_PORT_NAME, wrapPortConnection } from '../src/messaging/transport
 import { SettingsStore } from '../src/settings/store';
 import { BrowserToolGateway } from '../src/tools/gateway';
 import { createL0Tools, createL1Tools } from '../src/tools/browserTools';
+import { createL2Tools } from '../src/tools/l2Tools';
+import { CdpManager } from '../src/tools/cdp/debugger';
 import { createDownloadTool, createFetchUrlTool, createMemoryTools, createTodoTool } from '../src/tools/builtinTools';
 import { GatekeeperService } from '../src/gatekeeper/service';
 import type { AnyAgentTool } from '../src/agent/tool';
@@ -18,6 +20,7 @@ export default defineBackground(() => {
   const db = new PanelotDB();
   const tree = new ThreadTree(db);
   const gateway = new BrowserToolGateway();
+  const cdp = new CdpManager();
 
   // Two-axis Gatekeeper (docs/06): the tool's level rides along so L2 forces
   // escalation and builtins are treated as origin-less.
@@ -38,7 +41,11 @@ export default defineBackground(() => {
       registry.register(tool);
     };
     for (const tool of createL0Tools(gateway, getThreadId)) add(tool);
-    for (const tool of createL1Tools(gateway, getThreadId)) add(tool);
+    for (const tool of createL1Tools(gateway, getThreadId, {
+      axTreeFallback: (tabId) => cdp.getAxTreeText(tabId),
+      getTabId: (tid) => gateway.getTargetTab(tid),
+    })) add(tool);
+    for (const tool of createL2Tools(cdp, gateway, db, getThreadId)) add(tool);
     add(createFetchUrlTool());
     for (const tool of createMemoryTools(db)) add(tool);
     add(createTodoTool((tid, todos) => {
@@ -101,6 +108,15 @@ export default defineBackground(() => {
       void chrome.windows.getCurrent().then((win) => {
         if (win.id !== undefined) void chrome.sidePanel.open({ windowId: win.id });
       });
+    }
+  });
+
+  // Keepalive for running turns with no UI connected (docs/01 §4): a 30s alarm
+  // wakes the SW to keep long background tasks progressing across idle gaps.
+  chrome.alarms.create('panelot-keepalive', { periodInMinutes: 0.5 });
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === 'panelot-keepalive' && core.activeThreadIds().length === 0) {
+      // Nothing running — nothing to do; the alarm itself kept us warm.
     }
   });
 });

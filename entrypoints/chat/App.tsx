@@ -154,6 +154,15 @@ export function App() {
       {taskPanelOpen && (
         <aside className="w-56 shrink-0 border-l border-border bg-surface p-3">
           <div className="mb-2 text-[12px] font-medium text-text-dim">任务面板</div>
+          {state.todos.length > 0 && (
+            <div className="mb-3 space-y-1 text-[12px]">
+              {state.todos.map((t, i) => (
+                <div key={i} className={t.done ? 'text-text-dim line-through' : ''}>
+                  {t.done ? '☑' : '◻'} {t.text}
+                </div>
+              ))}
+            </div>
+          )}
           {state.lastUsage ? (
             <div className="space-y-2 text-[12px]">
               <div>
