@@ -11,6 +11,7 @@ import type { ContextBlock } from '../../src/messaging/protocol';
 import { EngineSession } from '../../src/ui/engineClient';
 import { ThreadView, useEngineState } from '../../src/ui/components/ThreadView';
 import { SettingsModal } from '../../src/ui/settings/SettingsModal';
+import { CommandPalette } from '../../src/ui/components/CommandPalette';
 import { Toaster } from '../../src/ui/components/ui/sonner';
 import { Button } from '../../src/ui/components/ui/button';
 import { Input } from '../../src/ui/components/ui/input';
@@ -75,6 +76,7 @@ export function App() {
   const [renaming, setRenaming] = useState<ThreadMeta | null>(null);
   const [renameTitle, setRenameTitle] = useState('');
   const [deleting, setDeleting] = useState<ThreadMeta | null>(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   useEffect(() => () => session.dispose(), [session]);
 
@@ -83,10 +85,13 @@ export function App() {
       setThreads(list.filter((t) => !t.deleting && !t.archived));
     });
 
-  useEffect(() => {
+  const checkProvider = () =>
     void SettingsStore.connections.get().then((conns) => {
       setProviderConfigured(conns.some((c) => c.enabled && (c.apiKeys.length > 0 || c.baseUrl.includes('localhost'))));
     });
+
+  useEffect(() => {
+    checkProvider();
     void refreshThreads().then(() => {
       const fromUrl = new URLSearchParams(location.search).get('thread');
       if (fromUrl) session.openThread(fromUrl);
@@ -101,7 +106,8 @@ export function App() {
 
   useEffect(() => void refreshThreads(), [state.meta?.title, state.meta?.updatedAt]);
 
-  // Keyboard shortcuts (docs/09 §6): Ctrl/Cmd+N new chat, Ctrl/Cmd+, settings.
+  // Keyboard shortcuts (docs/09 §6): Ctrl/Cmd+N new, Ctrl/Cmd+, settings,
+  // Ctrl/Cmd+K command palette.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
@@ -111,6 +117,9 @@ export function App() {
       } else if (mod && e.key === ',') {
         e.preventDefault();
         setSettingsOpen(true);
+      } else if (mod && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -240,6 +249,7 @@ export function App() {
           <ThreadView
             session={session}
             providerConfigured={providerConfigured}
+            onProviderConfigured={checkProvider}
             onOpenSettings={() => setSettingsOpen(true)}
             stagedContext={staged}
             onRemoveStagedContext={(i) => setStaged((s) => s.filter((_, idx) => idx !== i))}
@@ -286,6 +296,14 @@ export function App() {
       )}
 
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        onOpenThread={(id) => session.openThread(id)}
+        onNewThread={() => session.createThread()}
+        onOpenSettings={() => setSettingsOpen(true)}
+      />
 
       <Dialog open={renaming !== null} onOpenChange={(o) => !o && setRenaming(null)}>
         <DialogContent className="sm:max-w-sm">

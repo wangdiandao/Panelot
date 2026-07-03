@@ -51,7 +51,9 @@ export interface ThreadUiState {
   queuedInputs: number;
   lastUsage: { contextPct: number; costUsd?: number; totalTokens: number } | null;
   todos: { text: string; done: boolean }[];
-  lastError: string | null;
+  lastError: { message: string; retryable: boolean; kind?: string } | null;
+  /** Last submitted input, kept for the error-banner retry (docs/09 §7). */
+  lastInput: UserInput | null;
   /** Sticky per-session overrides (model selector / tool-level switch). */
   pendingOverrides: TurnOverrides;
 }
@@ -69,6 +71,7 @@ const initialState: ThreadUiState = {
   lastUsage: null,
   todos: [],
   lastError: null,
+  lastInput: null,
   pendingOverrides: {},
 };
 
@@ -158,7 +161,16 @@ export class EngineSession {
       return;
     }
     const hasOverrides = Object.values(pendingOverrides).some((v) => v !== undefined);
+    this.store.setState({ lastInput: input });
     this.send({ type: 'turn.submit', threadId, input, ...(hasOverrides ? { overrides: pendingOverrides } : {}) });
+  }
+
+  /** Re-submit the last input (error-banner retry). */
+  retryLast(): void {
+    const { lastInput } = this.store.getState();
+    if (!lastInput) return;
+    this.store.setState({ lastError: null });
+    this.submit(lastInput);
   }
 
   /** Merge sticky per-session overrides (model selector / tool-level switch). */
@@ -280,7 +292,7 @@ export class EngineSession {
         s.setState((st) => ({ meta: st.meta ? { ...st.meta, ...ev.patch } : st.meta }));
         break;
       case 'error':
-        s.setState({ lastError: ev.message });
+        s.setState({ lastError: { message: ev.message, retryable: ev.retryable, kind: ev.errorKind } });
         break;
       // pong / overloaded / escalation.request / unknown types: ignored here.
       default:

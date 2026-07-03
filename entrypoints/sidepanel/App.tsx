@@ -11,6 +11,7 @@ import type { ContextBlock } from '../../src/messaging/protocol';
 import { EngineSession } from '../../src/ui/engineClient';
 import { ThreadView, useEngineState } from '../../src/ui/components/ThreadView';
 import { SettingsModal } from '../../src/ui/settings/SettingsModal';
+import { CommandPalette } from '../../src/ui/components/CommandPalette';
 import { Toaster } from '../../src/ui/components/ui/sonner';
 import { Button } from '../../src/ui/components/ui/button';
 import { Badge } from '../../src/ui/components/ui/badge';
@@ -39,13 +40,33 @@ export function App() {
   const [staged, setStaged] = useState<ContextBlock[]>([]);
   const [currentPageTitle, setCurrentPageTitle] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   useEffect(() => () => session.dispose(), [session]);
 
+  // Keyboard shortcuts (docs/09 §6): Ctrl/Cmd+K palette, Ctrl/Cmd+N new chat.
   useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      } else if (mod && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        session.createThread();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [session]);
+
+  const checkProvider = () =>
     void SettingsStore.connections.get().then((conns) => {
       setProviderConfigured(conns.some((c) => c.enabled && (c.apiKeys.length > 0 || c.baseUrl.includes('localhost'))));
     });
+
+  useEffect(() => {
+    checkProvider();
     void db.threads.orderBy('updatedAt').reverse().limit(20).toArray().then((list) => {
       const live = list.filter((t) => !t.deleting && !t.archived);
       setThreads(live);
@@ -138,6 +159,7 @@ export function App() {
         <ThreadView
           session={session}
           providerConfigured={providerConfigured}
+          onProviderConfigured={checkProvider}
           onOpenSettings={() => setSettingsOpen(true)}
           stagedContext={staged}
           onRemoveStagedContext={(i) => setStaged((s) => s.filter((_, idx) => idx !== i))}
@@ -146,6 +168,13 @@ export function App() {
       </div>
 
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        onOpenThread={(id) => session.openThread(id)}
+        onNewThread={() => session.createThread()}
+        onOpenSettings={() => setSettingsOpen(true)}
+      />
       <Toaster />
     </div>
     </TooltipProvider>

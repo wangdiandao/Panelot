@@ -18,6 +18,7 @@ import { TriggerMenu, detectTrigger, type TriggerMenuHandle, type TriggerState }
 import { useTriggerItems, evaluateVariables, type BuiltinCommand, type SkillCommand } from './composerTriggers';
 import { SkillVariableForm } from './SkillVariableForm';
 import { ModelSelector, type ModelChoice } from './ModelSelector';
+import { ToolLevelSwitch } from './ToolLevelSwitch';
 
 interface Props {
   running: boolean;
@@ -36,6 +37,9 @@ interface Props {
   /** Model override control (null = follow preset). */
   modelOverride?: { connectionId: string; modelId: string } | null;
   onSelectModel?: (choice: ModelChoice | null) => void;
+  /** Tool-level restriction (undefined = all levels). */
+  toolLevels?: ('L0' | 'L1' | 'L2' | 'mcp')[] | undefined;
+  onSelectToolLevels?: (levels: ('L0' | 'L1' | 'L2' | 'mcp')[] | undefined) => void;
   /** Extra slash commands supplied by the host page (e.g. /clear). */
   builtinCommands?: BuiltinCommand[];
 }
@@ -55,6 +59,8 @@ export function PromptInput({
   textareaRef,
   modelOverride,
   onSelectModel,
+  toolLevels,
+  onSelectToolLevels,
   builtinCommands = [],
 }: Props) {
   const [text, setText] = useState('');
@@ -204,9 +210,10 @@ export function PromptInput({
             </Button>
           )}
         </div>
-        {onSelectModel && (
-          <div className="flex items-center px-1.5 pt-0.5">
-            <ModelSelector value={modelOverride ?? null} onSelect={onSelectModel} />
+        {(onSelectModel || onSelectToolLevels) && (
+          <div className="flex items-center gap-1 px-1.5 pt-0.5">
+            {onSelectModel && <ModelSelector value={modelOverride ?? null} onSelect={onSelectModel} />}
+            {onSelectToolLevels && <ToolLevelSwitch value={toolLevels} onSelect={onSelectToolLevels} />}
           </div>
         )}
       </div>

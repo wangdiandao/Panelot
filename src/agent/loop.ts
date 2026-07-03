@@ -305,6 +305,7 @@ export function runTurn(
         code: e instanceof ProviderError ? 'provider_error' : 'internal',
         message: e instanceof Error ? e.message : String(e),
         retryable: e instanceof ProviderError,
+        ...(e instanceof ProviderError ? { errorKind: e.kind } : {}),
       });
     }
     // turn.complete fires only after all writes above have resolved — every

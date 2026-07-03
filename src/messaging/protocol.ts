@@ -248,6 +248,8 @@ export type AgentEvent =
       code: ErrorCode;
       message: string;
       retryable: boolean;
+      /** Provider error taxonomy for human-readable attribution (docs/03 §7). */
+      errorKind?: 'auth' | 'rate_limit' | 'overloaded' | 'context_too_long' | 'content_filter' | 'network' | 'protocol';
     }
   | { type: 'overloaded'; submissionId: string }
   | { type: 'thread.created'; submissionId: string; threadId: string }
