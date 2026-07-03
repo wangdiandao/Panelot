@@ -22,7 +22,7 @@ export interface ThreadPermissionConfig {
 
 const DEFAULT_CONFIG: ThreadPermissionConfig = {
   approvalPolicy: 'untrusted',
-  capabilityScope: 'cross-origin',
+  capabilityScope: 'full', // blacklist-only model: reads free, writes gated by policy
 };
 
 export class GatekeeperService {

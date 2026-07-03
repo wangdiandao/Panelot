@@ -98,7 +98,7 @@ export function runTurn(
           turnId,
           model: { connectionId: '', modelId: env.model },
           approvalPolicy: 'untrusted',
-          capabilityScope: 'cross-origin',
+          capabilityScope: 'full',
           activeSkills: [],
         },
       });

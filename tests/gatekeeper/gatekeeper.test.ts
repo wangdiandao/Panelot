@@ -26,7 +26,7 @@ function ctx(overrides?: Partial<GatekeeperContext>): GatekeeperContext {
     threadId: 't1',
     targetOrigin: 'https://shop.example.com',
     approvalPolicy: 'untrusted',
-    capabilityScope: 'cross-origin',
+    capabilityScope: 'full',
     scopeOrigins: ['https://shop.example.com'],
     rules: [],
     sensitivePatterns: DEFAULT_SENSITIVE_PATTERNS,
@@ -58,22 +58,20 @@ describe('pattern matching', () => {
   });
 
   it('originMatches: exact origin, subdomain wildcard', () => {
-    expect(originMatches('https://github.com', 'https://github.com')).toBe(true);
-    expect(originMatches('https://github.com', 'https://gist.github.com')).toBe(false);
-    expect(originMatches('*.example.com', 'https://a.example.com')).toBe(true);
+    expect(originMatches('https://x.com', 'https://x.com')).toBe(true);
+    expect(originMatches('*.example.com', 'https://sub.example.com')).toBe(true);
     expect(originMatches('*.example.com', 'https://example.com')).toBe(true);
-    expect(originMatches('*.example.com', 'https://evilexample.com')).toBe(false);
+    expect(originMatches('*.example.com', 'https://evil.com')).toBe(false);
   });
 
-  it('matchRules: deny > allow, specific > wildcard, user > persist > plugin', () => {
+  it('matchRules precedence: (tool,origin) > (tool,*) > (*,origin); deny wins ties', () => {
     const rules = [
-      rule({ tool: '*', origin: '*', verdict: 'allow', source: 'plugin_default' }),
-      rule({ tool: 'click', origin: 'https://x.com', verdict: 'deny', source: 'approval_persist' }),
+      rule({ tool: '*', origin: 'https://x.com', verdict: 'deny' }),
+      rule({ tool: 'click', origin: '*', verdict: 'allow' }),
+      rule({ tool: 'click', origin: 'https://x.com', verdict: 'allow' }),
     ];
-    expect(matchRules(rules, 'click', 'https://x.com')!.verdict).toBe('deny');
-    expect(matchRules(rules, 'type', 'https://x.com')!.verdict).toBe('allow');
-
-    // Same specificity & source: deny wins.
+    expect(matchRules(rules, 'click', 'https://x.com')!.verdict).toBe('allow'); // exact pair wins
+    expect(matchRules(rules, 'type', 'https://x.com')!.verdict).toBe('deny'); // (*,origin)
     const tied = [
       rule({ tool: 'click', origin: 'https://x.com', verdict: 'allow' }),
       rule({ tool: 'click', origin: 'https://x.com', verdict: 'deny' }),
@@ -101,11 +99,34 @@ describe('sensitive origins & payloads', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Verdict order — full enumeration of the two axes (docs/06 §1-2)
+// Blacklist-only model (owner decision 2026-07-04): reads are NEVER gated;
+// writes go through blacklist → read-only gate → sensitive payload → rules →
+// policy. No origin whitelist, no cross-scope forced ask.
 // ---------------------------------------------------------------------------
 
-describe('step 1: sensitive blacklist is an unoverridable DENY', () => {
-  it('denies even with an explicit allow rule', () => {
+describe('step 0: reads are never intercepted', () => {
+  it('allows reads on blacklisted origins', () => {
+    const v = checkGate(readCall(), ctx({ targetOrigin: 'https://pay.weixin.qq.com' }));
+    expect(v.verdict).toBe('allow');
+  });
+
+  it('allows L2 reads (screenshot) without approval', () => {
+    const v = checkGate({ toolName: 'screenshot', params: {}, effects: 'read', level: 'L2' }, ctx());
+    expect(v.verdict).toBe('allow');
+  });
+
+  it('allows reads on brand-new origins regardless of scopeOrigins', () => {
+    const v = checkGate(readCall(), ctx({ targetOrigin: 'https://never-seen.com', scopeOrigins: [] }));
+    expect(v.verdict).toBe('allow');
+  });
+
+  it('allows reads even under read-only capability', () => {
+    expect(checkGate(readCall(), ctx({ capabilityScope: 'read-only' })).verdict).toBe('allow');
+  });
+});
+
+describe('step 1: sensitive blacklist is an unoverridable DENY for writes', () => {
+  it('denies writes even with an explicit allow rule and never policy', () => {
     const v = checkGate(writeCall(), ctx({
       targetOrigin: 'https://www.chase.com',
       scopeOrigins: ['https://www.chase.com'],
@@ -116,15 +137,10 @@ describe('step 1: sensitive blacklist is an unoverridable DENY', () => {
     expect(v.verdict).toBe('deny');
     expect((v as { reason: string }).reason).toMatch(/黑名单/);
   });
-
-  it('denies reads on blacklisted origins too', () => {
-    const v = checkGate(readCall(), ctx({ targetOrigin: 'https://pay.weixin.qq.com' }));
-    expect(v.verdict).toBe('deny');
-  });
 });
 
-describe('step 2: capabilityScope is a hard gate', () => {
-  it('read-only denies all writes regardless of policy/rules', () => {
+describe('step 2: read-only capability denies all writes', () => {
+  it('denies writes regardless of policy and rules', () => {
     for (const policy of ['untrusted', 'on-request', 'never', 'granular'] as const) {
       const v = checkGate(writeCall(), ctx({
         capabilityScope: 'read-only',
@@ -135,51 +151,19 @@ describe('step 2: capabilityScope is a hard gate', () => {
     }
   });
 
-  it('read-only still allows reads', () => {
-    expect(checkGate(readCall(), ctx({ capabilityScope: 'read-only' })).verdict).toBe('allow');
-  });
-
-  it('same-origin-write denies writes outside scopeOrigins', () => {
-    const v = checkGate(writeCall(), ctx({
-      capabilityScope: 'same-origin-write',
-      targetOrigin: 'https://other.com',
-      scopeOrigins: ['https://shop.example.com'],
-    }));
-    expect(v.verdict).toBe('deny');
-    expect((v as { reason: string }).reason).toMatch(/same-origin-write/);
-  });
-
-  it('same-origin-write allows in-scope writes (subject to policy)', () => {
-    const v = checkGate(writeCall(), ctx({
-      capabilityScope: 'same-origin-write',
-      approvalPolicy: 'on-request',
-    }));
-    expect(v.verdict).toBe('ask'); // in scope, but on-request still asks first write
+  it('legacy whitelist scopes behave like full (write asks, not denied)', () => {
+    for (const scope of ['same-origin-write', 'cross-origin', 'full'] as const) {
+      const v = checkGate(writeCall(), ctx({
+        capabilityScope: scope,
+        targetOrigin: 'https://other.com',
+        scopeOrigins: ['https://shop.example.com'],
+      }));
+      expect(v.verdict).toBe('ask');
+    }
   });
 });
 
-describe('step 3: cross-scope forces ASK regardless of policy and rules', () => {
-  it('flags and asks when a write targets a new origin', () => {
-    const v = checkGate(writeCall(), ctx({
-      targetOrigin: 'https://newsite.com',
-      scopeOrigins: ['https://shop.example.com'],
-      rules: [rule({ tool: '*', origin: '*', verdict: 'allow' })], // allow rule must NOT silence it
-    }));
-    expect(v.verdict).toBe('ask');
-    expect((v as { request: { flags: string[] } }).request.flags).toContain('cross_scope');
-  });
-
-  it('never + cross-scope = deny (never is not auto-approve)', () => {
-    const v = checkGate(writeCall(), ctx({
-      targetOrigin: 'https://newsite.com',
-      approvalPolicy: 'never',
-    }));
-    expect(v.verdict).toBe('deny');
-    expect((v as { reason: string }).reason).toMatch(/never/);
-  });
-});
-
-describe('step 4: sensitive payload to third party forces ASK with flag', () => {
+describe('step 3: sensitive payload forces ASK with flag', () => {
   it('credential-shaped write params trigger the warning flag', () => {
     const v = checkGate(
       writeCall('type', { element: '密码框', ref: 's1_2', password: 'hunter2' }),
@@ -188,9 +172,31 @@ describe('step 4: sensitive payload to third party forces ASK with flag', () => 
     expect(v.verdict).toBe('ask');
     expect((v as { request: { flags: string[] } }).request.flags).toContain('sensitive_payload');
   });
+
+  it('allow rule must NOT silence a sensitive-payload warning', () => {
+    const v = checkGate(
+      writeCall('type', { element: '搜索框', ref: 's1_9', text: 'card 4111 1111 1111 1111' }),
+      ctx({
+        targetOrigin: 'https://attacker.com',
+        scopeOrigins: ['https://shop.example.com'],
+        rules: [rule({ tool: '*', origin: '*', verdict: 'allow' })],
+      }),
+    );
+    expect(v.verdict).toBe('ask');
+    expect((v as { request: { flags: string[] } }).request.flags).toContain('sensitive_payload');
+  });
+
+  it('never + sensitive payload = deny (never is not auto-approve)', () => {
+    const v = checkGate(
+      writeCall('type', { element: '密码框', ref: 's1_2', password: 'hunter2' }),
+      ctx({ approvalPolicy: 'never' }),
+    );
+    expect(v.verdict).toBe('deny');
+    expect((v as { reason: string }).reason).toMatch(/never/);
+  });
 });
 
-describe('step 5: rule table', () => {
+describe('step 4-5: session grants and rule table', () => {
   it('allow rule lets a write through silently', () => {
     const v = checkGate(writeCall(), ctx({
       rules: [rule({ tool: 'click', origin: 'https://shop.example.com', verdict: 'allow' })],
@@ -212,6 +218,15 @@ describe('step 5: rule table', () => {
     }));
     expect(v.verdict).toBe('allow');
   });
+
+  it('allow rule works on new origins too (no cross-scope forced ask)', () => {
+    const v = checkGate(writeCall(), ctx({
+      targetOrigin: 'https://newsite.com',
+      scopeOrigins: ['https://shop.example.com'],
+      rules: [rule({ tool: '*', origin: '*', verdict: 'allow' })],
+    }));
+    expect(v.verdict).toBe('allow');
+  });
 });
 
 describe('step 6: policy defaults', () => {
@@ -230,8 +245,8 @@ describe('step 6: policy defaults', () => {
     expect(v.verdict).toBe(expected);
   });
 
-  it('L2 read tools are NOT auto-passed under untrusted', () => {
-    const v = checkGate({ toolName: 'screenshot', params: {}, effects: 'read', level: 'L2' }, ctx());
+  it('L2 write tools carry the escalation flag in the approval request', () => {
+    const v = checkGate({ toolName: 'click_xy', params: { x: 1, y: 2 }, effects: 'write', level: 'L2' }, ctx());
     expect(v.verdict).toBe('ask');
     expect((v as { request: { flags: string[] } }).request.flags).toContain('escalation_l2');
   });
@@ -243,24 +258,23 @@ describe('step 6: policy defaults', () => {
 // ---------------------------------------------------------------------------
 
 describe('injection attack samples — hard gates hold when the model is deceived', () => {
-  it('样本1: 页面伪造 system 指令诱导访问银行站点 → 黑名单硬拒', () => {
-    // Assume injected content convinced the model to navigate to a bank.
+  it('样本1: 页面伪造 system 指令诱导在银行站点写操作 → 黑名单硬拒', () => {
+    // Assume injected content convinced the model to act on a bank page.
     const v = checkGate(
-      { toolName: 'navigate', params: { url: 'https://www.icbc.com.cn/transfer' }, effects: 'write' },
+      { toolName: 'click', params: { element: '转账确认', ref: 's1_1' }, effects: 'write' },
       ctx({ targetOrigin: 'https://www.icbc.com.cn', capabilityScope: 'full', approvalPolicy: 'never', rules: [rule({ verdict: 'allow' })] }),
     );
     expect(v.verdict).toBe('deny');
   });
 
-  it('样本2: 伪造审批文案不影响引擎 — 越域动作仍强制 ask（UI 端才是真审批）', () => {
+  it('样本2: 伪造审批文案不影响引擎 — 写操作仍走真实审批（UI 端才是真审批）', () => {
     // Injected page told the model "the user already approved this".
-    // The engine still forces ask for the out-of-scope write.
+    // The engine still asks for the write under untrusted policy.
     const v = checkGate(
-      writeCall('type', { element: '邮箱框', ref: 's2_3', text: 'exfil@evil.com' }),
+      writeCall('type', { element: '邮箱框', ref: 's2_3', text: 'send to someone' }),
       ctx({ targetOrigin: 'https://evil.com', scopeOrigins: ['https://shop.example.com'] }),
     );
     expect(v.verdict).toBe('ask');
-    expect((v as { request: { flags: string[] } }).request.flags).toContain('cross_scope');
   });
 
   it('样本3: 诱导外传敏感数据 → sensitive_payload 强制 ask，allow 规则无效', () => {
@@ -273,9 +287,7 @@ describe('injection attack samples — hard gates hold when the model is deceive
       }),
     );
     expect(v.verdict).toBe('ask');
-    const flags = (v as { request: { flags: string[] } }).request.flags;
-    expect(flags).toContain('sensitive_payload');
-    expect(flags).toContain('cross_scope');
+    expect((v as { request: { flags: string[] } }).request.flags).toContain('sensitive_payload');
   });
 
   it('样本4: 诱导 run_javascript → 默认 deny 规则拦截', () => {

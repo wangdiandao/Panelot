@@ -29,12 +29,16 @@ const POLICY_DESC: Record<string, string> = {
   granular: '完全按规则表裁决，未覆盖的按 untrusted 兜底',
 };
 
+// Blacklist-only model: reads are never gated; writes are either fully
+// blocked (read-only) or allowed subject to approval policy + blacklist.
 const SCOPE_DESC: Record<string, string> = {
   'read-only': '只能读，一切写操作被拒绝',
-  'same-origin-write': '仅在任务作用域内的站点读写',
-  'cross-origin': '可跨域读写，但每次触达新站点强制审批（推荐默认）',
-  full: '无域名限制（仍受黑名单与 deny 规则约束）',
+  full: '读不拦截；写操作按审批策略执行（仍受黑名单与 deny 规则约束）',
 };
+
+/** Legacy whitelist-era values (same-origin-write / cross-origin) → full. */
+const normalizeScope = (v: string | undefined): string =>
+  v === 'read-only' ? 'read-only' : 'full';
 
 export function PermissionsPage() {
   const [settings, setSettings] = useState<GlobalSettings>({});
@@ -101,7 +105,7 @@ export function PermissionsPage() {
           <div>
             <Label className="mb-1 block text-[12px] text-muted-foreground">能力域（能做什么·硬闸）</Label>
             <Select
-              value={settings.defaultCapabilityScope ?? 'cross-origin'}
+              value={normalizeScope(settings.defaultCapabilityScope)}
               onValueChange={(v) => void updateSettings({ defaultCapabilityScope: v })}
             >
               <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
@@ -111,7 +115,7 @@ export function PermissionsPage() {
                 ))}
               </SelectContent>
             </Select>
-            <div className="mt-1 text-[11px] text-muted-foreground">{SCOPE_DESC[settings.defaultCapabilityScope ?? 'cross-origin']}</div>
+            <div className="mt-1 text-[11px] text-muted-foreground">{SCOPE_DESC[normalizeScope(settings.defaultCapabilityScope)]}</div>
           </div>
         </div>
       </div>

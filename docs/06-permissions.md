@@ -22,15 +22,19 @@ type ApprovalPolicy =
 
 ### 轴二：CapabilityScope —— 能力边界（硬闸，审批也不能越过）
 
+> **v0.4 模型简化（2026-07-04 决策）：只做黑名单，不做白名单。读操作永不拦截。**
+> Agent 有权读取任何页面（含黑名单站点、含 L2 截图）；一切拦截只作用于写操作。
+> 域名白名单机制（任务作用域 scopeOrigins 门控、cross_scope 强制审批）已移除。
+
 ```ts
 type CapabilityScope =
-  | 'read-only'          // 只能读：快照/选区/tabs 列表；一切 write 工具直接拒绝
-  | 'same-origin-write'  // 可在「任务作用域内的域名」上读写；跨出作用域的写被拒绝
-  | 'cross-origin'       // 可跨域读写，但每次触达新域名强制 ask（无视 policy）
-  | 'full';              // 无域名限制（仍受敏感站点黑名单与 deny 规则约束）
+  | 'read-only'          // 只能读：一切 write 工具直接拒绝（唯一保留的能力硬闸）
+  | 'same-origin-write'  // 遗留值（白名单时代）：行为等同 full
+  | 'cross-origin'       // 遗留值（白名单时代）：行为等同 full
+  | 'full';              // 写操作按审批策略执行（仍受敏感站点黑名单与 deny 规则约束）
 ```
 
-默认组合 `untrusted × cross-origin`。会话可改，单轮可用 `TurnOverrides` 覆盖（对齐 Codex 的 per-turn 覆盖）。
+默认组合 `untrusted × full`。会话可改，单轮可用 `TurnOverrides` 覆盖（对齐 Codex 的 per-turn 覆盖）。
 
 **语义唯一性**：两轴枚举及其裁决语义定义在 `src/messaging/protocol.ts` + 本文档，UI 文案只能翻译、不能重新解释。
 
@@ -40,15 +44,18 @@ type CapabilityScope =
 
 ```
 check(call, thread):
+  0. 读操作（effects:'read'，任何级别）→ ALLOW（读永不拦截）
+  —— 以下仅写操作 ——
   1. 黑名单：目标 origin ∈ 敏感站点黑名单 → DENY（不可被任何规则覆盖）
-  2. 能力域：违反 capabilityScope → DENY
-  3. 跨域检测：目标 origin ∉ thread.scopeOrigins
-       → 强制 ASK（审批卡片高亮 ⚠ 越出任务作用域）；批准后 origin 加入 scopeOrigins
-  4. 出域告警：write 类参数命中凭据/卡号/邮箱模式 且 目标为第三方域 → 强制 ASK（高亮告警）
+  2. 能力域：read-only → DENY（same-origin-write / cross-origin 为遗留值，等同 full）
+  3. 出域告警：参数命中凭据/卡号/邮箱模式 且 目标为第三方域 → 强制 ASK（高亮告警）
+  4. 会话授权（acceptForSession）→ ALLOW
   5. 规则表：查 (tool, origin) 精确 → (tool, *) → (*, origin) → 无命中
   6. 无命中 → 按 approvalPolicy 默认档裁决（§1）
   返回 'allow' | 'ask' | 'deny'
 ```
+
+`cross_scope` 审批 flag 已废弃（协议保留枚举值以兼容旧数据，引擎不再发出）。
 
 DENY 不弹窗：拒绝原因作为 tool_result 回给模型（模型可改变策略或告知用户），同时 UI 记一条工具卡片（状态 ✗，注明被何规则拒绝）。
 

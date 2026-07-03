@@ -54,7 +54,12 @@ export interface Usage {
  */
 export type ApprovalPolicy = 'untrusted' | 'on-request' | 'never' | 'granular';
 
-/** Hard capability boundary — approval cannot cross it. */
+/**
+ * Hard capability boundary — approval cannot cross it. Blacklist-only model
+ * (2026-07-04): reads are never gated; only `read-only` still blocks writes.
+ * `same-origin-write` / `cross-origin` are legacy values kept for stored
+ * threads and behave like `full`.
+ */
 export type CapabilityScope = 'read-only' | 'same-origin-write' | 'cross-origin' | 'full';
 
 export type ApprovalDecision =
@@ -64,6 +69,7 @@ export type ApprovalDecision =
   | { kind: 'decline'; note?: string }
   | { kind: 'cancel' };
 
+/** `cross_scope` is legacy (origin-whitelist model) — no longer emitted. */
 export type ApprovalFlag = 'cross_scope' | 'sensitive_payload' | 'escalation_l2';
 
 export interface ApprovalRequestPayload {

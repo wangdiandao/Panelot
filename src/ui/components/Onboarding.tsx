@@ -28,20 +28,22 @@ import type { Connection, VerifyResult } from '../../providers/types';
 import { SettingsStore, type GlobalSettings } from '../../settings/store';
 import { encryptSecret } from '../../settings/crypto';
 
+// Blacklist-only model: reads are never gated; tiers only differ in how
+// writes are approved.
 const APPROVAL_TIERS: { id: string; policy: string; scope: string; title: string; desc: string }[] = [
   {
     id: 'safe',
     policy: 'untrusted',
-    scope: 'cross-origin',
+    scope: 'full',
     title: '稳妥（推荐）',
-    desc: '只读操作自动放行；任何写操作与新站点都先问我',
+    desc: '读取自由；任何写操作（点击/输入/提交）先问我',
   },
   {
     id: 'smooth',
     policy: 'on-request',
-    scope: 'cross-origin',
+    scope: 'full',
     title: '顺畅',
-    desc: '写操作首次确认后，本轮同站不再重复问',
+    desc: '读取自由；写操作首次确认后，本轮同站不再重复问',
   },
   {
     id: 'readonly',

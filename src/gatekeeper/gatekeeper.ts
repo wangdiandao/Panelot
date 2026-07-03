@@ -3,13 +3,16 @@
  * (L0-L2, MCP, builtin) passes check(); no tool carries its own approval
  * logic.
  *
- * Verdict order (first hit wins):
+ * Model: blacklist-only, reads are never intercepted (owner decision
+ * 2026-07-04). There is no origin whitelist — no task-scope gating, no
+ * cross-scope forced approval. WRITE verdict order (first hit wins):
  *   1. sensitive-origin blacklist → DENY (not overridable by any rule)
- *   2. capabilityScope violation → DENY (hard gate; approval cannot cross it)
- *   3. cross-scope: origin ∉ thread.scopeOrigins → forced ASK (⚠ flag)
- *   4. sensitive payload to third-party origin → forced ASK (flag)
+ *   2. read-only capability → DENY (hard gate)
+ *   3. sensitive payload (credentials/card) → forced ASK (flag)
+ *   4. session grants → ALLOW
  *   5. rule table: (tool,origin) exact → (tool,*) → (*,origin)
  *   6. no hit → approvalPolicy default
+ * READ tools (any level, any origin) return ALLOW at step 0.
  *
  * `never` = auto-DENY anything that would need approval; it is NOT
  * auto-approve (protocol-level semantics, docs/06 §1).
@@ -72,43 +75,31 @@ export function checkGate(call: GatekeeperCall, ctx: GatekeeperContext): Gatekee
 
   if (ALWAYS_ALLOW.has(call.toolName)) return { verdict: 'allow' };
 
-  // 1. Sensitive-origin blacklist — hard DENY, nothing overrides it.
+  // 0. Reads are never intercepted — the agent may read any page, including
+  // blacklisted origins and via L2 (screenshot). Only writes are gated.
+  if (call.effects === 'read') return { verdict: 'allow' };
+
+  // 1. Sensitive-origin blacklist — hard DENY for writes, nothing overrides it.
   if (origin && isSensitiveOrigin(ctx.sensitivePatterns, origin)) {
     return {
       verdict: 'deny',
-      reason: `目标站点 ${origin} 在敏感站点黑名单中（银行/支付/政务等），Panelot 不在这类站点执行任何操作。`,
+      reason: `目标站点 ${origin} 在敏感站点黑名单中（银行/支付/政务等），Panelot 不在这类站点执行写操作。读取不受限制。`,
     };
   }
 
-  // 2. Capability scope — hard gate (docs/06 §1 axis 2).
-  if (call.effects === 'write' || call.level === 'L2') {
-    switch (ctx.capabilityScope) {
-      case 'read-only':
-        return {
-          verdict: 'deny',
-          reason: '当前会话为只读模式（read-only），所有写操作被拒绝。可在会话设置中调整能力域。',
-        };
-      case 'same-origin-write': {
-        if (origin && ctx.scopeOrigins.length > 0 && !ctx.scopeOrigins.includes(origin)) {
-          return {
-            verdict: 'deny',
-            reason: `能力域为 same-origin-write：目标 ${origin} 不在任务作用域（${ctx.scopeOrigins.join(', ')}）内，写操作被拒绝。`,
-          };
-        }
-        break;
-      }
-      case 'cross-origin': {
-        // 3. Cross-scope detection: new origin → forced ASK regardless of policy.
-        if (origin && !ctx.scopeOrigins.includes(origin)) flags.push('cross_scope');
-        break;
-      }
-      case 'full':
-        break;
-    }
+  // 2. Read-only capability — the only capability hard gate (no origin
+  // whitelist: same-origin-write / cross-origin / full all mean "writes
+  // allowed", subject to the approval policy below).
+  if (ctx.capabilityScope === 'read-only') {
+    return {
+      verdict: 'deny',
+      reason: '当前会话为只读模式（read-only），所有写操作被拒绝。可在会话设置中调整能力域。',
+    };
   }
 
-  // 4. Sensitive payload leaving scope → forced ASK with warning flag.
-  if (call.effects === 'write' && origin) {
+  // 3. Sensitive payload (credentials/card/email leaving the task's sites)
+  // → forced ASK with warning flag. Data protection, not an origin whitelist.
+  if (origin) {
     const sensitive = detectSensitivePayload(call.params);
     const thirdParty = !ctx.scopeOrigins.includes(origin);
     if (sensitive.length > 0 && (thirdParty || sensitive.includes('card_number') || sensitive.includes('credential_field'))) {
@@ -130,22 +121,19 @@ export function checkGate(call: GatekeeperCall, ctx: GatekeeperContext): Gatekee
     },
   });
 
-  // Forced-ask flags bypass rules and policy — a stored allow must not
-  // silence a cross-scope or sensitive-payload warning. Under `never`,
-  // forced-ask degrades to DENY (never ≠ auto-approve).
-  if (flags.includes('cross_scope') || flags.includes('sensitive_payload')) {
+  // Forced-ask: a stored allow rule must not silence a sensitive-payload
+  // warning. Under `never`, forced-ask degrades to DENY (never ≠ auto-approve).
+  if (flags.includes('sensitive_payload')) {
     if (ctx.approvalPolicy === 'never') {
       return {
         verdict: 'deny',
-        reason: flags.includes('cross_scope')
-          ? `目标 ${origin} 越出任务作用域，且审批策略为 never（需要审批的动作直接拒绝）。`
-          : '参数中检测到敏感内容外发，且审批策略为 never（需要审批的动作直接拒绝）。',
+        reason: '参数中检测到敏感内容外发，且审批策略为 never（需要审批的动作直接拒绝）。',
       };
     }
     return buildAsk();
   }
 
-  // Session grants (acceptForSession) — in-memory, thread-scoped.
+  // 4. Session grants (acceptForSession) — in-memory, thread-scoped.
   if (ctx.sessionGrants.has(sessionGrantKey(call.toolName, origin))) return { verdict: 'allow' };
 
   // 5. Rule table.
@@ -157,24 +145,16 @@ export function checkGate(call: GatekeeperCall, ctx: GatekeeperContext): Gatekee
     return { verdict: 'allow' };
   }
 
-  // 6. Policy default.
+  // 6. Policy default (writes only reach here).
   switch (ctx.approvalPolicy) {
     case 'untrusted':
-      // Only read tools that are not L2 auto-pass.
-      if (call.effects === 'read' && call.level !== 'L2') return { verdict: 'allow' };
-      return buildAsk();
+    case 'granular': // rules already consulted; unmatched falls back to ask
     case 'on-request':
-      if (call.effects === 'read') return { verdict: 'allow' };
       return buildAsk(); // first write asks; session grant covers the rest
     case 'never':
-      if (call.effects === 'read' && call.level !== 'L2') return { verdict: 'allow' };
       return {
         verdict: 'deny',
         reason: '该动作需要审批，而审批策略为 never（从不弹窗 = 直接拒绝，绝非自动批准）。',
       };
-    case 'granular':
-      // Rules already consulted; unmatched falls back to untrusted semantics.
-      if (call.effects === 'read' && call.level !== 'L2') return { verdict: 'allow' };
-      return buildAsk();
   }
 }
