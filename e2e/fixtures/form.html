@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh">
+<head><meta charset="utf-8"><title>测试表单</title></head>
+<body>
+  <h1>联系表单</h1>
+  <form id="contact" aria-label="联系表单">
+    <label for="name">姓名</label>
+    <input type="text" id="name" aria-label="姓名">
+    <label for="email">邮箱</label>
+    <input type="email" id="email" aria-label="邮箱">
+    <select aria-label="主题" id="topic">
+      <option value="general">一般咨询</option>
+      <option value="support">技术支持</option>
+    </select>
+    <label><input type="checkbox" id="agree" aria-label="同意条款"> 同意条款</label>
+    <button type="button" id="submit">提交</button>
+  </form>
+  <div id="result" hidden>提交成功</div>
+  <script>
+    document.getElementById('submit').addEventListener('click', () => {
+      document.getElementById('result').hidden = false;
+    });
+  </script>
+</body>
+</html>

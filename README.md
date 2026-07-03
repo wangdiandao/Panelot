@@ -9,7 +9,9 @@ pnpm install        # 安装依赖（postinstall 会跑 wxt prepare）
 pnpm dev            # 开发模式（自动重载）
 pnpm build          # 产出 dist/chrome-mv3
 pnpm build:edge     # 产出 dist/edge-mv3
-pnpm test           # Vitest 单测（引擎全链路不开浏览器）
+pnpm zip            # 打包 Chrome/Edge 分发 zip（不含提审）
+pnpm test           # Vitest 单测（218 项，引擎全链路不开浏览器）
+pnpm e2e            # Playwright e2e（首次需 pnpm exec playwright install chromium）
 pnpm compile        # tsc --noEmit
 ```
 

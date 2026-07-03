@@ -33,6 +33,8 @@ export interface ProviderResolver {
     model: string;
     params: GenParams;
     contextWindow: number;
+    /** $/Mtok, for cost accounting (docs/03 §1.2). */
+    pricing?: { input: number; output: number; cacheRead?: number };
   }>;
 }
 
@@ -206,7 +208,29 @@ export class RealEngineCore {
         if (ev.type === 'token.usage') {
           const contextTokens = ev.usage.input + ev.usage.output + (ev.usage.cacheRead ?? 0);
           this.lastContextTokens.set(threadId, contextTokens);
-          ev = { ...ev, contextPct: Math.min(100, Math.round((contextTokens / resolved.contextWindow) * 100)) };
+          // Cost from pricing ($/Mtok), if the resolver supplied it (docs/03 §1.2).
+          const pricing = resolved.pricing;
+          const costUsd = pricing
+            ? (ev.usage.input * pricing.input + ev.usage.output * pricing.output +
+               (ev.usage.cacheRead ?? 0) * (pricing.cacheRead ?? pricing.input)) / 1_000_000
+            : undefined;
+          ev = {
+            ...ev,
+            costUsd,
+            contextPct: Math.min(100, Math.round((contextTokens / resolved.contextWindow) * 100)),
+          };
+          // Accumulate into thread.stats for the session list (docs/02 §2.1).
+          const addedTokens = ev.usage.input + ev.usage.output;
+          void this.tree.getThread(threadId).then((t) => {
+            if (!t) return;
+            void this.tree.updateThread(threadId, {
+              stats: {
+                turns: t.stats.turns,
+                totalTokens: t.stats.totalTokens + addedTokens,
+                costUsd: t.stats.costUsd + (costUsd ?? 0),
+              },
+            });
+          });
         }
         this.onBroadcast(ev);
       },
@@ -226,6 +250,9 @@ export class RealEngineCore {
 
     const handle = runTurn(env, threadId, input);
     this.activeTurns.set(threadId, { handle, threadId });
+    void this.tree.getThread(threadId).then((t) => {
+      if (t) void this.tree.updateThread(threadId, { stats: { ...t.stats, turns: t.stats.turns + 1 } });
+    });
 
     void handle.done.finally(() => {
       this.activeTurns.delete(threadId);

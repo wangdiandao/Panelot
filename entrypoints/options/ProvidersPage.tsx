@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react';
 import { CONNECTION_TEMPLATES, createAdapter, normalizeBaseUrl } from '../../src/providers/registry';
 import type { Connection, QuirkFlags, VerifyResult } from '../../src/providers/types';
 import { SettingsStore } from '../../src/settings/store';
+import { decryptSecret, encryptSecret, isEncrypted } from '../../src/settings/crypto';
 
 const FAILURE_TEXT: Record<NonNullable<VerifyResult['failure']>, string> = {
   invalid_key: 'API Key 无效 — 检查 Key 是否正确、是否有余额',
@@ -30,8 +31,13 @@ export function ProvidersPage() {
   };
 
   const upsert = async (conn: Connection) => {
+    // Encrypt keys at rest (docs §7); already-encrypted values pass through.
+    const encrypted: Connection = {
+      ...conn,
+      apiKeys: await Promise.all(conn.apiKeys.map((k) => (isEncrypted(k) ? Promise.resolve(k) : encryptSecret(k)))),
+    };
     const idx = connections.findIndex((c) => c.id === conn.id);
-    const list = idx === -1 ? [...connections, conn] : connections.map((c) => (c.id === conn.id ? conn : c));
+    const list = idx === -1 ? [...connections, encrypted] : connections.map((c) => (c.id === conn.id ? encrypted : c));
     await save(list);
     setEditing(null);
   };
@@ -118,8 +124,15 @@ function ConnectionForm({
   onCancel: () => void;
 }) {
   const [conn, setConn] = useState(connection);
-  const [keysText, setKeysText] = useState(connection.apiKeys.join('\n'));
+  const [keysText, setKeysText] = useState('');
   const [modelsText, setModelsText] = useState(connection.modelIds?.join('\n') ?? '');
+
+  // Decrypt stored keys for display when editing an existing connection.
+  useEffect(() => {
+    void Promise.all(connection.apiKeys.map((k) => (isEncrypted(k) ? decryptSecret(k) : Promise.resolve(k)))).then((keys) =>
+      setKeysText(keys.join('\n')),
+    );
+  }, [connection.id]);
   const [verifying, setVerifying] = useState(false);
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
   const [urlHint, setUrlHint] = useState<string | undefined>();

@@ -8,6 +8,7 @@ import { ProvidersPage } from './ProvidersPage';
 import { PermissionsPage } from './PermissionsPage';
 import { SkillsPage } from './SkillsPage';
 import { McpPage } from './McpPage';
+import { DataPage } from './DataPage';
 import { SettingsStore, type GlobalSettings } from '../../src/settings/store';
 
 const SECTIONS = [
@@ -48,7 +49,7 @@ export function App() {
         {section === 'permissions' && <PermissionsPage />}
         {section === 'skills' && <SkillsPage />}
         {section === 'mcp' && <McpPage />}
-        {section === 'data' && <Placeholder text="导入导出与存储管理将在打磨阶段上线。" />}
+        {section === 'data' && <DataPage />}
         {section === 'about' && <AboutPage />}
       </main>
     </div>

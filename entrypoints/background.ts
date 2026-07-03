@@ -17,6 +17,7 @@ import { GatekeeperService } from '../src/gatekeeper/service';
 import type { AnyAgentTool } from '../src/agent/tool';
 import { SkillManager, createLoadSkillTool } from '../src/skills/manager';
 import { McpManager } from '../src/mcp/manager';
+import { evictAttachmentsIfNeeded } from '../src/data/quota';
 
 export default defineBackground(() => {
   const db = new PanelotDB();
@@ -147,9 +148,12 @@ export default defineBackground(() => {
   // Keepalive for running turns with no UI connected (docs/01 §4): a 30s alarm
   // wakes the SW to keep long background tasks progressing across idle gaps.
   chrome.alarms.create('panelot-keepalive', { periodInMinutes: 0.5 });
+  chrome.alarms.create('panelot-quota', { periodInMinutes: 15 });
   chrome.alarms.onAlarm.addListener((alarm) => {
-    if (alarm.name === 'panelot-keepalive' && core.activeThreadIds().length === 0) {
-      // Nothing running — nothing to do; the alarm itself kept us warm.
+    if (alarm.name === 'panelot-quota') {
+      // LRU-evict over-budget attachments, never touching a live thread (docs/02 §6).
+      const active = core.activeThreadIds()[0];
+      void evictAttachmentsIfNeeded(db, active);
     }
   });
 });

@@ -8,6 +8,7 @@ import { createAdapter, inferCapabilities } from '../providers/registry';
 import type { GenParams, ProviderAdapter } from '../providers/types';
 import { mergeParams } from '../providers/types';
 import { SettingsStore } from '../settings/store';
+import { decryptSecret } from '../settings/crypto';
 import type { ProviderResolver } from './core';
 import type { TaskModelRef } from '../agent/compactionRunner';
 
@@ -22,11 +23,13 @@ export class SettingsProviderResolver implements ProviderResolver {
     const connections = await SettingsStore.connections.get();
     const conn = connections.find((c) => c.id === connectionId && c.enabled);
     if (!conn) throw new Error(`connection ${connectionId} not found or disabled`);
-    // Cache by id + key-count so key edits invalidate.
-    const cacheKey = `${conn.id}:${conn.apiKeys.length}:${conn.baseUrl}`;
+    // Decrypt keys at use time (stored AES-GCM obfuscated, docs §7).
+    const decrypted = { ...conn, apiKeys: await Promise.all(conn.apiKeys.map((k) => decryptSecret(k))) };
+    // Cache by id + key fingerprint so key edits invalidate.
+    const cacheKey = `${conn.id}:${conn.apiKeys.join(',').length}:${conn.baseUrl}`;
     let adapter = this.adapterCache.get(cacheKey);
     if (!adapter) {
-      adapter = createAdapter(conn);
+      adapter = createAdapter(decrypted);
       this.adapterCache.set(cacheKey, adapter);
     }
     return adapter;
@@ -35,7 +38,7 @@ export class SettingsProviderResolver implements ProviderResolver {
   async resolve(
     threadId: string,
     override?: { connectionId: string; modelId: string },
-  ): Promise<{ provider: ProviderAdapter; model: string; params: GenParams; contextWindow: number }> {
+  ): Promise<{ provider: ProviderAdapter; model: string; params: GenParams; contextWindow: number; pricing?: { input: number; output: number; cacheRead?: number } }> {
     let connectionId: string;
     let modelId: string;
     let presetParams: GenParams | undefined;
