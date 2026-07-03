@@ -20,6 +20,7 @@ import {
 } from './ui/command';
 import { cn } from '../lib/utils';
 import { SettingsStore } from '../../settings/store';
+import { decryptSecret } from '../../settings/crypto';
 import { fetchAllModels } from '../../providers/registry';
 import type { Connection } from '../../providers/types';
 
@@ -46,7 +47,11 @@ export function ModelSelector({ value, onSelect }: Props) {
   useEffect(() => {
     if (!open || choices !== null) return;
     void (async () => {
-      const connections: Connection[] = await SettingsStore.connections.get();
+      const stored: Connection[] = await SettingsStore.connections.get();
+      // Keys are AES-GCM obfuscated at rest — decrypt before the live fetch.
+      const connections = await Promise.all(
+        stored.map(async (c) => ({ ...c, apiKeys: await Promise.all(c.apiKeys.map(decryptSecret)) })),
+      );
       const results = await fetchAllModels(connections);
       const byId = new Map(connections.map((c) => [c.id, c]));
       const list: ModelChoice[] = results.flatMap((r) => {

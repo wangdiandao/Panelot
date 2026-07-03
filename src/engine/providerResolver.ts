@@ -5,7 +5,7 @@
 
 import { PanelotDB } from '../db/schema';
 import { createAdapter, inferCapabilities } from '../providers/registry';
-import type { GenParams, ProviderAdapter } from '../providers/types';
+import type { Connection, GenParams, ProviderAdapter } from '../providers/types';
 import { mergeParams } from '../providers/types';
 import { SettingsStore } from '../settings/store';
 import { decryptSecret } from '../settings/crypto';
@@ -16,8 +16,29 @@ const DEFAULT_CONTEXT_WINDOW = 128_000;
 
 export class SettingsProviderResolver implements ProviderResolver {
   private adapterCache = new Map<string, ProviderAdapter>();
+  /** Models fetched from GET /models, per connection (SW-lifetime cache). */
+  private modelListCache = new Map<string, string[]>();
 
   constructor(private db: PanelotDB) {}
+
+  /**
+   * Default model for a connection without a manual model list: fetch it
+   * from the endpoint (the manual list is a fallback for endpoints WITHOUT
+   * /models, not a requirement — docs/03 §1.2).
+   */
+  private async endpointDefaultModel(conn: Connection): Promise<string | undefined> {
+    const cached = this.modelListCache.get(conn.id);
+    if (cached) return cached[0];
+    try {
+      const adapter = await this.adapterFor(conn.id);
+      if (!adapter.listModels) return undefined;
+      const models = await adapter.listModels();
+      if (models.length > 0) this.modelListCache.set(conn.id, models);
+      return models[0];
+    } catch {
+      return undefined;
+    }
+  }
 
   private async adapterFor(connectionId: string): Promise<ProviderAdapter> {
     const connections = await SettingsStore.connections.get();
@@ -50,13 +71,14 @@ export class SettingsProviderResolver implements ProviderResolver {
       const presets = await SettingsStore.presets.get();
       const preset = presets.find((p) => p.id === thread?.preset) ?? presets[0];
       if (!preset) {
-        // No preset configured: fall back to the first enabled connection's first model.
+        // No preset configured: fall back to the first enabled connection's
+        // first model — manual list first, then live GET /models.
         const connections = await SettingsStore.connections.get();
         const conn = connections.find((c) => c.enabled);
         if (!conn) throw new Error('no provider configured — add one in settings');
         connectionId = conn.id;
-        const firstModel = conn.modelIds?.[0];
-        if (!firstModel) throw new Error('no model available on the configured connection');
+        const firstModel = conn.modelIds?.[0] ?? (await this.endpointDefaultModel(conn));
+        if (!firstModel) throw new Error('no model available on the configured connection — the endpoint has no /models list; add model ids manually in settings');
         modelId = firstModel;
       } else {
         connectionId = preset.base.connectionId;

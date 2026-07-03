@@ -267,8 +267,8 @@ function ConnectionForm({
       </div>
 
       <div>
-        <Label className={labelCls} htmlFor="conn-models">手动模型列表（可选，每行一个；端点无 /models 时使用）</Label>
-        <Textarea id="conn-models" className="font-mono" rows={2} value={modelsText} onChange={(e) => setModelsText(e.target.value)} placeholder={'gpt-5\nclaude-sonnet-5'} />
+        <Label className={labelCls} htmlFor="conn-models">模型列表（自动从端点 /models 获取；仅当端点不支持时手填，每行一个）</Label>
+        <Textarea id="conn-models" className="font-mono" rows={2} value={modelsText} onChange={(e) => setModelsText(e.target.value)} placeholder={'留空 = 自动获取\ngpt-5'} />
       </div>
 
       <Collapsible>
@@ -320,7 +320,16 @@ function ConnectionForm({
               <span className={verifyResult.toolUse ? 'text-success' : 'text-muted-foreground'}>{verifyResult.toolUse ? '✓' : '—'} 工具调用</span>
             </div>
             {verifyResult.failure && <div className="text-destructive">{FAILURE_TEXT[verifyResult.failure]}</div>}
-            {verifyResult.models && <div className="text-muted-foreground">发现 {verifyResult.models.length} 个模型</div>}
+            {verifyResult.models && verifyResult.models.length > 0 && (
+              <div className="mt-1.5">
+                <div className="text-muted-foreground">从端点发现 {verifyResult.models.length} 个模型：</div>
+                <div className="mt-1 flex max-h-24 flex-wrap gap-1 overflow-y-auto">
+                  {verifyResult.models.map((m) => (
+                    <span key={m} className="rounded-full bg-muted px-2 py-0.5 font-mono text-[11px] text-muted-foreground">{m}</span>
+                  ))}
+                </div>
+              </div>
+            )}
           </AlertDescription>
         </Alert>
       )}

@@ -168,7 +168,9 @@ export function Onboarding({ onConfigured, onOpenSettings, onTryDemo }: Props) {
           </div>
           {verified && (
             <div className={`text-[12px] ${verified.keyValid ? 'text-success' : 'text-destructive'}`}>
-              {verified.keyValid ? '✓ 连接成功，Key 有效' : `✗ ${verified.detail ?? '验证失败，检查域名、Key 与网络'}`}
+              {verified.keyValid
+                ? `✓ 连接成功${verified.models?.length ? `，发现 ${verified.models.length} 个模型` : ''}`
+                : `✗ ${verified.detail ?? '验证失败，检查域名、Key 与网络'}`}
             </div>
           )}
           <div className="flex gap-2">
