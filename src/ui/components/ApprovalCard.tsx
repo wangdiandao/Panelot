@@ -9,6 +9,7 @@
 import { useEffect, useRef } from 'react';
 import { TriangleAlert } from 'lucide-react';
 import { Button } from './ui/button';
+import { t } from '../i18n';
 import type { ApprovalDecision, PendingApproval } from '../../messaging/protocol';
 
 interface Props {
@@ -59,27 +60,27 @@ export function ApprovalCard({ approval, queuePosition, onDecision }: Props) {
       tabIndex={-1}
       onKeyDown={onKeyDown}
       role="alertdialog"
-      aria-label={`审批请求：${request.label}`}
+      aria-label={t('approval.request', { label: request.label })}
       className="animate-[slide-in_200ms_ease-out] overflow-hidden rounded-xl border border-warning/50 bg-card shadow-lg outline-none focus:ring-1 focus:ring-warning"
     >
       {crossScope && (
         <div className="flex items-center gap-1.5 bg-warning/15 px-3 py-1 text-[11px] font-medium text-warning">
-          <TriangleAlert className="size-3" /> 越出任务作用域 — 该操作的目标不在本任务已触达的站点内
+          <TriangleAlert className="size-3" /> {t('approval.crossScope')}
         </div>
       )}
       {sensitive && (
         <div className="flex items-center gap-1.5 bg-destructive/15 px-3 py-1 text-[11px] font-medium text-destructive">
-          <TriangleAlert className="size-3" /> 检测到敏感内容外发 — 参数中含疑似凭据/卡号/邮箱
+          <TriangleAlert className="size-3" /> {t('approval.sensitive')}
         </div>
       )}
       {escalation && (
         <div className="bg-info/15 px-3 py-1 text-[11px] font-medium text-info">
-          将升级为调试模式 — 页面顶部会出现「正在调试此浏览器」横幅
+          {t('approval.escalation')}
         </div>
       )}
       <div className="space-y-2 p-3">
         <div className="flex items-center gap-2 text-[13px]">
-          <span className="font-semibold text-warning">允许</span>
+          <span className="font-semibold text-warning">{t('approval.allow')}</span>
           <span className="font-medium">{request.label}</span>
           {request.targetOrigin && <span className="font-mono text-[11px] text-muted-foreground">{request.targetOrigin}</span>}
           {queuePosition && queuePosition.total > 1 && (
@@ -99,10 +100,10 @@ export function ApprovalCard({ approval, queuePosition, onDecision }: Props) {
         </pre>
         <div className="flex gap-2">
           <Button size="sm" className="h-7 px-3 text-[12px]" onClick={() => decide({ kind: 'accept' })}>
-            允许一次 <kbd className="opacity-60">Y</kbd>
+            {t('approval.allowOnce')} <kbd className="opacity-60">Y</kbd>
           </Button>
           <Button variant="secondary" size="sm" className="h-7 px-3 text-[12px]" onClick={() => decide({ kind: 'acceptForSite' })}>
-            本站始终 <kbd className="opacity-60">A</kbd>
+            {t('approval.allowSite')} <kbd className="opacity-60">A</kbd>
           </Button>
           <Button
             variant="outline"
@@ -110,7 +111,7 @@ export function ApprovalCard({ approval, queuePosition, onDecision }: Props) {
             className="ml-auto h-7 border-destructive/40 px-3 text-[12px] text-destructive hover:bg-destructive/10 hover:text-destructive"
             onClick={() => decide({ kind: 'decline' })}
           >
-            拒绝 <kbd className="opacity-60">N</kbd>
+            {t('approval.decline')} <kbd className="opacity-60">N</kbd>
           </Button>
         </div>
       </div>

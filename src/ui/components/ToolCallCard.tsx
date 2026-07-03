@@ -13,6 +13,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from './ui/collapsible';
+import { t } from '../i18n';
 
 export interface ToolCardData {
   itemId: string;
@@ -100,7 +101,7 @@ export function ToolCallGroup({ cards }: { cards: ToolCardData[] }) {
       >
         <ChevronRight className={`size-3 opacity-60 transition-transform ${expanded ? 'rotate-90' : ''}`} />
         <span className="flex items-center gap-1">
-          {cards.length} 步浏览器操作
+          {t('stream.steps', { n: cards.length })}
           <span className="flex items-center text-success"><Check className="size-3" />{okCount}</span>
           {failCount > 0 && <span className="flex items-center text-destructive"><X className="size-3" />{failCount}</span>}
           {running && <Loader2 className="size-3 animate-spin text-info" />}

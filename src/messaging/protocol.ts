@@ -306,7 +306,13 @@ export type AgentEvent =
 
   // —— broadcasts ——
   | { type: 'thread.updated'; threadId: string; patch: Partial<ThreadSnapshotMeta> }
-  | { type: 'queue.updated'; threadId: string; pending: number };
+  | { type: 'queue.updated'; threadId: string; pending: number }
+  | {
+      /** Controlled-tab set changed (docs/05 §6 → task panel, docs/09 §3.1). */
+      type: 'tabs.updated';
+      threadId: string;
+      tabs: { tabId: number; title: string; url: string }[];
+    };
 
 // ---------------------------------------------------------------------------
 // Content-script protocol (engine ⇄ content script, docs/01 §5)

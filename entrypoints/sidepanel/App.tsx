@@ -12,6 +12,7 @@ import { EngineSession } from '../../src/ui/engineClient';
 import { ThreadView, useEngineState } from '../../src/ui/components/ThreadView';
 import { SettingsModal } from '../../src/ui/settings/SettingsModal';
 import { CommandPalette } from '../../src/ui/components/CommandPalette';
+import { ShortcutHelp } from '../../src/ui/components/ShortcutHelp';
 import { Toaster } from '../../src/ui/components/ui/sonner';
 import { Button } from '../../src/ui/components/ui/button';
 import { Badge } from '../../src/ui/components/ui/badge';
@@ -54,6 +55,11 @@ export function App() {
       } else if (mod && e.key.toLowerCase() === 'n') {
         e.preventDefault();
         session.createThread();
+      } else if (mod && e.key.toLowerCase() === 'e') {
+        // Ctrl/Cmd+E: expand to the full-page form (docs/09 §6).
+        e.preventDefault();
+        const threadId = session.store.getState().threadId;
+        void chrome.tabs.create({ url: chrome.runtime.getURL(`/chat.html${threadId ? `?thread=${threadId}` : ''}`) });
       }
     };
     window.addEventListener('keydown', onKey);
@@ -175,6 +181,7 @@ export function App() {
         onNewThread={() => session.createThread()}
         onOpenSettings={() => setSettingsOpen(true)}
       />
+      <ShortcutHelp />
       <Toaster />
     </div>
     </TooltipProvider>

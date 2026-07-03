@@ -1,7 +1,6 @@
 /**
  * Skills settings (docs/08 §3): list, enable/disable, import (paste/file/URL),
- * built-in editor. CodeMirror upgrade lands with the polish phase; a plain
- * textarea with live validation covers the editing contract. Built on
+ * built-in CodeMirror editor with live frontmatter validation. Built on
  * shadcn/ui primitives; URL import uses a Dialog instead of window.prompt.
  */
 
@@ -11,8 +10,8 @@ import { toast } from 'sonner';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Input } from '../components/ui/input';
-import { Textarea } from '../components/ui/textarea';
 import { Switch } from '../components/ui/switch';
+import { CodeEditor } from '../components/CodeEditor';
 import {
   Dialog,
   DialogContent,
@@ -96,12 +95,7 @@ export function SkillsPage() {
     return (
       <div className="max-w-2xl space-y-3">
         <h2 className="text-[15px] font-semibold">编辑 Skill</h2>
-        <Textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          rows={20}
-          className="font-mono text-[12.5px]"
-        />
+        <CodeEditor value={draft} onChange={setDraft} placeholder={TEMPLATE} />
         {preview && <div className="text-[12px] text-success">✓ {preview.name} — {preview.description}</div>}
         {error && <div className="text-[12px] text-destructive">{error}</div>}
         <div className="flex gap-2">

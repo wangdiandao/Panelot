@@ -1,10 +1,12 @@
 /**
  * Message stream (docs/09 §2): renders persisted snapshot items + live
- * streaming overlay. Virtualization arrives with long-session polish; the
- * structure (item → row mapping, tool grouping) is final.
+ * streaming overlay. Virtualized with react-virtuoso (RL-2: 2000 nodes at
+ * 60fps); followOutput replaces the hand-rolled auto-scroll while keeping
+ * the same "stop following when the user scrolls up" contract.
  */
 
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
+import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { BranchSwitcher, useBranchShortcuts } from './BranchSwitcher';
 import type { SnapshotItem } from '../../messaging/protocol';
 import type {
@@ -19,6 +21,7 @@ import type {
 import type { LiveItem } from '../engineClient';
 import { Markdown } from './Markdown';
 import { ToolCallGroup, type ToolCardData } from './ToolCallCard';
+import { t } from '../i18n';
 
 // ---------------------------------------------------------------------------
 // Row model: fold tool_call + tool_result pairs into cards, group runs
@@ -142,8 +145,8 @@ interface Props {
 
 export function MessageStream({ items, liveItems, threadId, onSelectBranch }: Props) {
   const rows = useMemo(() => buildRows(items, liveItems), [items, liveItems]);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [followTail, setFollowTail] = useState(true);
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const [atBottom, setAtBottom] = useState(true);
 
   // Ctrl/Cmd+↑↓ operates on the last branchable message (docs/09 §6).
   const lastBranchNodeId = useMemo(() => {
@@ -155,37 +158,38 @@ export function MessageStream({ items, liveItems, threadId, onSelectBranch }: Pr
   }, [rows]);
   useBranchShortcuts(threadId ?? null, lastBranchNodeId, onSelectBranch ?? (() => {}));
 
-  // Auto-scroll unless the user scrolled up (docs/09 §4.1 rule 3).
-  useEffect(() => {
-    if (followTail) containerRef.current?.scrollTo({ top: containerRef.current.scrollHeight });
-  }, [rows, followTail]);
-
-  const onScroll = () => {
-    const el = containerRef.current;
-    if (!el) return;
-    setFollowTail(el.scrollHeight - el.scrollTop - el.clientHeight < 40);
-  };
+  if (rows.length === 0) {
+    return (
+      <div className="relative flex-1 overflow-hidden px-4 py-6">
+        <EmptyState />
+      </div>
+    );
+  }
 
   return (
     <div className="relative flex-1 overflow-hidden">
-      <div ref={containerRef} onScroll={onScroll} className="h-full overflow-y-auto px-4 py-6">
-        {rows.length === 0 && <EmptyState />}
-        <div className="space-y-6">
-          {rows.map((row) => (
-            <Fragment key={row.key}>{renderRow(row, threadId ?? null, onSelectBranch)}</Fragment>
-          ))}
-        </div>
-      </div>
-      {!followTail && (
+      <Virtuoso
+        ref={virtuosoRef}
+        data={rows}
+        computeItemKey={(_, row) => row.key}
+        // Follow the tail while streaming unless the user scrolled up
+        // (docs/09 §4.1 rule 3) — virtuoso's followOutput models exactly this.
+        followOutput={(isAtBottom) => (isAtBottom ? 'auto' : false)}
+        atBottomStateChange={setAtBottom}
+        atBottomThreshold={40}
+        increaseViewportBy={{ top: 400, bottom: 400 }}
+        className="h-full"
+        itemContent={(_, row) => (
+          <div className="px-4 py-3">{renderRow(row, threadId ?? null, onSelectBranch)}</div>
+        )}
+      />
+      {!atBottom && (
         <button
           type="button"
-          onClick={() => {
-            setFollowTail(true);
-            containerRef.current?.scrollTo({ top: containerRef.current.scrollHeight, behavior: 'smooth' });
-          }}
+          onClick={() => virtuosoRef.current?.scrollToIndex({ index: rows.length - 1, align: 'end', behavior: 'smooth' })}
           className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-border bg-card px-3 py-1 text-[11px] text-muted-foreground shadow-pop transition-colors hover:bg-muted"
         >
-          ↓ 回到底部
+          {t('stream.backToBottom')}
         </button>
       )}
     </div>
@@ -196,7 +200,7 @@ function EmptyState() {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
       <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/15 text-[22px] text-primary">✦</div>
-      <div className="text-[15px] font-medium">今天想做点什么？</div>
+      <div className="text-[15px] font-medium">{t('empty.title')}</div>
       <div className="max-w-xs text-[12.5px] leading-relaxed text-faint-foreground">
         直接提问，或用 <span className="rounded bg-muted px-1 font-mono">@</span> 引用当前页面，
         让 Panelot 帮你在浏览器里动手。
@@ -265,14 +269,14 @@ function renderRow(row: Row, threadId: string | null, onSelectBranch?: (nodeId: 
       return (
         <div className="flex justify-center">
           <div className="rounded-full border border-dashed border-border px-3 py-1 text-[11px] text-faint-foreground">
-            ⧉ 上下文已压缩（{row.payload.tokensBefore} → {row.payload.tokensAfter} tokens）
+            ⧉ {t('stream.compacted', { before: row.payload.tokensBefore, after: row.payload.tokensAfter })}
           </div>
         </div>
       );
     case 'branch_summary':
       return (
         <div className="rounded-xl border border-dashed border-border bg-card px-3 py-2 text-[12px] text-muted-foreground">
-          <div className="mb-1 font-medium">已弃分支摘要</div>
+          <div className="mb-1 font-medium">{t('stream.branchSummary')}</div>
           {row.payload.summary}
         </div>
       );
@@ -289,7 +293,7 @@ function ReasoningBlock({ text, streaming }: { text: string; streaming?: boolean
         className="text-[11px] text-muted-foreground hover:text-foreground"
         aria-expanded={open}
       >
-        {open ? '▾' : '▸'} {streaming ? '思考中…' : '思考过程'}
+        {open ? '▾' : '▸'} {streaming ? t('stream.reasoningLive') : t('stream.reasoning')}
       </button>
       {open && (
         <div className="mt-1 whitespace-pre-wrap rounded-md border-l-2 border-info/40 bg-card px-3 py-2 text-[12px] text-muted-foreground">

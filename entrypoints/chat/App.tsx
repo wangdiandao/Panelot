@@ -12,6 +12,7 @@ import { EngineSession } from '../../src/ui/engineClient';
 import { ThreadView, useEngineState } from '../../src/ui/components/ThreadView';
 import { SettingsModal } from '../../src/ui/settings/SettingsModal';
 import { CommandPalette } from '../../src/ui/components/CommandPalette';
+import { ShortcutHelp } from '../../src/ui/components/ShortcutHelp';
 import { Toaster } from '../../src/ui/components/ui/sonner';
 import { Button } from '../../src/ui/components/ui/button';
 import { Input } from '../../src/ui/components/ui/input';
@@ -38,6 +39,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../../src/ui/components/ui/dropdown-menu';
+import { Popover, PopoverContent, PopoverTrigger } from '../../src/ui/components/ui/popover';
 import { useTheme } from '../../src/ui/useTheme';
 import { SettingsStore } from '../../src/settings/store';
 import { PanelotDB } from '../../src/db/schema';
@@ -120,6 +122,10 @@ export function App() {
       } else if (mod && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setPaletteOpen((v) => !v);
+      } else if (mod && e.key.toLowerCase() === 'e') {
+        // Ctrl/Cmd+E: back to the side panel form (docs/09 §6).
+        e.preventDefault();
+        window.close();
       }
     };
     window.addEventListener('keydown', onKey);
@@ -283,13 +289,44 @@ export function App() {
                   <div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${state.lastUsage.contextPct}%` }} />
                 </div>
               </div>
-              <div className="font-mono text-muted-foreground">
-                {state.lastUsage.costUsd !== undefined && `$${state.lastUsage.costUsd.toFixed(4)} · `}
-                {(state.lastUsage.totalTokens / 1000).toFixed(1)}k tok
-              </div>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button type="button" className="font-mono text-muted-foreground underline-offset-2 hover:underline" aria-label="成本分解">
+                    {state.lastUsage.costUsd !== undefined && `$${state.lastUsage.costUsd.toFixed(4)} · `}
+                    {(state.lastUsage.totalTokens / 1000).toFixed(1)}k tok
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent side="left" className="w-52 p-3 text-[12px]">
+                  <div className="mb-1 font-medium">本会话用量分解</div>
+                  <div className="space-y-0.5 font-mono text-muted-foreground">
+                    <div className="flex justify-between"><span>input</span><span>{state.lastUsage.inputTokens.toLocaleString()}</span></div>
+                    <div className="flex justify-between"><span>output</span><span>{state.lastUsage.outputTokens.toLocaleString()}</span></div>
+                    <div className="flex justify-between"><span>cache read</span><span>{state.lastUsage.cacheReadTokens.toLocaleString()}</span></div>
+                    {state.lastUsage.costUsd !== undefined && (
+                      <div className="flex justify-between border-t border-border pt-0.5"><span>cost</span><span>${state.lastUsage.costUsd.toFixed(4)}</span></div>
+                    )}
+                  </div>
+                </PopoverContent>
+              </Popover>
             </div>
           ) : (
             <div className="text-[12px] text-faint-foreground">本轮暂无用量数据</div>
+          )}
+          {state.controlledTabs.length > 0 && (
+            <div className="mt-4 space-y-1">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-faint-foreground">受控标签页</div>
+              {state.controlledTabs.map((t) => (
+                <button
+                  key={t.tabId}
+                  type="button"
+                  onClick={() => void chrome.tabs.update(t.tabId, { active: true })}
+                  className="block w-full truncate text-left text-[12px] text-muted-foreground hover:text-foreground"
+                  title={t.url}
+                >
+                  {t.title || t.url} ↗
+                </button>
+              ))}
+            </div>
           )}
           {state.queuedInputs > 0 && <div className="mt-3 text-[12px] text-muted-foreground">队列 {state.queuedInputs} 条</div>}
         </aside>
@@ -338,6 +375,7 @@ export function App() {
         </AlertDialogContent>
       </AlertDialog>
 
+      <ShortcutHelp />
       <Toaster />
     </div>
   );

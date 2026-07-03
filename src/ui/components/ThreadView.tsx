@@ -14,24 +14,18 @@ import { ApprovalCard } from './ApprovalCard';
 import { Onboarding } from './Onboarding';
 import { Alert, AlertDescription } from './ui/alert';
 import { Button } from './ui/button';
+import { Skeleton } from './ui/skeleton';
+import { t } from '../i18n';
 
 export function useEngineState(session: EngineSession): ThreadUiState {
   return useSyncExternalStore(session.store.subscribe, session.store.getState, session.store.getState);
 }
 
 /** Human-readable provider-error attribution (docs/03 §7, docs/09 §7). */
-const ERROR_KIND_TEXT: Record<string, string> = {
-  auth: 'API Key 无效或已过期 — 检查设置中的 Key',
-  rate_limit: '触发限流 — 稍后自动可重试，或添加备用 Key',
-  overloaded: '模型服务过载 — 稍后重试',
-  context_too_long: '上下文超长 — 已尝试压缩仍超限，试试新会话',
-  content_filter: '内容被模型服务拦截',
-  network: '网络异常 — 检查网络或代理设置',
-  protocol: '端点协议不符 — 检查连接的 API 风格配置',
-};
+const ERROR_KINDS = new Set(['auth', 'rate_limit', 'overloaded', 'context_too_long', 'content_filter', 'network', 'protocol']);
 
 function humanizeError(err: { message: string; kind?: string }): string {
-  return (err.kind && ERROR_KIND_TEXT[err.kind]) ?? err.message;
+  return err.kind && ERROR_KINDS.has(err.kind) ? t(`error.${err.kind}`) : err.message;
 }
 
 interface Props {
@@ -76,7 +70,7 @@ export function ThreadView({ session, providerConfigured, onOpenSettings, onProv
     <div className="flex h-full flex-col bg-background text-foreground">
       {!state.connected && (
         <div className="border-b border-border-soft bg-card px-3 py-1 text-center text-[11px] text-muted-foreground">
-          重新连接引擎…
+          {t('reconnecting')}
         </div>
       )}
       {state.lastError && (
@@ -86,17 +80,27 @@ export function ThreadView({ session, providerConfigured, onOpenSettings, onProv
           </span>
           {state.lastError.kind === 'auth' && onOpenSettings && (
             <Button variant="ghost" size="sm" className="h-5 shrink-0 px-2 text-[11px] text-destructive underline-offset-2 hover:underline" onClick={onOpenSettings}>
-              打开设置
+              {t('error.openSettings')}
             </Button>
           )}
           {state.lastError.retryable && state.lastInput && (
             <Button variant="ghost" size="sm" className="h-5 shrink-0 px-2 text-[11px] text-destructive underline-offset-2 hover:underline" onClick={() => session.retryLast()}>
-              重试
+              {t('error.retry')}
             </Button>
           )}
         </div>
       )}
-      {!providerConfigured && state.items.length === 0 && state.liveItems.length === 0 ? (
+      {!state.connected && state.items.length === 0 ? (
+        /* Thread switch / reconnect: 3-message skeleton (docs/09 §7). */
+        <div className="flex-1 space-y-6 px-4 py-6">
+          <div className="flex justify-end"><Skeleton className="h-10 w-3/5 rounded-2xl" /></div>
+          <div className="flex gap-3">
+            <Skeleton className="size-7 rounded-lg" />
+            <div className="flex-1 space-y-2"><Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-4/5" /></div>
+          </div>
+          <div className="flex justify-end"><Skeleton className="h-10 w-2/5 rounded-2xl" /></div>
+        </div>
+      ) : !providerConfigured && state.items.length === 0 && state.liveItems.length === 0 ? (
         <div className="min-h-0 flex-1 overflow-y-auto">
           <Onboarding
             onConfigured={() => onProviderConfigured?.()}
@@ -128,13 +132,13 @@ export function ThreadView({ session, providerConfigured, onOpenSettings, onProv
         <Alert className="mx-4 mb-2 w-auto border-warning/40 bg-warning/10 text-warning">
           <TriangleAlert className="size-4" />
           <AlertDescription className="flex items-center gap-2 text-[12px] text-warning">
-            <span>任务此前被中断（可能是浏览器休眠）。</span>
+            <span>{t('recovery.interrupted')}</span>
             <Button
               size="sm"
               className="ml-auto h-6 bg-warning px-2.5 text-[11px] text-black hover:bg-warning/90"
               onClick={() => session.enqueue({ text: '继续刚才的任务' })}
             >
-              继续
+              {t('recovery.continue')}
             </Button>
           </AlertDescription>
         </Alert>
@@ -145,7 +149,7 @@ export function ThreadView({ session, providerConfigured, onOpenSettings, onProv
           onClick={onOpenSettings}
           className="mx-4 mb-2 rounded-xl border border-primary/40 bg-primary/10 px-3 py-2 text-[12px] text-primary transition-colors hover:bg-primary/20"
         >
-          先在设置中添加模型 →
+          {t('input.noProvider')}
         </button>
       )}
       <PromptInput

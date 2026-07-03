@@ -13,6 +13,7 @@ import { useRef, useState, type RefObject } from 'react';
 import { ArrowUp, Paperclip, Square, X } from 'lucide-react';
 import { Button } from './ui/button';
 import { cn } from '../lib/utils';
+import { t } from '../i18n';
 import type { ContextBlock } from '../../messaging/protocol';
 import { TriggerMenu, detectTrigger, type TriggerMenuHandle, type TriggerState } from './TriggerMenu';
 import { useTriggerItems, evaluateVariables, type BuiltinCommand, type SkillCommand } from './composerTriggers';
@@ -110,7 +111,7 @@ export function PromptInput({
       } else {
         onSend(resolved);
         if (running) {
-          setSteerHint(steerable ? '已插话，将在下次模型调用前生效' : '当前轮不可插话，已加入队列');
+          setSteerHint(steerable ? t('input.steered') : t('input.queuedInstead'));
           setTimeout(() => setSteerHint(null), 3000);
         }
       }
@@ -143,7 +144,7 @@ export function PromptInput({
   return (
     <div className="px-4 pb-4 pt-1">
       {steerHint && <div className="mb-1.5 px-1 text-[11px] text-info">{steerHint}</div>}
-      {queuedInputs > 0 && <div className="mb-1.5 px-1 text-[11px] text-muted-foreground">队列中 {queuedInputs} 条消息</div>}
+      {queuedInputs > 0 && <div className="mb-1.5 px-1 text-[11px] text-muted-foreground">{t('input.queuedCount', { n: queuedInputs })}</div>}
 
       <div
         className={cn(
@@ -164,7 +165,7 @@ export function PromptInput({
               <span key={i} className="flex items-center gap-1 rounded-full bg-accent px-2 py-0.5 text-[11px]">
                 <Paperclip className="size-3" /> {chip.label}
                 {chip.approxTokens !== undefined && <span className="text-faint-foreground">~{chip.approxTokens}tok</span>}
-                <button type="button" onClick={() => onRemoveChip(i)} className="text-faint-foreground hover:text-destructive" aria-label={`移除 ${chip.label}`}>
+                <button type="button" onClick={() => onRemoveChip(i)} className="text-faint-foreground hover:text-destructive" aria-label={t('input.remove', { label: chip.label })}>
                   <X className="size-3" />
                 </button>
               </span>
@@ -183,15 +184,15 @@ export function PromptInput({
             onClick={(e) => refreshTrigger(text, e.currentTarget.selectionStart)}
             onBlur={() => setTimeout(() => setTrigger(null), 150) /* let menu clicks land first */}
             disabled={disabled}
-            placeholder={disabled ? (disabledHint ?? '先在设置中添加模型 →') : running ? '输入以插话，Esc 停止…' : '给 Panelot 发消息… (@ 引用 / 命令)'}
+            placeholder={disabled ? (disabledHint ?? t('input.noProvider')) : running ? t('input.running') : t('input.placeholder')}
             rows={Math.min(8, Math.max(1, text.split('\n').length))}
             className="max-h-48 min-h-[36px] flex-1 resize-none bg-transparent px-2.5 py-1.5 text-[14.5px] leading-[1.5] outline-none placeholder:text-faint-foreground disabled:cursor-not-allowed"
           />
           {running ? (
             <Button
               size="icon"
-              aria-label="停止"
-              title="停止 (Esc)"
+              aria-label={t('input.stop')}
+              title={`${t('input.stop')} (Esc)`}
               className="size-8 shrink-0 rounded-full bg-foreground text-background transition-transform hover:scale-105 hover:bg-foreground"
               onClick={onStop}
             >
@@ -200,8 +201,8 @@ export function PromptInput({
           ) : (
             <Button
               size="icon"
-              aria-label="发送"
-              title="发送 (Enter)"
+              aria-label={t('input.send')}
+              title={`${t('input.send')} (Enter)`}
               disabled={disabled || !text.trim()}
               className="size-8 shrink-0 rounded-full disabled:bg-accent disabled:text-faint-foreground disabled:opacity-100"
               onClick={() => submit('send')}
@@ -218,7 +219,7 @@ export function PromptInput({
         )}
       </div>
       <div className="mt-1.5 px-2 text-center text-[10.5px] text-faint-foreground">
-        {running ? 'Enter 插话 · Shift+Alt+Enter 排队 · Esc 停止' : 'Enter 发送 · Shift+Enter 换行'}
+        {running ? t('input.hintRunning') : t('input.hintIdle')}
       </div>
 
       <SkillVariableForm

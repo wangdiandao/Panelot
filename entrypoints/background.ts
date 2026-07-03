@@ -119,6 +119,23 @@ export default defineBackground(() => {
     }
   });
 
+  // Controlled-tab set changes → broadcast to the task panel (docs/09 §3.1).
+  gateway.onTabsChanged = (threadId) => {
+    void (async () => {
+      const tabs = await Promise.all(
+        gateway.controls(threadId).map(async (tabId) => {
+          try {
+            const t = await chrome.tabs.get(tabId);
+            return { tabId, title: t.title ?? '', url: t.url ?? '' };
+          } catch {
+            return null;
+          }
+        }),
+      );
+      core.onBroadcast({ type: 'tabs.updated', threadId, tabs: tabs.filter((t) => t !== null) });
+    })();
+  };
+
   // Manual operation on a controlled page → pause the owning thread (docs/05 §5).
   gateway.onManualOperation = (tabId) => {
     for (const threadId of core.activeThreadIds()) {

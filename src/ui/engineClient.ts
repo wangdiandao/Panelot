@@ -49,11 +49,21 @@ export interface ThreadUiState {
   wasInterrupted: boolean;
   pendingApprovals: PendingApproval[];
   queuedInputs: number;
-  lastUsage: { contextPct: number; costUsd?: number; totalTokens: number } | null;
+  lastUsage: {
+    contextPct: number;
+    costUsd?: number;
+    totalTokens: number;
+    /** Session-accumulated breakdown for the cost popover. */
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+  } | null;
   todos: { text: string; done: boolean }[];
   lastError: { message: string; retryable: boolean; kind?: string } | null;
   /** Last submitted input, kept for the error-banner retry (docs/09 §7). */
   lastInput: UserInput | null;
+  /** Controlled tabs for the task panel (docs/09 §3.1). */
+  controlledTabs: { tabId: number; title: string; url: string }[];
   /** Sticky per-session overrides (model selector / tool-level switch). */
   pendingOverrides: TurnOverrides;
 }
@@ -72,6 +82,7 @@ const initialState: ThreadUiState = {
   todos: [],
   lastError: null,
   lastInput: null,
+  controlledTabs: [],
   pendingOverrides: {},
 };
 
@@ -272,8 +283,11 @@ export class EngineSession {
         s.setState((st) => ({
           lastUsage: {
             contextPct: ev.contextPct,
-            costUsd: ev.costUsd,
+            costUsd: (st.lastUsage?.costUsd ?? 0) + (ev.costUsd ?? 0),
             totalTokens: (st.lastUsage?.totalTokens ?? 0) + ev.usage.input + ev.usage.output,
+            inputTokens: (st.lastUsage?.inputTokens ?? 0) + ev.usage.input,
+            outputTokens: (st.lastUsage?.outputTokens ?? 0) + ev.usage.output,
+            cacheReadTokens: (st.lastUsage?.cacheReadTokens ?? 0) + (ev.usage.cacheRead ?? 0),
           },
         }));
         break;
@@ -287,6 +301,9 @@ export class EngineSession {
         break;
       case 'queue.updated':
         s.setState({ queuedInputs: ev.pending });
+        break;
+      case 'tabs.updated':
+        if (ev.threadId === s.getState().threadId) s.setState({ controlledTabs: ev.tabs });
         break;
       case 'thread.updated':
         s.setState((st) => ({ meta: st.meta ? { ...st.meta, ...ev.patch } : st.meta }));

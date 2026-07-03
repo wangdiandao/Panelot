@@ -16,6 +16,8 @@ export class BrowserToolGateway {
   private activeTab = new Map<string, number>();
   /** Called when the user manually operates a controlled page (auto-pause). */
   onManualOperation: (tabId: number) => void = () => {};
+  /** Called after the controlled set of a thread changes (task panel display). */
+  onTabsChanged: (threadId: string) => void = () => {};
 
   constructor() {
     if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
@@ -26,7 +28,9 @@ export class BrowserToolGateway {
       });
       // Controlled tab closed by the user → drop from all sets (docs/05 §6).
       chrome.tabs?.onRemoved?.addListener((tabId) => {
-        for (const set of this.controlledTabs.values()) set.delete(tabId);
+        for (const [threadId, set] of this.controlledTabs) {
+          if (set.delete(tabId)) this.onTabsChanged(threadId);
+        }
       });
     }
   }
@@ -45,11 +49,13 @@ export class BrowserToolGateway {
     }
     set.add(tabId);
     this.activeTab.set(threadId, tabId);
+    this.onTabsChanged(threadId);
   }
 
   detachTab(threadId: string, tabId: number): void {
     this.controlledTabs.get(threadId)?.delete(tabId);
     if (this.activeTab.get(threadId) === tabId) this.activeTab.delete(threadId);
+    this.onTabsChanged(threadId);
   }
 
   async getTargetTab(threadId: string): Promise<number> {
