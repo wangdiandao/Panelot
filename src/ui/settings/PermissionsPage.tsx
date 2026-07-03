@@ -61,7 +61,7 @@ export function PermissionsPage() {
     await storageSet('sensitive_origins', next);
   };
 
-  const select = 'rounded-md border border-border bg-surface-2 px-2 py-1.5 text-[13px] outline-none focus:border-accent/60';
+  const select = 'rounded-md border border-border bg-muted px-2 py-1.5 text-[13px] outline-none focus:border-primary/60';
 
   return (
     <div className="max-w-2xl space-y-6">
@@ -69,10 +69,10 @@ export function PermissionsPage() {
 
       {/* Two-axis defaults */}
       <div className="space-y-3">
-        <div className="text-[13px] font-medium text-text-dim">默认两轴档位</div>
+        <div className="text-[13px] font-medium text-muted-foreground">默认两轴档位</div>
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="mb-1 block text-[12px] text-text-dim">审批策略（何时问）</label>
+            <label className="mb-1 block text-[12px] text-muted-foreground">审批策略（何时问）</label>
             <select
               className={`${select} w-full`}
               value={settings.defaultApprovalPolicy ?? 'untrusted'}
@@ -82,10 +82,10 @@ export function PermissionsPage() {
                 <option key={k} value={k}>{k}</option>
               ))}
             </select>
-            <div className="mt-1 text-[11px] text-text-dim">{POLICY_DESC[settings.defaultApprovalPolicy ?? 'untrusted']}</div>
+            <div className="mt-1 text-[11px] text-muted-foreground">{POLICY_DESC[settings.defaultApprovalPolicy ?? 'untrusted']}</div>
           </div>
           <div>
-            <label className="mb-1 block text-[12px] text-text-dim">能力域（能做什么·硬闸）</label>
+            <label className="mb-1 block text-[12px] text-muted-foreground">能力域（能做什么·硬闸）</label>
             <select
               className={`${select} w-full`}
               value={settings.defaultCapabilityScope ?? 'cross-origin'}
@@ -95,22 +95,22 @@ export function PermissionsPage() {
                 <option key={k} value={k}>{k}</option>
               ))}
             </select>
-            <div className="mt-1 text-[11px] text-text-dim">{SCOPE_DESC[settings.defaultCapabilityScope ?? 'cross-origin']}</div>
+            <div className="mt-1 text-[11px] text-muted-foreground">{SCOPE_DESC[settings.defaultCapabilityScope ?? 'cross-origin']}</div>
           </div>
         </div>
       </div>
 
       {/* Rule table */}
       <div className="space-y-2">
-        <div className="text-[13px] font-medium text-text-dim">权限规则</div>
+        <div className="text-[13px] font-medium text-muted-foreground">权限规则</div>
         {rules.length === 0 ? (
-          <div className="rounded-md border border-dashed border-border p-4 text-center text-[12px] text-text-dim">
+          <div className="rounded-md border border-dashed border-border p-4 text-center text-[12px] text-muted-foreground">
             暂无规则。审批时选择「本站始终」会在此生成持久规则。
           </div>
         ) : (
           <table className="w-full text-[12px]">
             <thead>
-              <tr className="border-b border-border text-left text-text-dim">
+              <tr className="border-b border-border text-left text-muted-foreground">
                 <th className="py-1">工具</th>
                 <th>站点</th>
                 <th>裁决</th>
@@ -123,10 +123,10 @@ export function PermissionsPage() {
                 <tr key={r.id} className="border-b border-border/50">
                   <td className="py-1 font-mono">{r.tool}</td>
                   <td className="font-mono">{r.origin}</td>
-                  <td className={r.verdict === 'deny' ? 'text-danger' : 'text-ok'}>{r.verdict}</td>
-                  <td className="text-text-dim">{r.source}</td>
+                  <td className={r.verdict === 'deny' ? 'text-destructive' : 'text-success'}>{r.verdict}</td>
+                  <td className="text-muted-foreground">{r.source}</td>
                   <td className="text-right">
-                    <button type="button" onClick={() => void removeRule(r.id)} className="text-text-dim hover:text-danger">
+                    <button type="button" onClick={() => void removeRule(r.id)} className="text-muted-foreground hover:text-destructive">
                       删除
                     </button>
                   </td>
@@ -139,7 +139,7 @@ export function PermissionsPage() {
 
       {/* Sensitive-origin blacklist */}
       <div className="space-y-2">
-        <div className="text-[13px] font-medium text-text-dim">敏感站点黑名单（硬拒绝，不可被规则覆盖）</div>
+        <div className="text-[13px] font-medium text-muted-foreground">敏感站点黑名单（硬拒绝，不可被规则覆盖）</div>
         <div className="flex gap-2">
           <input
             value={newPattern}
@@ -147,7 +147,7 @@ export function PermissionsPage() {
             placeholder="*.mybank.com"
             className={`${select} flex-1 font-mono`}
           />
-          <button type="button" onClick={() => void addSensitive()} className="rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:brightness-110">
+          <button type="button" onClick={() => void addSensitive()} className="rounded-md bg-primary px-3 py-1 text-[12px] font-medium text-black hover:brightness-110">
             添加
           </button>
         </div>
@@ -156,16 +156,16 @@ export function PermissionsPage() {
             {sensitive.map((p) => (
               <span key={p} className="flex items-center gap-1 rounded-full border border-border px-2 py-0.5 font-mono text-[11px]">
                 {p}
-                <button type="button" onClick={() => void removeSensitive(p)} className="text-text-dim hover:text-danger">×</button>
+                <button type="button" onClick={() => void removeSensitive(p)} className="text-muted-foreground hover:text-destructive">×</button>
               </span>
             ))}
           </div>
         )}
-        <details className="text-[11px] text-text-dim">
+        <details className="text-[11px] text-muted-foreground">
           <summary className="cursor-pointer">查看 {DEFAULT_SENSITIVE_PATTERNS.length} 条预置黑名单</summary>
           <div className="mt-1 flex flex-wrap gap-1">
             {DEFAULT_SENSITIVE_PATTERNS.map((p) => (
-              <span key={p} className="rounded-full bg-surface-2 px-2 py-0.5 font-mono">{p}</span>
+              <span key={p} className="rounded-full bg-muted px-2 py-0.5 font-mono">{p}</span>
             ))}
           </div>
         </details>

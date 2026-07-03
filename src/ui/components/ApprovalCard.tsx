@@ -56,62 +56,62 @@ export function ApprovalCard({ approval, queuePosition, onDecision }: Props) {
       onKeyDown={onKeyDown}
       role="alertdialog"
       aria-label={`审批请求：${request.label}`}
-      className="animate-[slide-in_200ms_ease-out] rounded-[10px] border border-warn/50 bg-surface shadow-lg outline-none focus:ring-1 focus:ring-warn"
+      className="animate-[slide-in_200ms_ease-out] rounded-[10px] border border-warning/50 bg-card shadow-lg outline-none focus:ring-1 focus:ring-warning"
     >
       {crossScope && (
-        <div className="rounded-t-[10px] bg-warn/15 px-3 py-1 text-[11px] font-medium text-warn">
+        <div className="rounded-t-[10px] bg-warning/15 px-3 py-1 text-[11px] font-medium text-warning">
           ⚠ 越出任务作用域 — 该操作的目标不在本任务已触达的站点内
         </div>
       )}
       {sensitive && (
-        <div className={`bg-danger/15 px-3 py-1 text-[11px] font-medium text-danger ${crossScope ? '' : 'rounded-t-[10px]'}`}>
+        <div className={`bg-destructive/15 px-3 py-1 text-[11px] font-medium text-destructive ${crossScope ? '' : 'rounded-t-[10px]'}`}>
           ⚠ 检测到敏感内容外发 — 参数中含疑似凭据/卡号/邮箱
         </div>
       )}
       {escalation && (
-        <div className="bg-agent/15 px-3 py-1 text-[11px] font-medium text-agent">
+        <div className="bg-info/15 px-3 py-1 text-[11px] font-medium text-info">
           将升级为调试模式 — 页面顶部会出现「正在调试此浏览器」横幅
         </div>
       )}
       <div className="space-y-2 p-3">
         <div className="flex items-center gap-2 text-[13px]">
-          <span className="font-semibold text-warn">允许</span>
+          <span className="font-semibold text-warning">允许</span>
           <span className="font-medium">{request.label}</span>
-          {request.targetOrigin && <span className="font-mono text-[11px] text-text-dim">{request.targetOrigin}</span>}
+          {request.targetOrigin && <span className="font-mono text-[11px] text-muted-foreground">{request.targetOrigin}</span>}
           {queuePosition && queuePosition.total > 1 && (
-            <span className="ml-auto text-[11px] text-text-dim">
+            <span className="ml-auto text-[11px] text-muted-foreground">
               {queuePosition.index}/{queuePosition.total}
             </span>
           )}
         </div>
         {request.preview?.snapshotLine && (
-          <div className="rounded bg-surface-2 px-2 py-1 font-mono text-[11px] text-text-dim">
+          <div className="rounded bg-muted px-2 py-1 font-mono text-[11px] text-muted-foreground">
             {request.preview.snapshotLine}
           </div>
         )}
         {/* Full params — mandatory display (docs/06 §4). */}
-        <pre className="max-h-48 overflow-auto rounded bg-surface-2 p-2 font-mono text-[11px]">
+        <pre className="max-h-48 overflow-auto rounded bg-muted p-2 font-mono text-[11px]">
           {JSON.stringify(request.params, null, 2)}
         </pre>
         <div className="flex gap-2">
           <button
             type="button"
             onClick={() => decide({ kind: 'accept' })}
-            className="rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:brightness-110"
+            className="rounded-md bg-primary px-3 py-1 text-[12px] font-medium text-black hover:brightness-110"
           >
             允许一次 <kbd className="opacity-60">Y</kbd>
           </button>
           <button
             type="button"
             onClick={() => decide({ kind: 'acceptForSite' })}
-            className="rounded-md border border-border bg-surface-2 px-3 py-1 text-[12px] hover:bg-border"
+            className="rounded-md border border-border bg-muted px-3 py-1 text-[12px] hover:bg-border"
           >
             本站始终 <kbd className="opacity-60">A</kbd>
           </button>
           <button
             type="button"
             onClick={() => decide({ kind: 'decline' })}
-            className="ml-auto rounded-md border border-danger/40 px-3 py-1 text-[12px] text-danger hover:bg-danger/10"
+            className="ml-auto rounded-md border border-destructive/40 px-3 py-1 text-[12px] text-destructive hover:bg-destructive/10"
           >
             拒绝 <kbd className="opacity-60">N</kbd>
           </button>

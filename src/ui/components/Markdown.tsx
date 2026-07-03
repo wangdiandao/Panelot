@@ -39,7 +39,7 @@ function ShikiBlock({ code, lang }: { code: string; lang: string }) {
   }, [code, lang]);
   if (html === null) {
     return (
-      <pre className="overflow-x-auto rounded-md bg-surface-2 p-3 font-mono text-xs">
+      <pre className="overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs">
         <code>{code}</code>
       </pre>
     );
@@ -82,7 +82,7 @@ export const Markdown = memo(function Markdown({ content, streaming }: MarkdownP
   const { closed, openTail } = streaming ? splitUnclosedFence(content) : { closed: content, openTail: null };
 
   return (
-    <div className="markdown-body text-[14.5px] leading-[1.7] [&>*+*]:mt-3 [&_h1]:mt-4 [&_h1]:text-[18px] [&_h1]:font-semibold [&_h2]:mt-4 [&_h2]:text-[16px] [&_h2]:font-semibold [&_h3]:mt-3 [&_h3]:text-[15px] [&_h3]:font-semibold [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5 [&_li]:my-0.5 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-text-dim">
+    <div className="markdown-body text-[14.5px] leading-[1.7] [&>*+*]:mt-3 [&_h1]:mt-4 [&_h1]:text-[18px] [&_h1]:font-semibold [&_h2]:mt-4 [&_h2]:text-[16px] [&_h2]:font-semibold [&_h3]:mt-3 [&_h3]:text-[15px] [&_h3]:font-semibold [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5 [&_li]:my-0.5 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
@@ -92,7 +92,7 @@ export const Markdown = memo(function Markdown({ content, streaming }: MarkdownP
             const text = String(children).replace(/\n$/, '');
             if (!match) {
               return (
-                <code className="rounded bg-surface-2 px-1 py-0.5 font-mono text-[12.5px]" {...props}>
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[12.5px]" {...props}>
                   {children}
                 </code>
               );
@@ -102,7 +102,7 @@ export const Markdown = memo(function Markdown({ content, streaming }: MarkdownP
           },
           a({ href, children }) {
             return (
-              <a href={href} target="_blank" rel="noreferrer" className="text-accent underline decoration-accent/40 hover:decoration-accent">
+              <a href={href} target="_blank" rel="noreferrer" className="text-primary underline decoration-primary/40 hover:decoration-primary">
                 {children}
               </a>
             );
@@ -110,7 +110,7 @@ export const Markdown = memo(function Markdown({ content, streaming }: MarkdownP
           table({ children }) {
             return (
               <div className="overflow-x-auto">
-                <table className="w-full border-collapse text-[13px] [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-border [&_th]:bg-surface-2 [&_th]:px-2 [&_th]:py-1">
+                <table className="w-full border-collapse text-[13px] [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-border [&_th]:bg-muted [&_th]:px-2 [&_th]:py-1">
                   {children}
                 </table>
               </div>
@@ -121,9 +121,9 @@ export const Markdown = memo(function Markdown({ content, streaming }: MarkdownP
         {closed}
       </ReactMarkdown>
       {openTail !== null && (
-        <pre className="overflow-x-auto rounded-md bg-surface-2 p-3 font-mono text-xs opacity-90">
+        <pre className="overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs opacity-90">
           {openTail.replace(/^```\w*\n?/, '')}
-          <span className="inline-block h-3.5 w-2 animate-pulse bg-accent align-text-bottom" />
+          <span className="inline-block h-3.5 w-2 animate-pulse bg-primary align-text-bottom" />
         </pre>
       )}
     </div>

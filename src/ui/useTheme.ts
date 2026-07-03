@@ -1,6 +1,7 @@
 /**
- * Theme applier: reads the global theme setting (system/dark/light) and sets
- * `data-theme` on <html>, tracking OS changes when in system mode.
+ * Theme applier: reads the global theme setting (system/dark/light) and
+ * toggles the `.dark` class on <html> (shadcn/ui convention), tracking OS
+ * changes when in system mode.
  */
 
 import { useEffect } from 'react';
@@ -10,7 +11,7 @@ type Theme = 'system' | 'dark' | 'light';
 
 function apply(theme: Theme): void {
   const resolved = theme === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : theme;
-  document.documentElement.setAttribute('data-theme', resolved);
+  document.documentElement.classList.toggle('dark', resolved === 'dark');
 }
 
 export function useTheme(): void {

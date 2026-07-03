@@ -57,18 +57,18 @@ export function App() {
     if (block) setStaged((s) => [...s.filter((c) => c.kind !== 'page'), block]);
   };
 
-  const iconBtn = 'flex h-8 w-8 items-center justify-center rounded-lg text-text-dim transition-colors hover:bg-surface-2 hover:text-text';
+  const iconBtn = 'flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground';
 
   return (
-    <div className="flex h-screen flex-col bg-bg text-text">
-      <header className="flex items-center gap-1 border-b border-border-soft bg-surface px-2 py-1.5">
+    <div className="flex h-screen flex-col bg-background text-foreground">
+      <header className="flex items-center gap-1 border-b border-border-soft bg-card px-2 py-1.5">
         <button
           type="button"
           onClick={() => setShowThreadList((v) => !v)}
-          className="flex-1 truncate rounded-lg px-2.5 py-1.5 text-left text-[13px] font-medium transition-colors hover:bg-surface-2"
+          className="flex-1 truncate rounded-lg px-2.5 py-1.5 text-left text-[13px] font-medium transition-colors hover:bg-muted"
           aria-expanded={showThreadList}
         >
-          {state.meta?.title || '新会话'} <span className="text-text-faint">▾</span>
+          {state.meta?.title || '新会话'} <span className="text-faint-foreground">▾</span>
         </button>
         <button type="button" title="展开全屏" onClick={() => {
           const threadId = session.store.getState().threadId;
@@ -79,28 +79,28 @@ export function App() {
       </header>
 
       {showThreadList && (
-        <div className="max-h-64 overflow-y-auto border-b border-border-soft bg-surface">
+        <div className="max-h-64 overflow-y-auto border-b border-border-soft bg-card">
           {threads.map((t) => (
             <button
               key={t.id}
               type="button"
               onClick={() => { session.openThread(t.id); setShowThreadList(false); }}
-              className={`block w-full truncate px-3 py-2 text-left text-[12.5px] transition-colors hover:bg-surface-2 ${t.id === state.threadId ? 'text-accent' : ''}`}
+              className={`block w-full truncate px-3 py-2 text-left text-[12.5px] transition-colors hover:bg-muted ${t.id === state.threadId ? 'text-primary' : ''}`}
             >
               {t.title || '未命名会话'}
             </button>
           ))}
-          {threads.length === 0 && <div className="px-3 py-3 text-[12px] text-text-faint">暂无历史会话</div>}
+          {threads.length === 0 && <div className="px-3 py-3 text-[12px] text-faint-foreground">暂无历史会话</div>}
         </div>
       )}
 
       {currentPageTitle && !staged.some((c) => c.kind === 'page') && (
-        <div className="flex items-center gap-2 border-b border-border-soft bg-surface px-3 py-1.5 text-[12px]">
-          <span className="truncate text-text-dim">📎 {currentPageTitle}</span>
+        <div className="flex items-center gap-2 border-b border-border-soft bg-card px-3 py-1.5 text-[12px]">
+          <span className="truncate text-muted-foreground">📎 {currentPageTitle}</span>
           <button
             type="button"
             onClick={() => void attachPage()}
-            className="ml-auto shrink-0 rounded-full border border-border px-2 py-0.5 text-[11px] transition-colors hover:border-accent hover:text-accent"
+            className="ml-auto shrink-0 rounded-full border border-border px-2 py-0.5 text-[11px] transition-colors hover:border-primary hover:text-primary"
           >
             ＋ 附着到对话
           </button>

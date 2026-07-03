@@ -62,22 +62,22 @@ export function ProvidersPage() {
               enabled: true,
             })
           }
-          className="ml-auto rounded-md bg-accent px-3 py-1 text-[12.5px] font-medium text-black hover:brightness-110"
+          className="ml-auto rounded-md bg-primary px-3 py-1 text-[12.5px] font-medium text-black hover:brightness-110"
         >
           ✚ 添加连接
         </button>
       </div>
       {connections.length === 0 && (
-        <div className="rounded-[10px] border border-dashed border-border p-6 text-center text-[13px] text-text-dim">
+        <div className="rounded-[10px] border border-dashed border-border p-6 text-center text-[13px] text-muted-foreground">
           还没有配置任何模型连接。点击「添加连接」，选择预置模板，填入 API Key 即可开聊。
         </div>
       )}
       {connections.map((c) => (
-        <div key={c.id} className="flex items-center gap-3 rounded-[10px] border border-border bg-surface px-4 py-3">
-          <span className={`h-2 w-2 rounded-full ${c.enabled ? 'bg-ok' : 'bg-text-dim'}`} />
+        <div key={c.id} className="flex items-center gap-3 rounded-[10px] border border-border bg-card px-4 py-3">
+          <span className={`h-2 w-2 rounded-full ${c.enabled ? 'bg-success' : 'bg-muted-foreground'}`} />
           <div className="min-w-0">
             <div className="text-[13px] font-medium">{c.name || c.baseUrl}</div>
-            <div className="truncate font-mono text-[11px] text-text-dim">
+            <div className="truncate font-mono text-[11px] text-muted-foreground">
               {c.kind} · {c.baseUrl} · {c.apiKeys.length} key{c.apiKeys.length === 1 ? '' : 's'}
             </div>
           </div>
@@ -85,14 +85,14 @@ export function ProvidersPage() {
             <button
               type="button"
               onClick={() => void save(connections.map((x) => (x.id === c.id ? { ...x, enabled: !x.enabled } : x)))}
-              className="rounded-md border border-border px-2 py-1 text-[11px] text-text-dim hover:bg-surface-2"
+              className="rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted"
             >
               {c.enabled ? '停用' : '启用'}
             </button>
             <button
               type="button"
               onClick={() => setEditing(c)}
-              className="rounded-md border border-border px-2 py-1 text-[11px] hover:bg-surface-2"
+              className="rounded-md border border-border px-2 py-1 text-[11px] hover:bg-muted"
             >
               编辑
             </button>
@@ -101,7 +101,7 @@ export function ProvidersPage() {
               onClick={() => {
                 if (confirm(`删除连接「${c.name}」？`)) void save(connections.filter((x) => x.id !== c.id));
               }}
-              className="rounded-md border border-danger/40 px-2 py-1 text-[11px] text-danger hover:bg-danger/10"
+              className="rounded-md border border-destructive/40 px-2 py-1 text-[11px] text-destructive hover:bg-destructive/10"
             >
               删除
             </button>
@@ -186,8 +186,8 @@ function ConnectionForm({
     }
   };
 
-  const input = 'w-full rounded-md border border-border bg-surface-2 px-2 py-1.5 text-[13px] outline-none focus:border-accent/60';
-  const labelCls = 'mb-1 block text-[12px] text-text-dim';
+  const input = 'w-full rounded-md border border-border bg-muted px-2 py-1.5 text-[13px] outline-none focus:border-primary/60';
+  const labelCls = 'mb-1 block text-[12px] text-muted-foreground';
 
   return (
     <div className="max-w-xl space-y-4">
@@ -201,7 +201,7 @@ function ConnectionForm({
               key={t.name}
               type="button"
               onClick={() => applyTemplate(t.name)}
-              className={`rounded-full border px-2 py-0.5 text-[11px] ${conn.name === t.name ? 'border-accent text-accent' : 'border-border text-text-dim hover:border-accent/60'}`}
+              className={`rounded-full border px-2 py-0.5 text-[11px] ${conn.name === t.name ? 'border-primary text-primary' : 'border-border text-muted-foreground hover:border-primary/60'}`}
             >
               {t.name}
             </button>
@@ -226,7 +226,7 @@ function ConnectionForm({
       <div>
         <label className={labelCls}>Base URL</label>
         <input className={`${input} font-mono`} value={conn.baseUrl} placeholder="https://api.example.com/v1" onChange={(e) => setConn({ ...conn, baseUrl: e.target.value })} />
-        {urlHint && <div className="mt-1 text-[11px] text-warn">{urlHint}</div>}
+        {urlHint && <div className="mt-1 text-[11px] text-warning">{urlHint}</div>}
       </div>
 
       <div>
@@ -240,7 +240,7 @@ function ConnectionForm({
       </div>
 
       <div>
-        <button type="button" onClick={() => setShowQuirks((v) => !v)} className="text-[12px] text-text-dim hover:text-text" aria-expanded={showQuirks}>
+        <button type="button" onClick={() => setShowQuirks((v) => !v)} className="text-[12px] text-muted-foreground hover:text-foreground" aria-expanded={showQuirks}>
           {showQuirks ? '▾' : '▸'} 兼容性开关（quirks）
         </button>
         {showQuirks && (
@@ -265,7 +265,7 @@ function ConnectionForm({
             <label className="flex items-center gap-2">
               max_tokens 字段名
               <select
-                className="rounded border border-border bg-surface-2 px-1 py-0.5 text-[12px]"
+                className="rounded border border-border bg-muted px-1 py-0.5 text-[12px]"
                 value={conn.quirks?.maxTokensField ?? 'max_tokens'}
                 onChange={(e) => setConn({ ...conn, quirks: { ...conn.quirks, maxTokensField: e.target.value as QuirkFlags['maxTokensField'] } })}
               >
@@ -278,15 +278,15 @@ function ConnectionForm({
       </div>
 
       {verifyResult && (
-        <div className={`rounded-md border p-3 text-[12.5px] ${verifyResult.keyValid ? 'border-ok/40 bg-ok/5' : 'border-danger/40 bg-danger/5'}`}>
+        <div className={`rounded-md border p-3 text-[12.5px] ${verifyResult.keyValid ? 'border-success/40 bg-success/5' : 'border-destructive/40 bg-destructive/5'}`}>
           <div className="mb-1 flex gap-3">
-            <span className={verifyResult.reachable ? 'text-ok' : 'text-danger'}>{verifyResult.reachable ? '✓' : '✗'} 可达</span>
-            <span className={verifyResult.keyValid ? 'text-ok' : 'text-danger'}>{verifyResult.keyValid ? '✓' : '✗'} Key 有效</span>
-            <span className={verifyResult.streaming ? 'text-ok' : 'text-text-dim'}>{verifyResult.streaming ? '✓' : '—'} 流式</span>
-            <span className={verifyResult.toolUse ? 'text-ok' : 'text-text-dim'}>{verifyResult.toolUse ? '✓' : '—'} 工具调用</span>
+            <span className={verifyResult.reachable ? 'text-success' : 'text-destructive'}>{verifyResult.reachable ? '✓' : '✗'} 可达</span>
+            <span className={verifyResult.keyValid ? 'text-success' : 'text-destructive'}>{verifyResult.keyValid ? '✓' : '✗'} Key 有效</span>
+            <span className={verifyResult.streaming ? 'text-success' : 'text-muted-foreground'}>{verifyResult.streaming ? '✓' : '—'} 流式</span>
+            <span className={verifyResult.toolUse ? 'text-success' : 'text-muted-foreground'}>{verifyResult.toolUse ? '✓' : '—'} 工具调用</span>
           </div>
-          {verifyResult.failure && <div className="text-danger">{FAILURE_TEXT[verifyResult.failure]}</div>}
-          {verifyResult.models && <div className="text-text-dim">发现 {verifyResult.models.length} 个模型</div>}
+          {verifyResult.failure && <div className="text-destructive">{FAILURE_TEXT[verifyResult.failure]}</div>}
+          {verifyResult.models && <div className="text-muted-foreground">发现 {verifyResult.models.length} 个模型</div>}
         </div>
       )}
 
@@ -295,18 +295,18 @@ function ConnectionForm({
           type="button"
           onClick={() => void verify()}
           disabled={verifying}
-          className="rounded-md border border-border px-3 py-1.5 text-[12.5px] hover:bg-surface-2 disabled:opacity-50"
+          className="rounded-md border border-border px-3 py-1.5 text-[12.5px] hover:bg-muted disabled:opacity-50"
         >
           {verifying ? '验证中…' : 'Verify 连接测试'}
         </button>
         <button
           type="button"
           onClick={() => onSave(built())}
-          className="ml-auto rounded-md bg-accent px-4 py-1.5 text-[12.5px] font-medium text-black hover:brightness-110"
+          className="ml-auto rounded-md bg-primary px-4 py-1.5 text-[12.5px] font-medium text-black hover:brightness-110"
         >
           保存
         </button>
-        <button type="button" onClick={onCancel} className="rounded-md border border-border px-3 py-1.5 text-[12.5px] hover:bg-surface-2">
+        <button type="button" onClick={onCancel} className="rounded-md border border-border px-3 py-1.5 text-[12.5px] hover:bg-muted">
           取消
         </button>
       </div>

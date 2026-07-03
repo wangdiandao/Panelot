@@ -1,83 +1,153 @@
 @import 'tailwindcss';
+@import 'tw-animate-css';
+
+@custom-variant dark (&:is(.dark *));
 
 /*
- * Design tokens — refined toward the ChatGPT / OpenWebUI / CodeX feel:
- * near-neutral graphite dark base, generous surfaces, a restrained amber accent.
- * Both themes share variable names; components stay theme-agnostic.
+ * Design tokens — shadcn/ui semantic names over the existing graphite/amber
+ * palette (ChatGPT / OpenWebUI / CodeX feel). Two-layer structure follows
+ * https://ui.shadcn.com/docs/tailwind-v4: raw values live on :root/.dark,
+ * @theme inline exposes them to utilities. Color values are unchanged from
+ * the previous bg/surface/accent token set; only the names moved:
+ *   bg→background, surface→card/popover, surface-2→secondary/muted/input,
+ *   surface-3→accent, accent(amber)→primary, danger→destructive,
+ *   ok/warn/agent→success/warning/info, text-dim/faint→muted/faint-foreground.
  */
-@theme {
-  /* Dark (default) — graphite, softer than pure black, like ChatGPT dark */
-  --color-bg: #0d0d0f;
-  --color-surface: #171719;
-  --color-surface-2: #212124;
-  --color-surface-3: #2b2b2f;
-  --color-border: #2e2e33;
-  --color-border-soft: #232327;
-  --color-text: #ececf1;
-  --color-text-dim: #9a9aa6;
-  --color-text-faint: #6a6a75;
-  --color-accent: #f5a623;
-  --color-accent-soft: #f5a62322;
-  --color-ok: #3fb950;
-  --color-warn: #f5a623;
-  --color-danger: #f0524f;
-  --color-agent: #7c93ff;
-  --color-user-bubble: #2b2b2f;
+:root {
+  --background: #ffffff;
+  --foreground: #1f1f24;
+  --card: #f7f7f8;
+  --card-foreground: #1f1f24;
+  --popover: #f7f7f8;
+  --popover-foreground: #1f1f24;
+  --primary: #f5a623;
+  --primary-foreground: #1f1f24;
+  --secondary: #ececf1;
+  --secondary-foreground: #1f1f24;
+  --muted: #ececf1;
+  --muted-foreground: #6b6b76;
+  --accent: #e0e0e6;
+  --accent-foreground: #1f1f24;
+  --destructive: #f0524f;
+  --destructive-foreground: #ffffff;
+  --border: #e3e3e8;
+  --input: #ececf1;
+  --ring: #f5a623;
+  /* Panelot extensions beyond the shadcn set */
+  --border-soft: #ededf0;
+  --faint-foreground: #9a9aa6;
+  --success: #3fb950;
+  --warning: #f5a623;
+  --info: #7c93ff;
+  --user-bubble: #ececf1;
+  --elevation-pop: 0 8px 30px rgba(0, 0, 0, 0.12);
+  --elevation-soft: 0 1px 3px rgba(0, 0, 0, 0.06);
 
-  --font-ui: 'Inter', -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --radius: 0.75rem;
+}
+
+.dark {
+  --background: #0d0d0f;
+  --foreground: #ececf1;
+  --card: #171719;
+  --card-foreground: #ececf1;
+  --popover: #171719;
+  --popover-foreground: #ececf1;
+  --primary: #f5a623;
+  --primary-foreground: #1a1a1e;
+  --secondary: #212124;
+  --secondary-foreground: #ececf1;
+  --muted: #212124;
+  --muted-foreground: #9a9aa6;
+  --accent: #2b2b2f;
+  --accent-foreground: #ececf1;
+  --destructive: #f0524f;
+  --destructive-foreground: #ffffff;
+  --border: #2e2e33;
+  --input: #212124;
+  --ring: #f5a623;
+  --border-soft: #232327;
+  --faint-foreground: #6a6a75;
+  --success: #3fb950;
+  --warning: #f5a623;
+  --info: #7c93ff;
+  --user-bubble: #2b2b2f;
+  --elevation-pop: 0 8px 30px rgba(0, 0, 0, 0.4);
+  --elevation-soft: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-border-soft: var(--border-soft);
+  --color-faint-foreground: var(--faint-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+  --color-user-bubble: var(--user-bubble);
+
+  --font-sans: 'Inter', -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
 
-  --radius-card: 12px;
-  --radius-input: 24px;
-  --radius-chip: 999px;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
 
-  --shadow-pop: 0 8px 30px rgba(0, 0, 0, 0.4);
-  --shadow-soft: 0 1px 3px rgba(0, 0, 0, 0.2);
+  --shadow-pop: var(--elevation-pop);
+  --shadow-soft: var(--elevation-soft);
 }
 
-[data-theme='light'] {
-  --color-bg: #ffffff;
-  --color-surface: #f7f7f8;
-  --color-surface-2: #ececf1;
-  --color-surface-3: #e0e0e6;
-  --color-border: #e3e3e8;
-  --color-border-soft: #ededf0;
-  --color-text: #1f1f24;
-  --color-text-dim: #6b6b76;
-  --color-text-faint: #9a9aa6;
-  --color-user-bubble: #ececf1;
-  --shadow-pop: 0 8px 30px rgba(0, 0, 0, 0.12);
-  --shadow-soft: 0 1px 3px rgba(0, 0, 0, 0.06);
-}
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
 
-html,
-body {
-  height: 100%;
-}
+  html,
+  body {
+    height: 100%;
+  }
 
-body {
-  font-family: var(--font-ui);
-  background: var(--color-bg);
-  color: var(--color-text);
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
+  body {
+    font-family: var(--font-sans);
+    @apply bg-background text-foreground;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
 }
 
 /* Slim, unobtrusive scrollbars (ChatGPT-style) */
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--color-surface-3) transparent;
+  scrollbar-color: var(--accent) transparent;
 }
 *::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 *::-webkit-scrollbar-thumb {
-  background: var(--color-surface-3);
+  background: var(--accent);
   border-radius: 999px;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: var(--color-text-faint);
+  background: var(--faint-foreground);
 }
 
 @keyframes slide-in {

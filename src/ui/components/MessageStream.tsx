@@ -169,7 +169,7 @@ export function MessageStream({ items, liveItems }: Props) {
             setFollowTail(true);
             containerRef.current?.scrollTo({ top: containerRef.current.scrollHeight, behavior: 'smooth' });
           }}
-          className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-border bg-surface px-3 py-1 text-[11px] text-text-dim shadow-pop transition-colors hover:bg-surface-2"
+          className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-border bg-card px-3 py-1 text-[11px] text-muted-foreground shadow-pop transition-colors hover:bg-muted"
         >
           ↓ 回到底部
         </button>
@@ -181,10 +181,10 @@ export function MessageStream({ items, liveItems }: Props) {
 function EmptyState() {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent/15 text-[22px] text-accent">✦</div>
+      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/15 text-[22px] text-primary">✦</div>
       <div className="text-[15px] font-medium">今天想做点什么？</div>
-      <div className="max-w-xs text-[12.5px] leading-relaxed text-text-faint">
-        直接提问，或用 <span className="rounded bg-surface-2 px-1 font-mono">@</span> 引用当前页面，
+      <div className="max-w-xs text-[12.5px] leading-relaxed text-faint-foreground">
+        直接提问，或用 <span className="rounded bg-muted px-1 font-mono">@</span> 引用当前页面，
         让 Panelot 帮你在浏览器里动手。
       </div>
     </div>
@@ -201,7 +201,7 @@ function renderRow(row: Row) {
             {row.payload.attachedContext && row.payload.attachedContext.length > 0 && (
               <div className="mb-1.5 flex flex-wrap gap-1">
                 {row.payload.attachedContext.map((ctx, i) => (
-                  <span key={i} className="inline-flex items-center gap-1 rounded-full bg-black/20 px-2 py-0.5 text-[11px] text-text-dim">
+                  <span key={i} className="inline-flex items-center gap-1 rounded-full bg-black/20 px-2 py-0.5 text-[11px] text-muted-foreground">
                     📎 {ctx.label}
                   </span>
                 ))}
@@ -219,11 +219,11 @@ function renderRow(row: Row) {
       const reasoning = row.streaming ? row.liveReasoning : row.payload.reasoning;
       return (
         <div className="flex gap-3">
-          <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent/15 text-[13px] text-accent">✦</div>
+          <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-[13px] text-primary">✦</div>
           <div className="min-w-0 flex-1 pt-0.5">
             {reasoning && <ReasoningBlock text={reasoning} streaming={row.streaming} />}
             <Markdown content={text} streaming={row.streaming} />
-            {row.streaming && !text && <span className="inline-block h-4 w-[3px] animate-[blink_1s_ease-in-out_infinite] rounded-full bg-accent align-middle" />}
+            {row.streaming && !text && <span className="inline-block h-4 w-[3px] animate-[blink_1s_ease-in-out_infinite] rounded-full bg-primary align-middle" />}
           </div>
         </div>
       );
@@ -237,20 +237,20 @@ function renderRow(row: Row) {
     case 'notice':
       return (
         <div className="flex justify-center">
-          <div className="rounded-full border border-border-soft bg-surface px-3 py-1 text-[11px] text-text-faint">{row.text}</div>
+          <div className="rounded-full border border-border-soft bg-card px-3 py-1 text-[11px] text-faint-foreground">{row.text}</div>
         </div>
       );
     case 'compaction':
       return (
         <div className="flex justify-center">
-          <div className="rounded-full border border-dashed border-border px-3 py-1 text-[11px] text-text-faint">
+          <div className="rounded-full border border-dashed border-border px-3 py-1 text-[11px] text-faint-foreground">
             ⧉ 上下文已压缩（{row.payload.tokensBefore} → {row.payload.tokensAfter} tokens）
           </div>
         </div>
       );
     case 'branch_summary':
       return (
-        <div className="rounded-xl border border-dashed border-border bg-surface px-3 py-2 text-[12px] text-text-dim">
+        <div className="rounded-xl border border-dashed border-border bg-card px-3 py-2 text-[12px] text-muted-foreground">
           <div className="mb-1 font-medium">已弃分支摘要</div>
           {row.payload.summary}
         </div>
@@ -265,13 +265,13 @@ function ReasoningBlock({ text, streaming }: { text: string; streaming?: boolean
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="text-[11px] text-text-dim hover:text-text"
+        className="text-[11px] text-muted-foreground hover:text-foreground"
         aria-expanded={open}
       >
         {open ? '▾' : '▸'} {streaming ? '思考中…' : '思考过程'}
       </button>
       {open && (
-        <div className="mt-1 whitespace-pre-wrap rounded-md border-l-2 border-agent/40 bg-surface px-3 py-2 text-[12px] text-text-dim">
+        <div className="mt-1 whitespace-pre-wrap rounded-md border-l-2 border-info/40 bg-card px-3 py-2 text-[12px] text-muted-foreground">
           {text}
         </div>
       )}

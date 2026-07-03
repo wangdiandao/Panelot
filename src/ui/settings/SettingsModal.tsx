@@ -36,7 +36,7 @@ export function SettingsModal({ open, onClose, initialSection }: Props) {
         role="dialog"
         aria-modal="true"
         aria-label="设置"
-        className="flex h-[min(720px,92vh)] w-[min(940px,94vw)] flex-col overflow-hidden rounded-2xl border border-border bg-bg shadow-pop"
+        className="flex h-[min(720px,92vh)] w-[min(940px,94vw)] flex-col overflow-hidden rounded-2xl border border-border bg-background shadow-pop"
       >
         <div className="relative flex-1 min-h-0">
           <SettingsPanel initialSection={initialSection} />
@@ -44,7 +44,7 @@ export function SettingsModal({ open, onClose, initialSection }: Props) {
             type="button"
             onClick={onClose}
             aria-label="关闭设置"
-            className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full text-text-dim transition-colors hover:bg-surface-2 hover:text-text"
+            className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
             ✕
           </button>
