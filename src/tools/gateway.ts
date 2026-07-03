@@ -68,9 +68,17 @@ export class BrowserToolGateway {
         this.detachTab(threadId, active);
       }
     }
-    // Fall back to the user's active tab and attach it.
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id) throw new Error('没有可操作的标签页。请先用 tab_open 打开页面或激活一个标签页。');
+    // Fall back to the user's active tab and attach it. Only http(s) pages
+    // qualify: when the conversation runs in the extension's own full-page
+    // tab, THAT tab is the active one in the current window — targeting it
+    // would hit the chrome-extension://* sensitive blacklist. Look across
+    // windows for the most recently used active web page instead.
+    const activeTabs = await chrome.tabs.query({ active: true });
+    const webTabs = activeTabs
+      .filter((t): t is chrome.tabs.Tab & { id: number; url: string } => t.id !== undefined && !!t.url && /^https?:/.test(t.url))
+      .sort((a, b) => (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0));
+    const tab = webTabs[0];
+    if (!tab) throw new Error('没有可操作的网页标签页（扩展自身页面不能作为操作目标）。请先用 tab_open 打开页面或激活一个网页标签页。');
     this.attachTab(threadId, tab.id);
     return tab.id;
   }
