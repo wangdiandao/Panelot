@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { transformSync } from 'esbuild';
 
 /**
  * Real-browser validation of the snapshot engine + content-script actions
@@ -12,12 +13,11 @@ import path from 'node:path';
 
 const fixtureUrl = 'file://' + fileURLToPath(new URL('./fixtures/form.html', import.meta.url));
 
-// Bundle the snapshot engine source for injection (it's self-contained, no imports).
-const engineSrc = readFileSync(path.join(process.cwd(), 'src/tools/snapshot/engine.ts'), 'utf-8')
-  // Strip TS types for eval injection — a light transform sufficient for the
-  // pure functions we exercise. (The unit tests cover the typed API.)
-  .replace(/^import .*$/gm, '')
-  .replace(/export /g, '');
+// Transpile the snapshot engine for injection (self-contained, no imports).
+const engineSrc = transformSync(
+  readFileSync(path.join(process.cwd(), 'src/tools/snapshot/engine.ts'), 'utf-8').replace(/^import .*$/gm, ''),
+  { loader: 'ts', format: 'iife', globalName: '__engine' },
+).code + '\nvar buildSnapshot = __engine.buildSnapshot;';
 
 test.describe('snapshot engine in a real browser', () => {
   test('builds a snapshot with refs for a real form', async ({ page }) => {
