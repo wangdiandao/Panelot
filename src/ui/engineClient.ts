@@ -309,6 +309,15 @@ export class EngineSession {
         s.setState((st) => ({ meta: st.meta ? { ...st.meta, ...ev.patch } : st.meta }));
         break;
       case 'error':
+        if (ev.code === 'thread_not_found') {
+          // Every op this client sends targets its current thread, so this
+          // means the thread vanished underneath us (deleted from another
+          // surface, or a data import replaced the DB). Self-heal with a
+          // fresh thread instead of dead-ending on an error banner.
+          s.setState({ ...initialState, connected: true });
+          this.send({ type: 'thread.create' });
+          break;
+        }
         s.setState({ lastError: { message: ev.message, retryable: ev.retryable, kind: ev.errorKind } });
         break;
       // pong / overloaded / escalation.request / unknown types: ignored here.

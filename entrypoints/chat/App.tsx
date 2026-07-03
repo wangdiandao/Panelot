@@ -94,15 +94,19 @@ export function App() {
 
   useEffect(() => {
     checkProvider();
-    void refreshThreads().then(() => {
+    void refreshThreads().then(async () => {
+      // Validate the ?thread= param — a stale link (deleted thread) must not
+      // subscribe into thread_not_found; fall back to the most recent thread.
       const fromUrl = new URLSearchParams(location.search).get('thread');
-      if (fromUrl) session.openThread(fromUrl);
-      else {
-        void db.threads.orderBy('updatedAt').reverse().first().then((t) => {
-          if (t && !t.deleting) session.openThread(t.id);
-          else session.createThread();
-        });
+      const target = fromUrl ? await db.threads.get(fromUrl) : undefined;
+      if (target && !target.deleting) {
+        session.openThread(target.id);
+        return;
       }
+      if (fromUrl) history.replaceState(null, '', location.pathname);
+      const recent = await db.threads.orderBy('updatedAt').reverse().first();
+      if (recent && !recent.deleting) session.openThread(recent.id);
+      else session.createThread();
     });
   }, [session]);
 
