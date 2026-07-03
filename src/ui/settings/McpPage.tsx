@@ -2,9 +2,25 @@
  * MCP settings (docs/07 §5, docs/09 §3.4): server cards with state indicators,
  * paste-JSON import, add form, OAuth trigger. The manager lives in the
  * background SW; this page talks to storage + messages the SW for connect.
+ * Built on shadcn/ui primitives; delete confirm uses AlertDialog.
  */
 
 import { useEffect, useState } from 'react';
+import { toast } from 'sonner';
+import { Button } from '../components/ui/button';
+import { Switch } from '../components/ui/switch';
+import { Textarea } from '../components/ui/textarea';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../components/ui/collapsible';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../components/ui/alert-dialog';
 import { parseMcpJson, type McpServerConfig } from '../../mcp/types';
 import { storageGet, storageSet } from '../../settings/store';
 
@@ -14,7 +30,8 @@ export function McpPage() {
   const [servers, setServers] = useState<McpServerConfig[]>([]);
   const [importText, setImportText] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [showImport, setShowImport] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [deleting, setDeleting] = useState<McpServerConfig | null>(null);
 
   const refresh = () => storageGet<McpServerConfig[]>(SERVERS_KEY, []).then(setServers);
   useEffect(() => void refresh(), []);
@@ -36,8 +53,9 @@ export function McpPage() {
       }));
       await save([...servers, ...added]);
       setImportText('');
-      setShowImport(false);
+      setImportOpen(false);
       setError(null);
+      toast.success(`已添加 ${added.length} 个服务器`);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -55,38 +73,41 @@ export function McpPage() {
     <div className="max-w-2xl space-y-3">
       <div className="flex items-center">
         <h2 className="text-[15px] font-semibold">MCP 服务器</h2>
-        <button
-          type="button"
-          onClick={() => setShowImport((v) => !v)}
-          className="ml-auto rounded-md bg-primary px-3 py-1 text-[12.5px] font-medium text-black hover:brightness-110"
-        >
+        <Button size="sm" className="ml-auto" onClick={() => setImportOpen((v) => !v)}>
           粘贴 JSON 导入
-        </button>
+        </Button>
       </div>
 
-      {showImport && (
-        <div className="space-y-2 rounded-[10px] border border-border p-3">
-          <textarea
-            value={importText}
-            onChange={(e) => setImportText(e.target.value)}
-            rows={6}
-            placeholder={'{\n  "mcpServers": {\n    "github": { "url": "https://…/mcp", "headers": { "Authorization": "Bearer …" } }\n  }\n}'}
-            className="w-full rounded-md border border-border bg-muted p-2 font-mono text-[12px] outline-none focus:border-primary/60"
-          />
-          <div className="text-[11px] text-muted-foreground">兼容 Claude Code mcpServers / Cursor 配置片段（识别 url / type / headers.Authorization）。</div>
-          {error && <div className="text-[12px] text-destructive">{error}</div>}
-          <button type="button" onClick={() => void doImport()} className="rounded-md border border-border px-3 py-1 text-[12px] hover:bg-muted">解析并添加</button>
-        </div>
-      )}
+      <Collapsible open={importOpen} onOpenChange={setImportOpen}>
+        <CollapsibleTrigger className="sr-only">导入配置</CollapsibleTrigger>
+        <CollapsibleContent>
+          <div className="space-y-2 rounded-lg border border-border p-3">
+            <Textarea
+              value={importText}
+              onChange={(e) => setImportText(e.target.value)}
+              rows={6}
+              placeholder={'{\n  "mcpServers": {\n    "github": { "url": "https://…/mcp", "headers": { "Authorization": "Bearer …" } }\n  }\n}'}
+              className="font-mono text-[12px]"
+            />
+            <div className="text-[11px] text-muted-foreground">兼容 Claude Code mcpServers / Cursor 配置片段（识别 url / type / headers.Authorization）。</div>
+            {error && <div className="text-[12px] text-destructive">{error}</div>}
+            <Button variant="outline" size="sm" onClick={() => void doImport()}>解析并添加</Button>
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
 
       {servers.length === 0 ? (
-        <div className="rounded-[10px] border border-dashed border-border p-6 text-center text-[13px] text-muted-foreground">
+        <div className="rounded-lg border border-dashed border-border p-6 text-center text-[13px] text-muted-foreground">
           还没有 MCP 服务器。粘贴一份配置片段即可接入远端工具。
         </div>
       ) : (
         servers.map((s) => (
-          <div key={s.id} className="flex items-center gap-3 rounded-[10px] border border-border bg-card px-4 py-3">
-            <span className={`h-2 w-2 rounded-full ${s.enabled ? 'bg-success' : 'bg-muted-foreground'}`} />
+          <div key={s.id} className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3">
+            <Switch
+              checked={s.enabled}
+              onCheckedChange={(on) => void save(servers.map((x) => (x.id === s.id ? { ...x, enabled: on } : x)))}
+              aria-label={`启用 ${s.name}`}
+            />
             <div className="min-w-0">
               <div className="text-[13px] font-medium">{s.name}</div>
               <div className="truncate font-mono text-[11px] text-muted-foreground">
@@ -95,32 +116,50 @@ export function McpPage() {
             </div>
             <div className="ml-auto flex gap-2">
               {s.auth.kind === 'oauth' && (
-                <button
-                  type="button"
+                <Button
+                  variant="outline"
+                  size="sm"
                   onClick={() => void requestHost(s.url).then(() => chrome.runtime.sendMessage({ type: 'panelot.mcpOauth', id: s.id }))}
-                  className="rounded-md border border-border px-2 py-1 text-[11px] hover:bg-muted"
                 >
                   授权
-                </button>
+                </Button>
               )}
-              <button
-                type="button"
-                onClick={() => void save(servers.map((x) => (x.id === s.id ? { ...x, enabled: !x.enabled } : x)))}
-                className="rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted"
-              >
-                {s.enabled ? '停用' : '启用'}
-              </button>
-              <button
-                type="button"
-                onClick={() => { if (confirm(`删除 ${s.name}？`)) void save(servers.filter((x) => x.id !== s.id)); }}
-                className="rounded-md border border-destructive/40 px-2 py-1 text-[11px] text-destructive hover:bg-destructive/10"
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                onClick={() => setDeleting(s)}
               >
                 删除
-              </button>
+              </Button>
             </div>
           </div>
         ))
       )}
+
+      <AlertDialog open={deleting !== null} onOpenChange={(o) => !o && setDeleting(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除 {deleting?.name}？</AlertDialogTitle>
+            <AlertDialogDescription>其提供的工具与 Prompt 将不再可用。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={() => {
+                if (deleting) {
+                  void save(servers.filter((x) => x.id !== deleting.id));
+                  toast.success('服务器已删除');
+                }
+                setDeleting(null);
+              }}
+            >
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

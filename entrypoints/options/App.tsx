@@ -5,6 +5,7 @@
  */
 
 import { SettingsPanel } from '../../src/ui/settings/SettingsPanel';
+import { Toaster } from '../../src/ui/components/ui/sonner';
 import { useTheme } from '../../src/ui/useTheme';
 
 export function App() {
@@ -12,6 +13,7 @@ export function App() {
   return (
     <div className="h-screen">
       <SettingsPanel />
+      <Toaster />
     </div>
   );
 }

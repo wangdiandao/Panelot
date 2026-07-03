@@ -1,10 +1,38 @@
 /**
  * Providers settings (docs/09 §3.4): connection cards → edit form with
  * template picker, multi-key textarea, custom headers, quirks, inline Verify
- * with structured results.
+ * with structured results. Built on shadcn/ui primitives.
  */
 
 import { useEffect, useState } from 'react';
+import { Plus } from 'lucide-react';
+import { toast } from 'sonner';
+import { Button } from '../components/ui/button';
+import { Badge } from '../components/ui/badge';
+import { Input } from '../components/ui/input';
+import { Textarea } from '../components/ui/textarea';
+import { Label } from '../components/ui/label';
+import { Switch } from '../components/ui/switch';
+import { Checkbox } from '../components/ui/checkbox';
+import { Alert, AlertDescription } from '../components/ui/alert';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../components/ui/collapsible';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../components/ui/alert-dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '../components/ui/select';
 import { CONNECTION_TEMPLATES, createAdapter, normalizeBaseUrl } from '../../providers/registry';
 import type { Connection, QuirkFlags, VerifyResult } from '../../providers/types';
 import { SettingsStore } from '../../settings/store';
@@ -20,6 +48,7 @@ const FAILURE_TEXT: Record<NonNullable<VerifyResult['failure']>, string> = {
 export function ProvidersPage() {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [editing, setEditing] = useState<Connection | null>(null);
+  const [deleting, setDeleting] = useState<Connection | null>(null);
 
   useEffect(() => {
     void SettingsStore.connections.get().then(setConnections);
@@ -40,6 +69,7 @@ export function ProvidersPage() {
     const list = idx === -1 ? [...connections, encrypted] : connections.map((c) => (c.id === conn.id ? encrypted : c));
     await save(list);
     setEditing(null);
+    toast.success('连接已保存');
   };
 
   if (editing) {
@@ -50,8 +80,9 @@ export function ProvidersPage() {
     <div className="space-y-3">
       <div className="flex items-center">
         <h2 className="text-[15px] font-semibold">Providers</h2>
-        <button
-          type="button"
+        <Button
+          size="sm"
+          className="ml-auto"
           onClick={() =>
             setEditing({
               id: crypto.randomUUID(),
@@ -62,19 +93,22 @@ export function ProvidersPage() {
               enabled: true,
             })
           }
-          className="ml-auto rounded-md bg-primary px-3 py-1 text-[12.5px] font-medium text-black hover:brightness-110"
         >
-          ✚ 添加连接
-        </button>
+          <Plus /> 添加连接
+        </Button>
       </div>
       {connections.length === 0 && (
-        <div className="rounded-[10px] border border-dashed border-border p-6 text-center text-[13px] text-muted-foreground">
+        <div className="rounded-lg border border-dashed border-border p-6 text-center text-[13px] text-muted-foreground">
           还没有配置任何模型连接。点击「添加连接」，选择预置模板，填入 API Key 即可开聊。
         </div>
       )}
       {connections.map((c) => (
-        <div key={c.id} className="flex items-center gap-3 rounded-[10px] border border-border bg-card px-4 py-3">
-          <span className={`h-2 w-2 rounded-full ${c.enabled ? 'bg-success' : 'bg-muted-foreground'}`} />
+        <div key={c.id} className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3">
+          <Switch
+            checked={c.enabled}
+            onCheckedChange={(on) => void save(connections.map((x) => (x.id === c.id ? { ...x, enabled: on } : x)))}
+            aria-label={`启用 ${c.name}`}
+          />
           <div className="min-w-0">
             <div className="text-[13px] font-medium">{c.name || c.baseUrl}</div>
             <div className="truncate font-mono text-[11px] text-muted-foreground">
@@ -82,32 +116,42 @@ export function ProvidersPage() {
             </div>
           </div>
           <div className="ml-auto flex gap-2">
-            <button
-              type="button"
-              onClick={() => void save(connections.map((x) => (x.id === c.id ? { ...x, enabled: !x.enabled } : x)))}
-              className="rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted"
-            >
-              {c.enabled ? '停用' : '启用'}
-            </button>
-            <button
-              type="button"
-              onClick={() => setEditing(c)}
-              className="rounded-md border border-border px-2 py-1 text-[11px] hover:bg-muted"
-            >
-              编辑
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (confirm(`删除连接「${c.name}」？`)) void save(connections.filter((x) => x.id !== c.id));
-              }}
-              className="rounded-md border border-destructive/40 px-2 py-1 text-[11px] text-destructive hover:bg-destructive/10"
+            <Button variant="outline" size="sm" onClick={() => setEditing(c)}>编辑</Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+              onClick={() => setDeleting(c)}
             >
               删除
-            </button>
+            </Button>
           </div>
         </div>
       ))}
+
+      <AlertDialog open={deleting !== null} onOpenChange={(o) => !o && setDeleting(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除连接「{deleting?.name}」？</AlertDialogTitle>
+            <AlertDialogDescription>该连接的模型将不再可用；已有会话记录不受影响。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={() => {
+                if (deleting) {
+                  void save(connections.filter((x) => x.id !== deleting.id));
+                  toast.success('连接已删除');
+                }
+                setDeleting(null);
+              }}
+            >
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -136,7 +180,6 @@ function ConnectionForm({
   const [verifying, setVerifying] = useState(false);
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
   const [urlHint, setUrlHint] = useState<string | undefined>();
-  const [showQuirks, setShowQuirks] = useState(false);
 
   const applyTemplate = (name: string) => {
     const tpl = CONNECTION_TEMPLATES.find((t) => t.name === name);
@@ -186,7 +229,6 @@ function ConnectionForm({
     }
   };
 
-  const input = 'w-full rounded-md border border-border bg-muted px-2 py-1.5 text-[13px] outline-none focus:border-primary/60';
   const labelCls = 'mb-1 block text-[12px] text-muted-foreground';
 
   return (
@@ -194,57 +236,60 @@ function ConnectionForm({
       <h2 className="text-[15px] font-semibold">{connection.name ? `编辑 ${connection.name}` : '添加连接'}</h2>
 
       <div>
-        <label className={labelCls}>预置模板</label>
+        <Label className={labelCls}>预置模板</Label>
         <div className="flex flex-wrap gap-1">
           {CONNECTION_TEMPLATES.map((t) => (
-            <button
+            <Badge
               key={t.name}
-              type="button"
-              onClick={() => applyTemplate(t.name)}
-              className={`rounded-full border px-2 py-0.5 text-[11px] ${conn.name === t.name ? 'border-primary text-primary' : 'border-border text-muted-foreground hover:border-primary/60'}`}
+              asChild
+              variant={conn.name === t.name ? 'default' : 'outline'}
+              className={conn.name === t.name ? '' : 'text-muted-foreground hover:border-primary/60'}
             >
-              {t.name}
-            </button>
+              <button type="button" onClick={() => applyTemplate(t.name)}>{t.name}</button>
+            </Badge>
           ))}
         </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className={labelCls}>名称</label>
-          <input className={input} value={conn.name} onChange={(e) => setConn({ ...conn, name: e.target.value })} />
+          <Label className={labelCls} htmlFor="conn-name">名称</Label>
+          <Input id="conn-name" value={conn.name} onChange={(e) => setConn({ ...conn, name: e.target.value })} />
         </div>
         <div>
-          <label className={labelCls}>协议</label>
-          <select className={input} value={conn.kind} onChange={(e) => setConn({ ...conn, kind: e.target.value as Connection['kind'] })}>
-            <option value="openai">OpenAI 兼容</option>
-            <option value="anthropic">Anthropic</option>
-          </select>
+          <Label className={labelCls}>协议</Label>
+          <Select value={conn.kind} onValueChange={(v) => setConn({ ...conn, kind: v as Connection['kind'] })}>
+            <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="openai">OpenAI 兼容</SelectItem>
+              <SelectItem value="anthropic">Anthropic</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
       <div>
-        <label className={labelCls}>Base URL</label>
-        <input className={`${input} font-mono`} value={conn.baseUrl} placeholder="https://api.example.com/v1" onChange={(e) => setConn({ ...conn, baseUrl: e.target.value })} />
+        <Label className={labelCls} htmlFor="conn-url">Base URL</Label>
+        <Input id="conn-url" className="font-mono" value={conn.baseUrl} placeholder="https://api.example.com/v1" onChange={(e) => setConn({ ...conn, baseUrl: e.target.value })} />
         {urlHint && <div className="mt-1 text-[11px] text-warning">{urlHint}</div>}
       </div>
 
       <div>
-        <label className={labelCls}>API Keys（每行一个，多 key 自动 failover）</label>
-        <textarea className={`${input} font-mono`} rows={2} value={keysText} onChange={(e) => setKeysText(e.target.value)} placeholder="sk-…" />
+        <Label className={labelCls} htmlFor="conn-keys">API Keys（每行一个，多 key 自动 failover）</Label>
+        <Textarea id="conn-keys" className="font-mono" rows={2} value={keysText} onChange={(e) => setKeysText(e.target.value)} placeholder="sk-…" />
       </div>
 
       <div>
-        <label className={labelCls}>手动模型列表（可选，每行一个；端点无 /models 时使用）</label>
-        <textarea className={`${input} font-mono`} rows={2} value={modelsText} onChange={(e) => setModelsText(e.target.value)} placeholder="gpt-5&#10;claude-sonnet-5" />
+        <Label className={labelCls} htmlFor="conn-models">手动模型列表（可选，每行一个；端点无 /models 时使用）</Label>
+        <Textarea id="conn-models" className="font-mono" rows={2} value={modelsText} onChange={(e) => setModelsText(e.target.value)} placeholder={'gpt-5\nclaude-sonnet-5'} />
       </div>
 
-      <div>
-        <button type="button" onClick={() => setShowQuirks((v) => !v)} className="text-[12px] text-muted-foreground hover:text-foreground" aria-expanded={showQuirks}>
-          {showQuirks ? '▾' : '▸'} 兼容性开关（quirks）
-        </button>
-        {showQuirks && (
-          <div className="mt-2 space-y-1 rounded-md border border-border p-3 text-[12.5px]">
+      <Collapsible>
+        <CollapsibleTrigger className="text-[12px] text-muted-foreground hover:text-foreground data-[state=open]:text-foreground">
+          兼容性开关（quirks）
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <div className="mt-2 space-y-2 rounded-md border border-border p-3 text-[12.5px]">
             {(
               [
                 ['noStreamOptions', '端点不支持 stream_options.include_usage'],
@@ -254,61 +299,51 @@ function ConnectionForm({
               ] as [keyof QuirkFlags, string][]
             ).map(([key, label]) => (
               <label key={key} className="flex items-center gap-2">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={Boolean(conn.quirks?.[key])}
-                  onChange={(e) => setConn({ ...conn, quirks: { ...conn.quirks, [key]: e.target.checked || undefined } })}
+                  onCheckedChange={(on) => setConn({ ...conn, quirks: { ...conn.quirks, [key]: on === true || undefined } })}
                 />
                 {label}
               </label>
             ))}
             <label className="flex items-center gap-2">
               max_tokens 字段名
-              <select
-                className="rounded border border-border bg-muted px-1 py-0.5 text-[12px]"
+              <Select
                 value={conn.quirks?.maxTokensField ?? 'max_tokens'}
-                onChange={(e) => setConn({ ...conn, quirks: { ...conn.quirks, maxTokensField: e.target.value as QuirkFlags['maxTokensField'] } })}
+                onValueChange={(v) => setConn({ ...conn, quirks: { ...conn.quirks, maxTokensField: v as QuirkFlags['maxTokensField'] } })}
               >
-                <option value="max_tokens">max_tokens</option>
-                <option value="max_completion_tokens">max_completion_tokens</option>
-              </select>
+                <SelectTrigger size="sm" className="font-mono text-[12px]"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="max_tokens">max_tokens</SelectItem>
+                  <SelectItem value="max_completion_tokens">max_completion_tokens</SelectItem>
+                </SelectContent>
+              </Select>
             </label>
           </div>
-        )}
-      </div>
+        </CollapsibleContent>
+      </Collapsible>
 
       {verifyResult && (
-        <div className={`rounded-md border p-3 text-[12.5px] ${verifyResult.keyValid ? 'border-success/40 bg-success/5' : 'border-destructive/40 bg-destructive/5'}`}>
-          <div className="mb-1 flex gap-3">
-            <span className={verifyResult.reachable ? 'text-success' : 'text-destructive'}>{verifyResult.reachable ? '✓' : '✗'} 可达</span>
-            <span className={verifyResult.keyValid ? 'text-success' : 'text-destructive'}>{verifyResult.keyValid ? '✓' : '✗'} Key 有效</span>
-            <span className={verifyResult.streaming ? 'text-success' : 'text-muted-foreground'}>{verifyResult.streaming ? '✓' : '—'} 流式</span>
-            <span className={verifyResult.toolUse ? 'text-success' : 'text-muted-foreground'}>{verifyResult.toolUse ? '✓' : '—'} 工具调用</span>
-          </div>
-          {verifyResult.failure && <div className="text-destructive">{FAILURE_TEXT[verifyResult.failure]}</div>}
-          {verifyResult.models && <div className="text-muted-foreground">发现 {verifyResult.models.length} 个模型</div>}
-        </div>
+        <Alert className={verifyResult.keyValid ? 'border-success/40 bg-success/5' : 'border-destructive/40 bg-destructive/5'}>
+          <AlertDescription className="text-[12.5px]">
+            <div className="flex gap-3">
+              <span className={verifyResult.reachable ? 'text-success' : 'text-destructive'}>{verifyResult.reachable ? '✓' : '✗'} 可达</span>
+              <span className={verifyResult.keyValid ? 'text-success' : 'text-destructive'}>{verifyResult.keyValid ? '✓' : '✗'} Key 有效</span>
+              <span className={verifyResult.streaming ? 'text-success' : 'text-muted-foreground'}>{verifyResult.streaming ? '✓' : '—'} 流式</span>
+              <span className={verifyResult.toolUse ? 'text-success' : 'text-muted-foreground'}>{verifyResult.toolUse ? '✓' : '—'} 工具调用</span>
+            </div>
+            {verifyResult.failure && <div className="text-destructive">{FAILURE_TEXT[verifyResult.failure]}</div>}
+            {verifyResult.models && <div className="text-muted-foreground">发现 {verifyResult.models.length} 个模型</div>}
+          </AlertDescription>
+        </Alert>
       )}
 
       <div className="flex gap-2">
-        <button
-          type="button"
-          onClick={() => void verify()}
-          disabled={verifying}
-          className="rounded-md border border-border px-3 py-1.5 text-[12.5px] hover:bg-muted disabled:opacity-50"
-        >
+        <Button variant="outline" size="sm" onClick={() => void verify()} disabled={verifying}>
           {verifying ? '验证中…' : 'Verify 连接测试'}
-        </button>
-        <button
-          type="button"
-          onClick={() => onSave(built())}
-          className="ml-auto rounded-md bg-primary px-4 py-1.5 text-[12.5px] font-medium text-black hover:brightness-110"
-        >
-          保存
-        </button>
-        <button type="button" onClick={onCancel} className="rounded-md border border-border px-3 py-1.5 text-[12.5px] hover:bg-muted">
-          取消
-        </button>
+        </Button>
+        <Button size="sm" className="ml-auto px-4" onClick={() => onSave(built())}>保存</Button>
+        <Button variant="outline" size="sm" onClick={onCancel}>取消</Button>
       </div>
     </div>
   );

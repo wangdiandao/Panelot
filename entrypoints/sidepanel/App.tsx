@@ -1,13 +1,27 @@
 /**
  * Side panel (docs/09 §3.2): companion form — thread switcher, page-context
  * chip, shared ThreadView, expand-to-fullpage, in-app settings modal.
+ * Built on shadcn/ui primitives; the thread switcher is a real DropdownMenu
+ * (menu semantics, Esc, arrow keys, outside-click) instead of a bare div.
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import { ChevronDown, Expand, Paperclip, Plus, Settings } from 'lucide-react';
 import type { ContextBlock } from '../../src/messaging/protocol';
 import { EngineSession } from '../../src/ui/engineClient';
 import { ThreadView, useEngineState } from '../../src/ui/components/ThreadView';
 import { SettingsModal } from '../../src/ui/settings/SettingsModal';
+import { Toaster } from '../../src/ui/components/ui/sonner';
+import { Button } from '../../src/ui/components/ui/button';
+import { Badge } from '../../src/ui/components/ui/badge';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from '../../src/ui/components/ui/dropdown-menu';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../src/ui/components/ui/tooltip';
 import { useTheme } from '../../src/ui/useTheme';
 import { attachCurrentPage, getActiveTab } from '../../src/ui/pageContext';
 import { SettingsStore } from '../../src/settings/store';
@@ -22,7 +36,6 @@ export function App() {
   const state = useEngineState(session);
   const [providerConfigured, setProviderConfigured] = useState(true);
   const [threads, setThreads] = useState<ThreadMeta[]>([]);
-  const [showThreadList, setShowThreadList] = useState(false);
   const [staged, setStaged] = useState<ContextBlock[]>([]);
   const [currentPageTitle, setCurrentPageTitle] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -57,53 +70,67 @@ export function App() {
     if (block) setStaged((s) => [...s.filter((c) => c.kind !== 'page'), block]);
   };
 
-  const iconBtn = 'flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground';
+  const iconButton = (label: string, Icon: typeof Plus, onClick: () => void) => (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button variant="ghost" size="icon" className="size-8 text-muted-foreground" aria-label={label} onClick={onClick}>
+          <Icon className="size-4" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  );
 
   return (
+    <TooltipProvider delayDuration={300}>
     <div className="flex h-screen flex-col bg-background text-foreground">
       <header className="flex items-center gap-1 border-b border-border-soft bg-card px-2 py-1.5">
-        <button
-          type="button"
-          onClick={() => setShowThreadList((v) => !v)}
-          className="flex-1 truncate rounded-lg px-2.5 py-1.5 text-left text-[13px] font-medium transition-colors hover:bg-muted"
-          aria-expanded={showThreadList}
-        >
-          {state.meta?.title || '新会话'} <span className="text-faint-foreground">▾</span>
-        </button>
-        <button type="button" title="展开全屏" onClick={() => {
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              className="min-w-0 flex-1 justify-start gap-1 px-2.5 text-[13px] font-medium"
+            >
+              <span className="truncate">{state.meta?.title || '新会话'}</span>
+              <ChevronDown className="size-3.5 shrink-0 text-faint-foreground" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="max-h-72 w-64 overflow-y-auto">
+            <DropdownMenuLabel className="text-[11px] text-faint-foreground">最近会话</DropdownMenuLabel>
+            {threads.map((t) => (
+              <DropdownMenuItem
+                key={t.id}
+                className={t.id === state.threadId ? 'text-primary' : ''}
+                onClick={() => session.openThread(t.id)}
+              >
+                <span className="truncate">{t.title || '未命名会话'}</span>
+              </DropdownMenuItem>
+            ))}
+            {threads.length === 0 && (
+              <div className="px-2 py-2 text-[12px] text-faint-foreground">暂无历史会话</div>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        {iconButton('展开全屏', Expand, () => {
           const threadId = session.store.getState().threadId;
           void chrome.tabs.create({ url: chrome.runtime.getURL(`/chat.html${threadId ? `?thread=${threadId}` : ''}`) });
-        }} className={iconBtn}>⛶</button>
-        <button type="button" title="新会话" onClick={() => { session.createThread(); setShowThreadList(false); }} className={iconBtn}>＋</button>
-        <button type="button" title="设置" onClick={() => setSettingsOpen(true)} className={iconBtn}>⚙</button>
+        })}
+        {iconButton('新会话', Plus, () => session.createThread())}
+        {iconButton('设置', Settings, () => setSettingsOpen(true))}
       </header>
-
-      {showThreadList && (
-        <div className="max-h-64 overflow-y-auto border-b border-border-soft bg-card">
-          {threads.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => { session.openThread(t.id); setShowThreadList(false); }}
-              className={`block w-full truncate px-3 py-2 text-left text-[12.5px] transition-colors hover:bg-muted ${t.id === state.threadId ? 'text-primary' : ''}`}
-            >
-              {t.title || '未命名会话'}
-            </button>
-          ))}
-          {threads.length === 0 && <div className="px-3 py-3 text-[12px] text-faint-foreground">暂无历史会话</div>}
-        </div>
-      )}
 
       {currentPageTitle && !staged.some((c) => c.kind === 'page') && (
         <div className="flex items-center gap-2 border-b border-border-soft bg-card px-3 py-1.5 text-[12px]">
-          <span className="truncate text-muted-foreground">📎 {currentPageTitle}</span>
-          <button
-            type="button"
-            onClick={() => void attachPage()}
-            className="ml-auto shrink-0 rounded-full border border-border px-2 py-0.5 text-[11px] transition-colors hover:border-primary hover:text-primary"
+          <span className="flex min-w-0 items-center gap-1 truncate text-muted-foreground">
+            <Paperclip className="size-3 shrink-0" /> {currentPageTitle}
+          </span>
+          <Badge
+            asChild
+            variant="outline"
+            className="ml-auto shrink-0 cursor-pointer hover:border-primary hover:text-primary"
           >
-            ＋ 附着到对话
-          </button>
+            <button type="button" onClick={() => void attachPage()}>＋ 附着到对话</button>
+          </Badge>
         </div>
       )}
 
@@ -118,6 +145,8 @@ export function App() {
       </div>
 
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <Toaster />
     </div>
+    </TooltipProvider>
   );
 }

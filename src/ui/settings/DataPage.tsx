@@ -1,9 +1,23 @@
 /**
  * Data settings (DESIGN §12): full JSON export/import (keys stripped by
- * default), storage usage display, quota warning.
+ * default), storage usage display, quota warning. Built on shadcn/ui
+ * primitives; import confirm uses AlertDialog instead of window.confirm.
  */
 
 import { useEffect, useState } from 'react';
+import { toast } from 'sonner';
+import { Button } from '../components/ui/button';
+import { Checkbox } from '../components/ui/checkbox';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../components/ui/alert-dialog';
 import { PanelotDB } from '../../db/schema';
 import { exportAll, importBundle, type ExportBundle } from '../../data/exportImport';
 import { getQuotaStatus, type QuotaStatus } from '../../data/quota';
@@ -13,7 +27,7 @@ const db = new PanelotDB();
 export function DataPage() {
   const [quota, setQuota] = useState<QuotaStatus | null>(null);
   const [includeKeys, setIncludeKeys] = useState(false);
-  const [status, setStatus] = useState<string | null>(null);
+  const [pendingImport, setPendingImport] = useState<ExportBundle | null>(null);
 
   useEffect(() => {
     void getQuotaStatus().then(setQuota);
@@ -28,16 +42,26 @@ export function DataPage() {
     a.download = `panelot-export-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
+    toast.success('已导出');
   };
 
-  const doImport = async (file: File) => {
+  const stageImport = async (file: File) => {
     try {
-      const bundle = JSON.parse(await file.text()) as ExportBundle;
-      if (!confirm('导入将覆盖现有会话与设置。继续？')) return;
-      await importBundle(db, bundle, { merge: false });
-      setStatus('导入成功，请重新打开侧边栏。');
+      setPendingImport(JSON.parse(await file.text()) as ExportBundle);
     } catch (e) {
-      setStatus(`导入失败: ${(e as Error).message}`);
+      toast.error(`导入失败: ${(e as Error).message}`);
+    }
+  };
+
+  const confirmImport = async () => {
+    if (!pendingImport) return;
+    try {
+      await importBundle(db, pendingImport, { merge: false });
+      toast.success('导入成功，请重新打开侧边栏。');
+    } catch (e) {
+      toast.error(`导入失败: ${(e as Error).message}`);
+    } finally {
+      setPendingImport(null);
     }
   };
 
@@ -63,22 +87,49 @@ export function DataPage() {
       <div className="space-y-2">
         <div className="text-[13px] font-medium">导出</div>
         <label className="flex items-center gap-2 text-[12px] text-muted-foreground">
-          <input type="checkbox" checked={includeKeys} onChange={(e) => setIncludeKeys(e.target.checked)} />
+          <Checkbox checked={includeKeys} onCheckedChange={(on) => setIncludeKeys(on === true)} />
           包含 API Key（默认剔除，谨慎开启）
         </label>
-        <button type="button" onClick={() => void doExport()} className="rounded-md bg-primary px-4 py-1.5 text-[12.5px] font-medium text-black hover:brightness-110">
+        <Button size="sm" className="px-4" onClick={() => void doExport()}>
           导出全部为 JSON
-        </button>
+        </Button>
       </div>
 
       <div className="space-y-2">
         <div className="text-[13px] font-medium">导入</div>
-        <label className="inline-block cursor-pointer rounded-md border border-border px-4 py-1.5 text-[12.5px] hover:bg-muted">
-          选择 JSON 文件
-          <input type="file" accept=".json" className="hidden" onChange={(e) => e.target.files?.[0] && void doImport(e.target.files[0])} />
-        </label>
-        {status && <div className="text-[12px] text-muted-foreground">{status}</div>}
+        <Button variant="outline" size="sm" asChild>
+          <label className="cursor-pointer">
+            选择 JSON 文件
+            <input
+              type="file"
+              accept=".json"
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files?.[0]) void stageImport(e.target.files[0]);
+                e.target.value = '';
+              }}
+            />
+          </label>
+        </Button>
       </div>
+
+      <AlertDialog open={pendingImport !== null} onOpenChange={(o) => !o && setPendingImport(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>导入将覆盖现有数据</AlertDialogTitle>
+            <AlertDialogDescription>现有会话与设置会被导入内容替换。建议先导出备份。继续？</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={() => void confirmImport()}
+            >
+              覆盖导入
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

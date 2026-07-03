@@ -1,10 +1,23 @@
 /**
  * Browser permissions settings (docs/06 §7, docs/09 §3.4): two-axis default
  * selector + rule table (tool × site × verdict × source) + sensitive-origin
- * blacklist block.
+ * blacklist block. Built on shadcn/ui primitives.
  */
 
 import { useEffect, useState } from 'react';
+import { toast } from 'sonner';
+import { Button } from '../components/ui/button';
+import { Badge } from '../components/ui/badge';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../components/ui/collapsible';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '../components/ui/select';
 import { GatekeeperService } from '../../gatekeeper/service';
 import { DEFAULT_SENSITIVE_PATTERNS, type PermissionRule } from '../../gatekeeper/rules';
 import { SettingsStore, type GlobalSettings, storageGet, storageSet } from '../../settings/store';
@@ -44,6 +57,7 @@ export function PermissionsPage() {
   const removeRule = async (id: string) => {
     await GatekeeperService.removeRule(id);
     setRules(await GatekeeperService.listRules());
+    toast.success('规则已删除');
   };
 
   const addSensitive = async () => {
@@ -61,8 +75,6 @@ export function PermissionsPage() {
     await storageSet('sensitive_origins', next);
   };
 
-  const select = 'rounded-md border border-border bg-muted px-2 py-1.5 text-[13px] outline-none focus:border-primary/60';
-
   return (
     <div className="max-w-2xl space-y-6">
       <h2 className="text-[15px] font-semibold">浏览器权限</h2>
@@ -72,29 +84,33 @@ export function PermissionsPage() {
         <div className="text-[13px] font-medium text-muted-foreground">默认两轴档位</div>
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="mb-1 block text-[12px] text-muted-foreground">审批策略（何时问）</label>
-            <select
-              className={`${select} w-full`}
+            <Label className="mb-1 block text-[12px] text-muted-foreground">审批策略（何时问）</Label>
+            <Select
               value={settings.defaultApprovalPolicy ?? 'untrusted'}
-              onChange={(e) => void updateSettings({ defaultApprovalPolicy: e.target.value })}
+              onValueChange={(v) => void updateSettings({ defaultApprovalPolicy: v })}
             >
-              {Object.keys(POLICY_DESC).map((k) => (
-                <option key={k} value={k}>{k}</option>
-              ))}
-            </select>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {Object.keys(POLICY_DESC).map((k) => (
+                  <SelectItem key={k} value={k}>{k}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <div className="mt-1 text-[11px] text-muted-foreground">{POLICY_DESC[settings.defaultApprovalPolicy ?? 'untrusted']}</div>
           </div>
           <div>
-            <label className="mb-1 block text-[12px] text-muted-foreground">能力域（能做什么·硬闸）</label>
-            <select
-              className={`${select} w-full`}
+            <Label className="mb-1 block text-[12px] text-muted-foreground">能力域（能做什么·硬闸）</Label>
+            <Select
               value={settings.defaultCapabilityScope ?? 'cross-origin'}
-              onChange={(e) => void updateSettings({ defaultCapabilityScope: e.target.value })}
+              onValueChange={(v) => void updateSettings({ defaultCapabilityScope: v })}
             >
-              {Object.keys(SCOPE_DESC).map((k) => (
-                <option key={k} value={k}>{k}</option>
-              ))}
-            </select>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {Object.keys(SCOPE_DESC).map((k) => (
+                  <SelectItem key={k} value={k}>{k}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <div className="mt-1 text-[11px] text-muted-foreground">{SCOPE_DESC[settings.defaultCapabilityScope ?? 'cross-origin']}</div>
           </div>
         </div>
@@ -126,9 +142,14 @@ export function PermissionsPage() {
                   <td className={r.verdict === 'deny' ? 'text-destructive' : 'text-success'}>{r.verdict}</td>
                   <td className="text-muted-foreground">{r.source}</td>
                   <td className="text-right">
-                    <button type="button" onClick={() => void removeRule(r.id)} className="text-muted-foreground hover:text-destructive">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-[12px] text-muted-foreground hover:text-destructive"
+                      onClick={() => void removeRule(r.id)}
+                    >
                       删除
-                    </button>
+                    </Button>
                   </td>
                 </tr>
               ))}
@@ -141,34 +162,37 @@ export function PermissionsPage() {
       <div className="space-y-2">
         <div className="text-[13px] font-medium text-muted-foreground">敏感站点黑名单（硬拒绝，不可被规则覆盖）</div>
         <div className="flex gap-2">
-          <input
+          <Input
             value={newPattern}
             onChange={(e) => setNewPattern(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && void addSensitive()}
             placeholder="*.mybank.com"
-            className={`${select} flex-1 font-mono`}
+            className="flex-1 font-mono"
           />
-          <button type="button" onClick={() => void addSensitive()} className="rounded-md bg-primary px-3 py-1 text-[12px] font-medium text-black hover:brightness-110">
-            添加
-          </button>
+          <Button size="sm" onClick={() => void addSensitive()}>添加</Button>
         </div>
         {sensitive.length > 0 && (
           <div className="flex flex-wrap gap-1">
             {sensitive.map((p) => (
-              <span key={p} className="flex items-center gap-1 rounded-full border border-border px-2 py-0.5 font-mono text-[11px]">
+              <Badge key={p} variant="outline" className="gap-1 font-mono text-[11px]">
                 {p}
-                <button type="button" onClick={() => void removeSensitive(p)} className="text-muted-foreground hover:text-destructive">×</button>
-              </span>
+                <button type="button" onClick={() => void removeSensitive(p)} aria-label={`移除 ${p}`} className="text-muted-foreground hover:text-destructive">×</button>
+              </Badge>
             ))}
           </div>
         )}
-        <details className="text-[11px] text-muted-foreground">
-          <summary className="cursor-pointer">查看 {DEFAULT_SENSITIVE_PATTERNS.length} 条预置黑名单</summary>
-          <div className="mt-1 flex flex-wrap gap-1">
-            {DEFAULT_SENSITIVE_PATTERNS.map((p) => (
-              <span key={p} className="rounded-full bg-muted px-2 py-0.5 font-mono">{p}</span>
-            ))}
-          </div>
-        </details>
+        <Collapsible className="text-[11px] text-muted-foreground">
+          <CollapsibleTrigger className="cursor-pointer hover:text-foreground">
+            查看 {DEFAULT_SENSITIVE_PATTERNS.length} 条预置黑名单
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <div className="mt-1 flex flex-wrap gap-1">
+              {DEFAULT_SENSITIVE_PATTERNS.map((p) => (
+                <Badge key={p} variant="secondary" className="font-mono text-[11px]">{p}</Badge>
+              ))}
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
       </div>
     </div>
   );

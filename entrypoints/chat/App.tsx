@@ -1,14 +1,42 @@
 /**
  * Full-page chat (docs/09 §3.1): three columns — thread list / message stream
- * / task panel. ChatGPT/OpenWebUI-flavored: hover row actions, grouped history,
- * centered composer, in-app settings modal (no navigation away).
+ * / task panel. ChatGPT/OpenWebUI-flavored: per-row ⋯ menu (like ChatGPT's
+ * conversation rows), grouped history, centered composer, in-app settings
+ * modal (no navigation away). Built on shadcn/ui primitives.
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import { Ellipsis, Pencil, Pin, PinOff, Plus, Search, Settings, Trash2 } from 'lucide-react';
 import type { ContextBlock } from '../../src/messaging/protocol';
 import { EngineSession } from '../../src/ui/engineClient';
 import { ThreadView, useEngineState } from '../../src/ui/components/ThreadView';
 import { SettingsModal } from '../../src/ui/settings/SettingsModal';
+import { Toaster } from '../../src/ui/components/ui/sonner';
+import { Button } from '../../src/ui/components/ui/button';
+import { Input } from '../../src/ui/components/ui/input';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '../../src/ui/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../../src/ui/components/ui/alert-dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '../../src/ui/components/ui/dropdown-menu';
 import { useTheme } from '../../src/ui/useTheme';
 import { SettingsStore } from '../../src/settings/store';
 import { PanelotDB } from '../../src/db/schema';
@@ -44,6 +72,9 @@ export function App() {
   const [staged, setStaged] = useState<ContextBlock[]>([]);
   const [taskPanelOpen, setTaskPanelOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [renaming, setRenaming] = useState<ThreadMeta | null>(null);
+  const [renameTitle, setRenameTitle] = useState('');
+  const [deleting, setDeleting] = useState<ThreadMeta | null>(null);
 
   useEffect(() => () => session.dispose(), [session]);
 
@@ -91,17 +122,18 @@ export function App() {
     : threads;
   const groups = groupByTime(filtered);
 
-  const del = async (id: string) => {
-    await tree.deleteThread(id);
+  const confirmDelete = async () => {
+    if (!deleting) return;
+    await tree.deleteThread(deleting.id);
     await refreshThreads();
-    if (state.threadId === id) session.createThread();
+    if (state.threadId === deleting.id) session.createThread();
+    setDeleting(null);
   };
-  const rename = async (id: string, current: string) => {
-    const title = prompt('重命名会话', current);
-    if (title != null) {
-      await tree.updateThread(id, { title });
-      await refreshThreads();
-    }
+  const confirmRename = async () => {
+    if (!renaming) return;
+    await tree.updateThread(renaming.id, { title: renameTitle });
+    await refreshThreads();
+    setRenaming(null);
   };
   const togglePin = async (t: ThreadMeta) => {
     await tree.updateThread(t.id, { pinned: !t.pinned });
@@ -113,20 +145,20 @@ export function App() {
       {/* Left: thread list */}
       <aside className="flex w-64 shrink-0 flex-col border-r border-border-soft bg-card">
         <div className="space-y-2 p-3">
-          <button
-            type="button"
+          <Button
+            variant="outline"
+            className="w-full justify-start gap-2 text-[13px] font-medium"
             onClick={() => session.createThread()}
-            className="flex w-full items-center gap-2 rounded-lg border border-border px-3 py-2 text-[13px] font-medium transition-colors hover:bg-muted"
           >
-            <span className="text-[15px] leading-none">＋</span> 新会话
-          </button>
+            <Plus className="size-4" /> 新会话
+          </Button>
           <div className="relative">
-            <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[12px] text-faint-foreground">⌕</span>
-            <input
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-faint-foreground" />
+            <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="搜索会话"
-              className="w-full rounded-lg border border-transparent bg-muted py-1.5 pl-7 pr-2 text-[12.5px] outline-none transition-colors placeholder:text-faint-foreground focus:border-primary/50"
+              className="h-8 border-transparent bg-muted pl-8 text-[12.5px] shadow-none"
             />
           </div>
         </div>
@@ -146,14 +178,33 @@ export function App() {
                     onClick={() => session.openThread(t.id)}
                     className="min-w-0 flex-1 truncate px-2.5 py-2 text-left text-[13px]"
                   >
-                    {t.pinned && <span className="mr-1 text-faint-foreground">📌</span>}
+                    {t.pinned && <Pin className="mr-1 inline size-3 text-faint-foreground" />}
                     {t.title || '新会话'}
                   </button>
-                  <div className="flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100">
-                    <button type="button" title="置顶" onClick={() => void togglePin(t)} className="rounded px-1 text-[11px] text-faint-foreground hover:text-foreground">📌</button>
-                    <button type="button" title="重命名" onClick={() => void rename(t.id, t.title)} className="rounded px-1 text-[11px] text-faint-foreground hover:text-foreground">✎</button>
-                    <button type="button" title="删除" onClick={() => void del(t.id)} className="rounded px-1 text-[11px] text-faint-foreground hover:text-destructive">🗑</button>
-                  </div>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-6 shrink-0 text-faint-foreground opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
+                        aria-label={`会话「${t.title || '新会话'}」操作`}
+                      >
+                        <Ellipsis className="size-3.5" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-36">
+                      <DropdownMenuItem onClick={() => void togglePin(t)}>
+                        {t.pinned ? <PinOff /> : <Pin />}
+                        {t.pinned ? '取消置顶' : '置顶'}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => { setRenaming(t); setRenameTitle(t.title); }}>
+                        <Pencil /> 重命名
+                      </DropdownMenuItem>
+                      <DropdownMenuItem variant="destructive" onClick={() => setDeleting(t)}>
+                        <Trash2 /> 删除
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
               ))}
             </div>
@@ -161,13 +212,13 @@ export function App() {
           {groups.length === 0 && <div className="px-3 py-6 text-center text-[12px] text-faint-foreground">暂无会话</div>}
         </div>
         <div className="border-t border-border-soft p-2">
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            className="w-full justify-start gap-2 text-[13px] text-muted-foreground"
             onClick={() => setSettingsOpen(true)}
-            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
-            <span className="opacity-70">⚙</span> 设置
-          </button>
+            <Settings className="size-4 opacity-70" /> 设置
+          </Button>
         </div>
       </aside>
 
@@ -175,14 +226,15 @@ export function App() {
       <main className="flex min-w-0 flex-1 flex-col">
         <div className="flex items-center gap-2 border-b border-border-soft px-5 py-3">
           <div className="truncate text-[14px] font-medium">{state.meta?.title || '新会话'}</div>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
+            className="ml-auto text-[12px] text-muted-foreground"
             onClick={() => setTaskPanelOpen((v) => !v)}
-            className="ml-auto rounded-lg px-2.5 py-1 text-[12px] text-muted-foreground transition-colors hover:bg-muted"
             aria-expanded={taskPanelOpen}
           >
             {taskPanelOpen ? '隐藏任务面板' : '任务面板'}
-          </button>
+          </Button>
         </div>
         <div className="mx-auto flex min-h-0 w-full max-w-[768px] flex-1 flex-col">
           <ThreadView
@@ -233,6 +285,41 @@ export function App() {
       )}
 
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+
+      <Dialog open={renaming !== null} onOpenChange={(o) => !o && setRenaming(null)}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>重命名会话</DialogTitle>
+          </DialogHeader>
+          <Input
+            value={renameTitle}
+            onChange={(e) => setRenameTitle(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && void confirmRename()}
+            autoFocus
+          />
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setRenaming(null)}>取消</Button>
+            <Button size="sm" onClick={() => void confirmRename()}>保存</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={deleting !== null} onOpenChange={(o) => !o && setDeleting(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除会话「{deleting?.title || '新会话'}」？</AlertDialogTitle>
+            <AlertDialogDescription>删除后不可恢复。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction className="bg-destructive text-white hover:bg-destructive/90" onClick={() => void confirmDelete()}>
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Toaster />
     </div>
   );
 }
