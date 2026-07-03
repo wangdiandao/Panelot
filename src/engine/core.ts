@@ -62,12 +62,17 @@ export class RealEngineCore {
 
   constructor(
     private db: PanelotDB,
-    private tools: ToolRegistry,
+    /** Fixed registry, or a factory producing a thread-bound registry per turn. */
+    private tools: ToolRegistry | ((threadId: string) => ToolRegistry),
     private gatekeeper: GatekeeperCheck,
     private providers: ProviderResolver,
     private promptOptions: () => Promise<AssembleOptions> = async () => ({}),
   ) {
     this.tree = new ThreadTree(db);
+  }
+
+  private toolsFor(threadId: string): ToolRegistry {
+    return typeof this.tools === 'function' ? this.tools(threadId) : this.tools;
   }
 
   threadIdOf(op: Op): string | null {
@@ -189,7 +194,7 @@ export class RealEngineCore {
 
     const env: TurnEnv = {
       tree: this.tree,
-      tools: this.tools,
+      tools: this.toolsFor(threadId),
       gatekeeper: this.gatekeeper,
       requestApproval: (turnId, request) => this.requestApproval(threadId, turnId, request),
       emit: (ev) => {
@@ -237,6 +242,26 @@ export class RealEngineCore {
     const next = queue.shift()!;
     this.onBroadcast({ type: 'queue.updated', threadId, pending: queue.length });
     await this.startTurn(threadId, next.input);
+  }
+
+  // -------------------------------------------------------------------------
+  // External pause (manual operation detected — docs/05 §5)
+  // -------------------------------------------------------------------------
+
+  /** Interrupt whatever turn is running on the thread (auto-pause path). */
+  async pauseThread(threadId: string, reason: string): Promise<void> {
+    const active = this.activeTurns.get(threadId);
+    if (!active) return;
+    active.handle.interrupt();
+    await this.tree.appendNode(threadId, {
+      type: 'system_notice',
+      payload: { text: reason, noticeKind: 'paused' },
+    });
+  }
+
+  /** Threads with a running turn (for routing manual-pause by tab). */
+  activeThreadIds(): string[] {
+    return [...this.activeTurns.keys()];
   }
 
   // -------------------------------------------------------------------------
