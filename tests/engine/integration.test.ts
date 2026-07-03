@@ -133,6 +133,9 @@ async function initThread(client: TestClient): Promise<string> {
   await client.waitFor('initialized');
   client.post({ type: 'thread.create' });
   const created = await client.waitFor('thread.created');
+  // Pre-title the thread so the once-only title job doesn't consume scripted
+  // mock responses mid-test.
+  await db.threads.update(created.threadId, { title: 'test-thread' });
   // Subscribe so thread-scoped broadcasts reach this client.
   client.post({ type: 'thread.subscribe', threadId: created.threadId });
   await new Promise<void>((resolve) => {

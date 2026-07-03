@@ -226,6 +226,7 @@ export class RealEngineCore {
           this.pendingApprovals.delete(id);
         }
       }
+      void this.scheduleTaskModelJobs(threadId);
       void this.drainQueue(threadId);
     });
   }
@@ -236,6 +237,45 @@ export class RealEngineCore {
     const next = queue.shift()!;
     this.onBroadcast({ type: 'queue.updated', threadId, pending: queue.length });
     await this.startTurn(threadId, next.input);
+  }
+
+  // -------------------------------------------------------------------------
+  // Task-model jobs: title generation (docs/03 §1.5, docs/10 §5.3)
+  // -------------------------------------------------------------------------
+
+  private async scheduleTaskModelJobs(threadId: string): Promise<void> {
+    try {
+      const thread = await this.tree.getThread(threadId);
+      if (!thread || thread.title || !thread.leafId) return; // title only generated once
+      const ctx = await buildSessionContext(this.tree, threadId, thread.leafId);
+      const firstExchange = ctx.messages
+        .slice(0, 4)
+        .map((m) => m.content.map((c) => (c.type === 'text' ? c.text : '')).join(' '))
+        .join('\n')
+        .slice(0, 2000);
+      if (!firstExchange.trim()) return;
+
+      const { provider, model, params } = await this.providers.resolve(threadId);
+      const stream = provider.stream({
+        messages: [{ role: 'user', content: [{ type: 'text', text: `${firstExchange}\n\n---\nGenerate a title for this conversation: ≤6 words, user's language, no punctuation, name the task not the tool. Reply with the title only.` }] }],
+        tools: [],
+        params: { ...params, maxTokens: 30 },
+        model,
+        signal: AbortSignal.timeout(15_000),
+      });
+      const final = await stream.final();
+      const title = final.message
+        .map((b) => (b.type === 'text' ? b.text : ''))
+        .join('')
+        .trim()
+        .replace(/^["'「]|["'」]$/g, '')
+        .slice(0, 60);
+      if (!title) return;
+      await this.tree.updateThread(threadId, { title });
+      this.onBroadcast({ type: 'thread.updated', threadId, patch: { title } });
+    } catch {
+      // Title generation is best-effort — never surfaces errors.
+    }
   }
 
   // -------------------------------------------------------------------------
