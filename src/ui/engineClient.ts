@@ -16,6 +16,7 @@ import {
   type SnapshotItem,
   type ThreadSnapshot,
   type ThreadSnapshotMeta,
+  type TurnOverrides,
   type UserInput,
 } from '../messaging/protocol';
 import { createPortTransport, type EngineTransport } from '../messaging/transport';
@@ -51,6 +52,8 @@ export interface ThreadUiState {
   lastUsage: { contextPct: number; costUsd?: number; totalTokens: number } | null;
   todos: { text: string; done: boolean }[];
   lastError: string | null;
+  /** Sticky per-session overrides (model selector / tool-level switch). */
+  pendingOverrides: TurnOverrides;
 }
 
 const initialState: ThreadUiState = {
@@ -66,6 +69,7 @@ const initialState: ThreadUiState = {
   lastUsage: null,
   todos: [],
   lastError: null,
+  pendingOverrides: {},
 };
 
 // ---------------------------------------------------------------------------
@@ -143,7 +147,7 @@ export class EngineSession {
   }
 
   submit(input: UserInput): void {
-    const { threadId, activeTurn } = this.store.getState();
+    const { threadId, activeTurn, pendingOverrides } = this.store.getState();
     if (!threadId) return;
     if (activeTurn) {
       if (activeTurn.steerable) {
@@ -153,7 +157,21 @@ export class EngineSession {
       }
       return;
     }
-    this.send({ type: 'turn.submit', threadId, input });
+    const hasOverrides = Object.values(pendingOverrides).some((v) => v !== undefined);
+    this.send({ type: 'turn.submit', threadId, input, ...(hasOverrides ? { overrides: pendingOverrides } : {}) });
+  }
+
+  /** Merge sticky per-session overrides (model selector / tool-level switch). */
+  setOverrides(patch: Partial<TurnOverrides>): void {
+    this.store.setState((s) => ({ pendingOverrides: { ...s.pendingOverrides, ...patch } }));
+  }
+
+  /** Branch switch (docs/09 §2): engine moves leafId, then we re-subscribe. */
+  selectBranch(nodeId: string): void {
+    const { threadId } = this.store.getState();
+    if (!threadId) return;
+    this.send({ type: 'thread.selectBranch', threadId, nodeId });
+    this.send({ type: 'thread.subscribe', threadId });
   }
 
   enqueue(input: UserInput): void {

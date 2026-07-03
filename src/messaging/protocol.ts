@@ -109,6 +109,8 @@ export interface TurnOverrides {
   model?: { connectionId: string; modelId: string };
   approvalPolicy?: ApprovalPolicy;
   capabilityScope?: CapabilityScope;
+  /** Restrict the tool registry for this turn (pure-chat / L0+L1 / full). */
+  enabledToolLevels?: ('L0' | 'L1' | 'L2' | 'mcp')[];
 }
 
 // ---------------------------------------------------------------------------
@@ -183,6 +185,13 @@ export type Op =
   | { type: 'thread.create'; submissionId: string; preset?: string; folderId?: string }
   | { type: 'thread.subscribe'; submissionId: string; threadId: string }
   | { type: 'thread.fork'; submissionId: string; threadId: string; atNodeId: string }
+  | {
+      /** Branch switch: move leafId to the sibling's deepest default descendant. */
+      type: 'thread.selectBranch';
+      submissionId: string;
+      threadId: string;
+      nodeId: string;
+    }
   | {
       type: 'turn.submit';
       submissionId: string;
@@ -320,6 +329,7 @@ const OP_TYPES = new Set<Op['type']>([
   'thread.create',
   'thread.subscribe',
   'thread.fork',
+  'thread.selectBranch',
   'turn.submit',
   'turn.steer',
   'turn.enqueue',

@@ -6,6 +6,7 @@ import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { PanelotDB } from '../../src/db/schema';
+import { ThreadTree } from '../../src/db/tree';
 import { RealEngineCore, type ProviderResolver } from '../../src/engine/core';
 import { EngineHost } from '../../src/engine/host';
 import { createDirectPair } from '../../src/messaging/transport';
@@ -333,5 +334,72 @@ describe('engine integration (Op → events → DB)', () => {
     const req = provider2.requests[0]!;
     const resultMsg = req.messages.find((m) => m.role === 'tool_result')!;
     expect((resultMsg.content[0] as { text: string }).text).toBe('echo:checkpoint');
+  });
+
+  it('thread.selectBranch moves leafId to the sibling branch (docs/09 §2)', async () => {
+    const { core, host } = buildEngine();
+    const client = connect(host);
+    const threadId = await initThread(client);
+
+    provider.queue({ streamText: ['first answer'] });
+    client.post({ type: 'turn.submit', threadId, input: { text: 'question' } });
+    await client.waitFor('turn.complete');
+
+    // Fork at the user message: append a sibling user node + a reply on it.
+    const tree = new ThreadTree(db);
+    const snapBefore = (await core.getSnapshot(threadId))!;
+    const userNodeId = snapBefore.items.find((i) => i.kind === 'user_message')!.nodeId;
+    const editedUser = await tree.forkAt(threadId, userNodeId, {
+      type: 'user_message',
+      payload: { content: [{ type: 'text', text: 'edited question' }] },
+    });
+    await tree.appendNode(threadId, {
+      type: 'assistant_message',
+      payload: { content: [{ type: 'text', text: 'second answer' }] },
+      parentId: editedUser.id,
+    });
+
+    // Current leaf is on the edited branch (2nd sibling, 1-based index).
+    const snapEdited = (await core.getSnapshot(threadId))!;
+    const editedUserItem = snapEdited.items.find((i) => i.kind === 'user_message')!;
+    expect(editedUserItem.branch).toEqual({ index: 2, count: 2 });
+
+    // Switch back to the original sibling.
+    client.post({ type: 'thread.selectBranch', threadId, nodeId: userNodeId });
+    await client.waitFor('thread.updated');
+    const snapSwitched = (await core.getSnapshot(threadId))!;
+    const texts = snapSwitched.items.map((i) => JSON.stringify(i.payload));
+    expect(texts.some((t) => t.includes('first answer'))).toBe(true);
+    expect(texts.some((t) => t.includes('second answer'))).toBe(false);
+  });
+
+  it('turn.submit overrides.enabledToolLevels filters the tool registry', async () => {
+    const { host } = buildEngine();
+    tools.register({
+      name: 'l2_probe',
+      label: 'L2 probe',
+      description: 'only visible when L2 enabled',
+      parameters: z.object({}),
+      level: 'L2',
+      effects: 'read',
+      execute: async () => ({ content: [{ type: 'text', text: 'ran' }] }),
+    });
+    const client = connect(host);
+    const threadId = await initThread(client);
+
+    provider.queue({ streamText: ['ok1'] }, { streamText: ['ok2'] });
+    // Pure-chat turn: no tool levels enabled → provider sees zero tools.
+    client.post({ type: 'turn.submit', threadId, input: { text: 'chat only' }, overrides: { enabledToolLevels: [] } });
+    await client.waitFor('turn.complete');
+    expect(provider.requests[0]!.tools).toHaveLength(0);
+
+    // Unrestricted turn → the L2 tool is offered.
+    client.post({ type: 'turn.submit', threadId, input: { text: 'full' } });
+    await new Promise<void>((resolve) => {
+      const check = () =>
+        client.events.filter((e) => e.type === 'turn.complete').length >= 2 ? resolve() : setTimeout(check, 5);
+      check();
+    });
+    expect(provider.requests[1]!.tools.map((t) => t.name)).toContain('l2_probe');
   });
 });

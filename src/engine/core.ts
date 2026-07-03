@@ -12,6 +12,7 @@ import type {
   PendingApproval,
   SnapshotItem,
   ThreadSnapshot,
+  TurnOverrides,
   UserInput,
 } from '../messaging/protocol';
 import type { PanelotDB } from '../db/schema';
@@ -156,6 +157,16 @@ export class RealEngineCore {
         emit({ type: 'thread.forked', submissionId: op.submissionId, threadId: op.threadId, newThreadId: forked.id });
         return;
       }
+      case 'thread.selectBranch': {
+        try {
+          await this.tree.switchToSibling(op.threadId, op.nodeId);
+        } catch (e) {
+          emit({ type: 'error', submissionId: op.submissionId, code: 'thread_not_found', message: (e as Error).message, retryable: false });
+          return;
+        }
+        this.onBroadcast({ type: 'thread.updated', threadId: op.threadId, patch: {} });
+        return;
+      }
       case 'thread.compact': {
         if (!this.compaction) {
           emit({ type: 'error', submissionId: op.submissionId, code: 'not_configured', message: 'compaction not available', retryable: false });
@@ -187,15 +198,15 @@ export class RealEngineCore {
       emit({ type: 'error', submissionId: op.submissionId, code: 'thread_not_found', message: `thread ${op.threadId} not found`, retryable: false });
       return;
     }
-    await this.startTurn(op.threadId, op.input, op.overrides?.model);
+    await this.startTurn(op.threadId, op.input, op.overrides);
   }
 
   private async startTurn(
     threadId: string,
     input: UserInput,
-    modelOverride?: { connectionId: string; modelId: string },
+    overrides?: TurnOverrides,
   ): Promise<void> {
-    const resolved = await this.providers.resolve(threadId, modelOverride);
+    const resolved = await this.providers.resolve(threadId, overrides?.model);
     const promptOpts = await this.promptOptions();
     const systemPrompt = assembleSystemPrompt(promptOpts);
 
@@ -238,6 +249,7 @@ export class RealEngineCore {
       model: resolved.model,
       systemPrompt,
       params: resolved.params,
+      enabledToolLevels: overrides?.enabledToolLevels,
       maybeCompact: this.compaction
         ? (tid) =>
             this.compaction!.maybeCompact(
