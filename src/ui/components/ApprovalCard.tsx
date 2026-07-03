@@ -2,9 +2,13 @@
  * Approval card (docs/09 §4.3, docs/06 §4): full-parameter display, Y/A/N
  * keyboard shortcuts, flag banners, queued display "1/3".
  * Rendered ONLY inside extension pages — never injected into web pages.
+ * Shell uses shadcn/ui Button; the Y/A/N/Esc handler and mandatory full-param
+ * <pre> are the safety contract and must not change.
  */
 
 import { useEffect, useRef } from 'react';
+import { TriangleAlert } from 'lucide-react';
+import { Button } from './ui/button';
 import type { ApprovalDecision, PendingApproval } from '../../messaging/protocol';
 
 interface Props {
@@ -56,16 +60,16 @@ export function ApprovalCard({ approval, queuePosition, onDecision }: Props) {
       onKeyDown={onKeyDown}
       role="alertdialog"
       aria-label={`审批请求：${request.label}`}
-      className="animate-[slide-in_200ms_ease-out] rounded-[10px] border border-warning/50 bg-card shadow-lg outline-none focus:ring-1 focus:ring-warning"
+      className="animate-[slide-in_200ms_ease-out] overflow-hidden rounded-xl border border-warning/50 bg-card shadow-lg outline-none focus:ring-1 focus:ring-warning"
     >
       {crossScope && (
-        <div className="rounded-t-[10px] bg-warning/15 px-3 py-1 text-[11px] font-medium text-warning">
-          ⚠ 越出任务作用域 — 该操作的目标不在本任务已触达的站点内
+        <div className="flex items-center gap-1.5 bg-warning/15 px-3 py-1 text-[11px] font-medium text-warning">
+          <TriangleAlert className="size-3" /> 越出任务作用域 — 该操作的目标不在本任务已触达的站点内
         </div>
       )}
       {sensitive && (
-        <div className={`bg-destructive/15 px-3 py-1 text-[11px] font-medium text-destructive ${crossScope ? '' : 'rounded-t-[10px]'}`}>
-          ⚠ 检测到敏感内容外发 — 参数中含疑似凭据/卡号/邮箱
+        <div className="flex items-center gap-1.5 bg-destructive/15 px-3 py-1 text-[11px] font-medium text-destructive">
+          <TriangleAlert className="size-3" /> 检测到敏感内容外发 — 参数中含疑似凭据/卡号/邮箱
         </div>
       )}
       {escalation && (
@@ -94,27 +98,20 @@ export function ApprovalCard({ approval, queuePosition, onDecision }: Props) {
           {JSON.stringify(request.params, null, 2)}
         </pre>
         <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={() => decide({ kind: 'accept' })}
-            className="rounded-md bg-primary px-3 py-1 text-[12px] font-medium text-black hover:brightness-110"
-          >
+          <Button size="sm" className="h-7 px-3 text-[12px]" onClick={() => decide({ kind: 'accept' })}>
             允许一次 <kbd className="opacity-60">Y</kbd>
-          </button>
-          <button
-            type="button"
-            onClick={() => decide({ kind: 'acceptForSite' })}
-            className="rounded-md border border-border bg-muted px-3 py-1 text-[12px] hover:bg-border"
-          >
+          </Button>
+          <Button variant="secondary" size="sm" className="h-7 px-3 text-[12px]" onClick={() => decide({ kind: 'acceptForSite' })}>
             本站始终 <kbd className="opacity-60">A</kbd>
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="ml-auto h-7 border-destructive/40 px-3 text-[12px] text-destructive hover:bg-destructive/10 hover:text-destructive"
             onClick={() => decide({ kind: 'decline' })}
-            className="ml-auto rounded-md border border-destructive/40 px-3 py-1 text-[12px] text-destructive hover:bg-destructive/10"
           >
             拒绝 <kbd className="opacity-60">N</kbd>
-          </button>
+          </Button>
         </div>
       </div>
     </div>

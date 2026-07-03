@@ -3,9 +3,14 @@
  * Shift+Alt+Enter=explicit enqueue, context chips, send/stop toggle.
  * The @ / slash trigger menu lands with the ecosystem phase; the input
  * contract (send/steer/enqueue routing) is final here.
+ * Shell uses shadcn/ui Button + cn(); the keyboard state machine is the
+ * crown-jewel contract and must not change.
  */
 
-import { useRef, useState } from 'react';
+import { useRef, useState, type RefObject } from 'react';
+import { ArrowUp, Paperclip, Square, X } from 'lucide-react';
+import { Button } from './ui/button';
+import { cn } from '../lib/utils';
 import type { ContextBlock } from '../../messaging/protocol';
 
 interface Props {
@@ -19,6 +24,8 @@ interface Props {
   onSend: (text: string) => void;
   onEnqueue: (text: string) => void;
   onStop: () => void;
+  /** Optional external ref so parents can restore focus (e.g. post-approval). */
+  textareaRef?: RefObject<HTMLTextAreaElement | null>;
 }
 
 export function PromptInput({
@@ -32,10 +39,12 @@ export function PromptInput({
   onSend,
   onEnqueue,
   onStop,
+  textareaRef,
 }: Props) {
   const [text, setText] = useState('');
   const [steerHint, setSteerHint] = useState<string | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const innerRef = useRef<HTMLTextAreaElement>(null);
+  const taRef = textareaRef ?? innerRef;
 
   const submit = (explicit: 'send' | 'enqueue') => {
     const trimmed = text.trim();
@@ -76,18 +85,19 @@ export function PromptInput({
       {queuedInputs > 0 && <div className="mb-1.5 px-1 text-[11px] text-muted-foreground">队列中 {queuedInputs} 条消息</div>}
 
       <div
-        className={`flex flex-col rounded-[24px] border bg-muted px-2 py-1.5 shadow-soft transition-colors ${
-          disabled ? 'border-border opacity-70' : 'border-border focus-within:border-primary/60'
-        }`}
+        className={cn(
+          'flex flex-col rounded-3xl border border-border bg-muted px-2 py-1.5 shadow-soft transition-colors',
+          disabled ? 'opacity-70' : 'focus-within:border-primary/60',
+        )}
       >
         {contextChips.length > 0 && (
           <div className="flex flex-wrap gap-1 px-2 pb-1.5 pt-1">
             {contextChips.map((chip, i) => (
               <span key={i} className="flex items-center gap-1 rounded-full bg-accent px-2 py-0.5 text-[11px]">
-                📎 {chip.label}
+                <Paperclip className="size-3" /> {chip.label}
                 {chip.approxTokens !== undefined && <span className="text-faint-foreground">~{chip.approxTokens}tok</span>}
                 <button type="button" onClick={() => onRemoveChip(i)} className="text-faint-foreground hover:text-destructive" aria-label={`移除 ${chip.label}`}>
-                  ×
+                  <X className="size-3" />
                 </button>
               </span>
             ))}
@@ -95,7 +105,7 @@ export function PromptInput({
         )}
         <div className="flex items-end gap-2">
           <textarea
-            ref={textareaRef}
+            ref={taRef}
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={onKeyDown}
@@ -105,26 +115,26 @@ export function PromptInput({
             className="max-h-48 min-h-[36px] flex-1 resize-none bg-transparent px-2.5 py-1.5 text-[14.5px] leading-[1.5] outline-none placeholder:text-faint-foreground disabled:cursor-not-allowed"
           />
           {running ? (
-            <button
-              type="button"
-              onClick={onStop}
+            <Button
+              size="icon"
               aria-label="停止"
               title="停止 (Esc)"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-transform hover:scale-105"
+              className="size-8 shrink-0 rounded-full bg-foreground text-background transition-transform hover:scale-105 hover:bg-foreground"
+              onClick={onStop}
             >
-              <span className="block h-2.5 w-2.5 rounded-[2px] bg-background" />
-            </button>
+              <Square className="size-2.5 fill-current" />
+            </Button>
           ) : (
-            <button
-              type="button"
-              onClick={() => submit('send')}
-              disabled={disabled || !text.trim()}
+            <Button
+              size="icon"
               aria-label="发送"
               title="发送 (Enter)"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-black transition-all hover:brightness-110 disabled:bg-accent disabled:text-faint-foreground"
+              disabled={disabled || !text.trim()}
+              className="size-8 shrink-0 rounded-full disabled:bg-accent disabled:text-faint-foreground disabled:opacity-100"
+              onClick={() => submit('send')}
             >
-              ↑
-            </button>
+              <ArrowUp className="size-4" />
+            </Button>
           )}
         </div>
       </div>

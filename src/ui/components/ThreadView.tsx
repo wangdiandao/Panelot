@@ -1,14 +1,18 @@
 /**
  * ThreadView — the shared conversation core used by both the side panel and
- * the full-page chat (docs/09 §2).
+ * the full-page chat (docs/09 §2). Banners use shadcn/ui Alert; after an
+ * approval decision keyboard focus returns to the composer (docs/09 §8).
  */
 
-import { useSyncExternalStore, useState, useCallback } from 'react';
-import type { ContextBlock } from '../../messaging/protocol';
+import { useSyncExternalStore, useState, useCallback, useRef } from 'react';
+import { TriangleAlert } from 'lucide-react';
+import type { ApprovalDecision, ContextBlock } from '../../messaging/protocol';
 import type { EngineSession, ThreadUiState } from '../engineClient';
 import { MessageStream } from './MessageStream';
 import { PromptInput } from './PromptInput';
 import { ApprovalCard } from './ApprovalCard';
+import { Alert, AlertDescription } from './ui/alert';
+import { Button } from './ui/button';
 
 export function useEngineState(session: EngineSession): ThreadUiState {
   return useSyncExternalStore(session.store.subscribe, session.store.getState, session.store.getState);
@@ -27,6 +31,7 @@ interface Props {
 export function ThreadView({ session, providerConfigured, onOpenSettings, stagedContext = [], onRemoveStagedContext }: Props) {
   const state = useEngineState(session);
   const [, setSendTick] = useState(0);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const send = useCallback(
     (text: string) => {
@@ -36,6 +41,15 @@ export function ThreadView({ session, providerConfigured, onOpenSettings, staged
       setSendTick((t) => t + 1);
     },
     [session, stagedContext, onRemoveStagedContext],
+  );
+
+  const onDecision = useCallback(
+    (id: string, d: ApprovalDecision) => {
+      session.respondApproval(id, d);
+      // Focus returns to the composer so the keyboard flow continues.
+      requestAnimationFrame(() => inputRef.current?.focus());
+    },
+    [session],
   );
 
   return (
@@ -58,22 +72,25 @@ export function ThreadView({ session, providerConfigured, onOpenSettings, staged
               key={a.approvalId}
               approval={a}
               queuePosition={{ index: 1, total: state.pendingApprovals.length || arr.length }}
-              onDecision={(id, d) => session.respondApproval(id, d)}
+              onDecision={onDecision}
             />
           ))}
         </div>
       )}
       {state.wasInterrupted && (
-        <div className="mx-4 mb-2 flex items-center gap-2 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-[12px] text-warning">
-          <span>任务此前被中断（可能是浏览器休眠）。</span>
-          <button
-            type="button"
-            onClick={() => session.enqueue({ text: '继续刚才的任务' })}
-            className="ml-auto rounded-lg bg-warning px-2.5 py-1 text-[11px] font-medium text-black transition-[filter] hover:brightness-110"
-          >
-            继续
-          </button>
-        </div>
+        <Alert className="mx-4 mb-2 w-auto border-warning/40 bg-warning/10 text-warning">
+          <TriangleAlert className="size-4" />
+          <AlertDescription className="flex items-center gap-2 text-[12px] text-warning">
+            <span>任务此前被中断（可能是浏览器休眠）。</span>
+            <Button
+              size="sm"
+              className="ml-auto h-6 bg-warning px-2.5 text-[11px] text-black hover:bg-warning/90"
+              onClick={() => session.enqueue({ text: '继续刚才的任务' })}
+            >
+              继续
+            </Button>
+          </AlertDescription>
+        </Alert>
       )}
       {!providerConfigured && (
         <button
@@ -94,6 +111,7 @@ export function ThreadView({ session, providerConfigured, onOpenSettings, staged
         onSend={send}
         onEnqueue={(text) => session.enqueue({ text })}
         onStop={() => session.interrupt()}
+        textareaRef={inputRef}
       />
     </div>
   );
