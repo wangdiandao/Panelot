@@ -5,6 +5,7 @@
  */
 
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { BranchSwitcher, useBranchShortcuts } from './BranchSwitcher';
 import type { SnapshotItem } from '../../messaging/protocol';
 import type {
   AssistantMessagePayload,
@@ -24,8 +25,8 @@ import { ToolCallGroup, type ToolCardData } from './ToolCallCard';
 // ---------------------------------------------------------------------------
 
 type Row =
-  | { kind: 'user'; key: string; payload: UserMessagePayload }
-  | { kind: 'assistant'; key: string; payload: AssistantMessagePayload; streaming?: boolean; liveText?: string; liveReasoning?: string }
+  | { kind: 'user'; key: string; payload: UserMessagePayload; nodeId?: string; branch?: { index: number; count: number } }
+  | { kind: 'assistant'; key: string; payload: AssistantMessagePayload; streaming?: boolean; liveText?: string; liveReasoning?: string; nodeId?: string; branch?: { index: number; count: number } }
   | { kind: 'tools'; key: string; cards: ToolCardData[] }
   | { kind: 'notice'; key: string; text: string }
   | { kind: 'compaction'; key: string; payload: CompactionPayload }
@@ -50,13 +51,13 @@ export function buildRows(items: SnapshotItem[], liveItems: LiveItem[]): Row[] {
   for (const item of items) {
     switch (item.kind) {
       case 'user_message':
-        rows.push({ kind: 'user', key: item.nodeId, payload: item.payload as UserMessagePayload });
+        rows.push({ kind: 'user', key: item.nodeId, payload: item.payload as UserMessagePayload, nodeId: item.nodeId, branch: item.branch });
         break;
       case 'assistant_message': {
         const p = item.payload as AssistantMessagePayload;
         // Skip empty assistant shells (tool-call-only responses).
         if (p.content.some((c) => c.type === 'text' && c.text.trim() !== '')) {
-          rows.push({ kind: 'assistant', key: item.nodeId, payload: p });
+          rows.push({ kind: 'assistant', key: item.nodeId, payload: p, nodeId: item.nodeId, branch: item.branch });
         }
         break;
       }
@@ -134,12 +135,25 @@ function summarizeParams(params: unknown): string {
 interface Props {
   items: SnapshotItem[];
   liveItems: LiveItem[];
+  threadId?: string | null;
+  /** Branch switch handler (thread.selectBranch); absent in previews. */
+  onSelectBranch?: (nodeId: string) => void;
 }
 
-export function MessageStream({ items, liveItems }: Props) {
+export function MessageStream({ items, liveItems, threadId, onSelectBranch }: Props) {
   const rows = useMemo(() => buildRows(items, liveItems), [items, liveItems]);
   const containerRef = useRef<HTMLDivElement>(null);
   const [followTail, setFollowTail] = useState(true);
+
+  // Ctrl/Cmd+↑↓ operates on the last branchable message (docs/09 §6).
+  const lastBranchNodeId = useMemo(() => {
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const r = rows[i]!;
+      if ((r.kind === 'user' || r.kind === 'assistant') && r.branch && r.branch.count > 1 && r.nodeId) return r.nodeId;
+    }
+    return null;
+  }, [rows]);
+  useBranchShortcuts(threadId ?? null, lastBranchNodeId, onSelectBranch ?? (() => {}));
 
   // Auto-scroll unless the user scrolled up (docs/09 §4.1 rule 3).
   useEffect(() => {
@@ -158,7 +172,7 @@ export function MessageStream({ items, liveItems }: Props) {
         {rows.length === 0 && <EmptyState />}
         <div className="space-y-6">
           {rows.map((row) => (
-            <Fragment key={row.key}>{renderRow(row)}</Fragment>
+            <Fragment key={row.key}>{renderRow(row, threadId ?? null, onSelectBranch)}</Fragment>
           ))}
         </div>
       </div>
@@ -191,12 +205,17 @@ function EmptyState() {
   );
 }
 
-function renderRow(row: Row) {
+function renderRow(row: Row, threadId: string | null, onSelectBranch?: (nodeId: string) => void) {
+  const branchSwitcher = (r: Extract<Row, { kind: 'user' | 'assistant' }>) =>
+    r.branch && r.branch.count > 1 && r.nodeId && threadId && onSelectBranch ? (
+      <BranchSwitcher threadId={threadId} nodeId={r.nodeId} branch={r.branch} onSelectBranch={onSelectBranch} />
+    ) : null;
+
   switch (row.kind) {
     case 'user': {
       const text = row.payload.content.map((c) => (c.type === 'text' ? c.text : '[image]')).join('\n');
       return (
-        <div className="flex justify-end">
+        <div className="flex flex-col items-end">
           <div className="max-w-[85%] rounded-2xl rounded-br-md bg-user-bubble px-4 py-2.5 text-[14.5px] leading-[1.65]">
             {row.payload.attachedContext && row.payload.attachedContext.length > 0 && (
               <div className="mb-1.5 flex flex-wrap gap-1">
@@ -209,6 +228,7 @@ function renderRow(row: Row) {
             )}
             <div className="whitespace-pre-wrap">{text}</div>
           </div>
+          {branchSwitcher(row)}
         </div>
       );
     }
@@ -224,6 +244,7 @@ function renderRow(row: Row) {
             {reasoning && <ReasoningBlock text={reasoning} streaming={row.streaming} />}
             <Markdown content={text} streaming={row.streaming} />
             {row.streaming && !text && <span className="inline-block h-4 w-[3px] animate-[blink_1s_ease-in-out_infinite] rounded-full bg-primary align-middle" />}
+            {branchSwitcher(row)}
           </div>
         </div>
       );

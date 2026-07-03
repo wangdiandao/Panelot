@@ -26,9 +26,11 @@ interface Props {
   /** Context chips staged for the next message (page attach etc.). */
   stagedContext?: ContextBlock[];
   onRemoveStagedContext?: (index: number) => void;
+  /** Stage a context block from the @ trigger menu. */
+  onAttachContext?: (block: ContextBlock) => void;
 }
 
-export function ThreadView({ session, providerConfigured, onOpenSettings, stagedContext = [], onRemoveStagedContext }: Props) {
+export function ThreadView({ session, providerConfigured, onOpenSettings, stagedContext = [], onRemoveStagedContext, onAttachContext }: Props) {
   const state = useEngineState(session);
   const [, setSendTick] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -64,7 +66,12 @@ export function ThreadView({ session, providerConfigured, onOpenSettings, staged
           {state.lastError}
         </div>
       )}
-      <MessageStream items={state.items} liveItems={state.liveItems} />
+      <MessageStream
+        items={state.items}
+        liveItems={state.liveItems}
+        threadId={state.threadId}
+        onSelectBranch={(nodeId) => session.selectBranch(nodeId)}
+      />
       {state.pendingApprovals.length > 0 && (
         <div className="space-y-2 px-4 pb-2">
           {state.pendingApprovals.slice(0, 1).map((a, _, arr) => (
@@ -108,10 +115,15 @@ export function ThreadView({ session, providerConfigured, onOpenSettings, staged
         disabled={!providerConfigured}
         contextChips={stagedContext}
         onRemoveChip={(i) => onRemoveStagedContext?.(i)}
+        onAttachContext={onAttachContext}
         onSend={send}
         onEnqueue={(text) => session.enqueue({ text })}
         onStop={() => session.interrupt()}
         textareaRef={inputRef}
+        modelOverride={state.pendingOverrides.model ?? null}
+        onSelectModel={(choice) =>
+          session.setOverrides({ model: choice ? { connectionId: choice.connectionId, modelId: choice.modelId } : undefined })
+        }
       />
     </div>
   );

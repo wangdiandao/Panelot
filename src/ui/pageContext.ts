@@ -35,20 +35,19 @@ export async function getActiveTab(): Promise<chrome.tabs.Tab | null> {
   return tab ?? null;
 }
 
-/** Returns null when the page is not scriptable (chrome://, store, etc.). */
-export async function attachCurrentPage(): Promise<ContextBlock | null> {
-  const tab = await getActiveTab();
-  if (!tab?.id || !tab.url || !/^https?:/.test(tab.url)) return null;
+/** Extract a tab's readable text as a context block (null if not scriptable). */
+async function attachTabById(tabId: number, url: string, kind: 'page' | 'tab'): Promise<ContextBlock | null> {
+  if (!/^https?:/.test(url)) return null;
   try {
     const [result] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
+      target: { tabId },
       func: extractPageText,
     });
     const page = result?.result as PageExtract | undefined;
     if (!page?.text) return null;
     const clipped = page.text.length > MAX_CHARS ? `${page.text.slice(0, MAX_CHARS)}\n[内容已截断]` : page.text;
     return {
-      kind: 'page',
+      kind,
       label: page.title || new URL(page.url).hostname,
       origin: new URL(page.url).origin,
       content: [{ type: 'text', text: `Page: ${page.title}\nURL: ${page.url}\n\n${clipped}` }],
@@ -56,6 +55,50 @@ export async function attachCurrentPage(): Promise<ContextBlock | null> {
     };
   } catch {
     return null; // page not scriptable or permission missing
+  }
+}
+
+/** Returns null when the page is not scriptable (chrome://, store, etc.). */
+export async function attachCurrentPage(): Promise<ContextBlock | null> {
+  const tab = await getActiveTab();
+  if (!tab?.id || !tab.url) return null;
+  return attachTabById(tab.id, tab.url, 'page');
+}
+
+/** Attach any open tab's readable text (for the @ trigger menu). */
+export async function attachTab(tabId: number, url: string): Promise<ContextBlock | null> {
+  return attachTabById(tabId, url, 'tab');
+}
+
+/** Open http(s) tabs, for the @ menu's tab list. */
+export async function listAttachableTabs(): Promise<{ id: number; title: string; url: string }[]> {
+  try {
+    const tabs = await chrome.tabs.query({});
+    return tabs
+      .filter((t): t is chrome.tabs.Tab & { id: number; url: string } => t.id !== undefined && !!t.url && /^https?:/.test(t.url))
+      .map((t) => ({ id: t.id, title: t.title ?? t.url, url: t.url }));
+  } catch {
+    return [];
+  }
+}
+
+/** Screenshot of the visible active tab as an image context block. */
+export async function attachScreenshot(): Promise<ContextBlock | null> {
+  try {
+    const tab = await getActiveTab();
+    if (!tab?.url || !/^https?:/.test(tab.url)) return null;
+    const dataUrl = await chrome.tabs.captureVisibleTab({ format: 'png' });
+    const base64 = dataUrl.split(',')[1];
+    if (!base64) return null;
+    return {
+      kind: 'screenshot',
+      label: `截图 (${tab.title ?? '当前页'})`,
+      origin: new URL(tab.url).origin,
+      content: [{ type: 'image', mime: 'image/png', data: base64 }],
+      approxTokens: 1100, // rough vision-token estimate for a viewport shot
+    };
+  } catch {
+    return null;
   }
 }
 

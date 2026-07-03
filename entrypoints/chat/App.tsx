@@ -243,6 +243,7 @@ export function App() {
             onOpenSettings={() => setSettingsOpen(true)}
             stagedContext={staged}
             onRemoveStagedContext={(i) => setStaged((s) => s.filter((_, idx) => idx !== i))}
+            onAttachContext={(block) => setStaged((s) => [...s, block])}
           />
         </div>
       </main>
