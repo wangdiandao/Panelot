@@ -281,6 +281,16 @@ export function createL1Tools(gateway: BrowserToolGateway, getThreadId: () => st
       execute: (_id, params) => call('wait_for', params),
     },
     {
+      name: 'run_javascript',
+      label: '执行 JavaScript',
+      description:
+        'Run JavaScript in the page (MAIN world) and return its result. Powerful and risky — DENIED by default; the user must enable it in settings. Prefer the structured tools (click/type/extract) whenever possible.',
+      parameters: z.object({ code: z.string(), world: z.literal('MAIN').optional() }),
+      level: 'L1',
+      effects: 'write',
+      execute: (_id, params) => call('run_javascript', params),
+    },
+    {
       name: 'batch_actions',
       label: '批量操作',
       description:

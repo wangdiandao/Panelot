@@ -5,6 +5,7 @@
 
 import { useEffect, useState } from 'react';
 import { ProvidersPage } from './ProvidersPage';
+import { PermissionsPage } from './PermissionsPage';
 import { SettingsStore, type GlobalSettings } from '../../src/settings/store';
 
 const SECTIONS = [
@@ -42,7 +43,7 @@ export function App() {
       <main className="min-w-0 flex-1 overflow-y-auto p-6">
         {section === 'general' && <GeneralPage />}
         {section === 'providers' && <ProvidersPage />}
-        {section === 'permissions' && <Placeholder text="浏览器权限矩阵将随浏览器操作能力一同上线。" />}
+        {section === 'permissions' && <PermissionsPage />}
         {section === 'skills' && <Placeholder text="Skills 管理将随生态能力一同上线。" />}
         {section === 'mcp' && <Placeholder text="MCP 服务器管理将随生态能力一同上线。" />}
         {section === 'data' && <Placeholder text="导入导出与存储管理将在打磨阶段上线。" />}

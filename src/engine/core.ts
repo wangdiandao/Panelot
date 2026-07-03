@@ -57,6 +57,8 @@ export class RealEngineCore {
   onBroadcast: (ev: AgentEvent) => void = () => {};
   /** Optional compaction runner (wired at startup; absent in minimal tests). */
   compaction: CompactionRunner | null = null;
+  /** Called after an approval decision to apply its side effects (docs/06 §4). */
+  onApprovalDecision?: (threadId: string, tool: string, targetOrigin: string, decision: ApprovalDecision) => Promise<void>;
   /** Most recent context token estimate per thread (from usage events). */
   private lastContextTokens = new Map<string, number>();
 
@@ -131,6 +133,9 @@ export class RealEngineCore {
         if (pending) {
           clearTimeout(pending.timer);
           this.pendingApprovals.delete(op.approvalId);
+          // Persist the decision's side effects (scopeOrigins growth,
+          // session/site grants) before resolving so the next check sees them.
+          await this.onApprovalDecision?.(pending.threadId, pending.request.tool, pending.request.targetOrigin, op.decision);
           pending.resolve(op.decision);
         }
         return;

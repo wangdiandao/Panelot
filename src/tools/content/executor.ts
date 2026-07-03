@@ -444,6 +444,14 @@ export async function executeContentTool(tool: string, params: unknown): Promise
       case 'batch_actions':
         resultText = await doBatch(p);
         break;
+      case 'run_javascript': {
+        // Executed in the content script's isolated world here; the MAIN-world
+        // variant needs page-context injection (L2), out of scope for L1.
+        // eslint-disable-next-line no-new-func
+        const fn = new Function(`return (async () => { ${p.code} })()`);
+        const value = await fn();
+        return { resultText: `执行结果: ${typeof value === 'string' ? value : JSON.stringify(value) ?? 'undefined'}` };
+      }
       default:
         throw new Error(`content script 不支持工具: ${tool}`);
     }
