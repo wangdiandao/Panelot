@@ -96,6 +96,8 @@ export class EngineSession {
   private reconnectDelay = 500;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private disposed = false;
+  /** Draft-mode input waiting for thread.created before it can be submitted. */
+  private pendingDraft: UserInput | null = null;
 
   readonly store = create<ThreadUiState>(() => ({ ...initialState }));
 
@@ -155,6 +157,17 @@ export class EngineSession {
     this.send({ type: 'thread.create', preset });
   }
 
+  /**
+   * Draft mode (ChatGPT semantics): "new chat" shows an empty conversation
+   * WITHOUT persisting anything — the thread row is only created when the
+   * first message is submitted, so the list never fills with empty chats.
+   */
+  startDraft(): void {
+    const { connected, pendingOverrides } = this.store.getState();
+    this.pendingDraft = null;
+    this.store.setState({ ...initialState, connected, pendingOverrides });
+  }
+
   openThread(threadId: string): void {
     this.store.setState({ ...initialState, connected: this.store.getState().connected, threadId });
     this.send({ type: 'thread.subscribe', threadId });
@@ -162,7 +175,13 @@ export class EngineSession {
 
   submit(input: UserInput): void {
     const { threadId, activeTurn, pendingOverrides } = this.store.getState();
-    if (!threadId) return;
+    if (!threadId) {
+      // Draft mode: materialize the thread first, then submit on created.
+      this.pendingDraft = input;
+      this.store.setState({ lastInput: input });
+      this.send({ type: 'thread.create' });
+      return;
+    }
     if (activeTurn) {
       if (activeTurn.steerable) {
         this.send({ type: 'turn.steer', threadId, expectedTurnId: activeTurn.turnId, input });
@@ -226,8 +245,12 @@ export class EngineSession {
         break;
       }
       case 'thread.created': {
-        s.setState({ ...initialState, connected: true, threadId: ev.threadId });
+        const { pendingOverrides } = s.getState();
+        s.setState({ ...initialState, connected: true, threadId: ev.threadId, pendingOverrides });
         this.send({ type: 'thread.subscribe', threadId: ev.threadId });
+        const draft = this.pendingDraft;
+        this.pendingDraft = null;
+        if (draft) this.submit(draft);
         break;
       }
       case 'turn.start':
@@ -312,10 +335,9 @@ export class EngineSession {
         if (ev.code === 'thread_not_found') {
           // Every op this client sends targets its current thread, so this
           // means the thread vanished underneath us (deleted from another
-          // surface, or a data import replaced the DB). Self-heal with a
-          // fresh thread instead of dead-ending on an error banner.
-          s.setState({ ...initialState, connected: true });
-          this.send({ type: 'thread.create' });
+          // surface, or a data import replaced the DB). Self-heal by falling
+          // back to a fresh draft instead of dead-ending on an error banner.
+          this.startDraft();
           break;
         }
         s.setState({ lastError: { message: ev.message, retryable: ev.retryable, kind: ev.errorKind } });

@@ -53,22 +53,26 @@ interface Props {
 }
 
 export function SettingsPanel({ initialSection = 'providers', footer }: Props) {
+  // Layout classes are all EXPLICIT (flex/flex-col/w-full/h-auto) rather than
+  // relying on the tabs.tsx group-data-[orientation] variant chain — the
+  // vertical variants proved fragile across build targets and a collapsed
+  // list is unusable (user-reported regression).
   return (
     <Tabs
       defaultValue={initialSection}
       orientation="vertical"
-      className="h-full min-h-0 gap-0 bg-background text-foreground"
+      className="flex h-full min-h-0 flex-row gap-0 bg-background text-foreground"
     >
       <nav className="flex w-52 shrink-0 flex-col border-r border-border bg-card p-3">
         <div className="mb-4 px-2 text-[15px] font-semibold">
           <span className="text-primary">Panelot</span> 设置
         </div>
-        <TabsList variant="line" className="w-full flex-1 items-stretch justify-start gap-0.5 p-0">
+        <TabsList variant="line" className="flex h-auto w-full flex-1 flex-col items-stretch justify-start gap-0.5 bg-transparent p-0">
           {SECTIONS.map(({ id, label, Icon }) => (
             <TabsTrigger
               key={id}
               value={id}
-              className="w-full flex-none justify-start gap-2.5 rounded-lg px-2.5 py-2 text-[13px] after:hidden data-[state=active]:bg-muted data-[state=active]:font-medium dark:data-[state=active]:border-transparent dark:data-[state=active]:bg-muted"
+              className="h-auto w-full flex-none justify-start gap-2.5 rounded-lg px-2.5 py-2 text-[13px] after:hidden data-[state=active]:bg-muted data-[state=active]:font-medium dark:data-[state=active]:border-transparent dark:data-[state=active]:bg-muted"
             >
               <Icon className="size-4 opacity-70" />
               {label}

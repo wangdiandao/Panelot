@@ -45,19 +45,34 @@ function waitFor(predicate: () => boolean, timeoutMs = 3000): Promise<void> {
 }
 
 describe('EngineSession self-heal on thread_not_found', () => {
-  it('openThread(missing id) recovers by creating a fresh thread', async () => {
+  it('openThread(missing id) recovers by falling back to a draft', async () => {
     const { session } = buildSession();
     try {
       await waitFor(() => session.store.getState().connected);
 
       session.openThread('e08546b3-3562-43b9-b449-086380244e42');
-
-      // Self-heal: error → reset → thread.create → subscribe to the new one.
       await waitFor(() => {
         const s = session.store.getState();
-        return s.threadId !== null && s.threadId !== 'e08546b3-3562-43b9-b449-086380244e42' && s.meta !== null;
+        return s.threadId === null && s.lastError === null && s.connected;
       });
-      expect(session.store.getState().lastError).toBeNull();
+    } finally {
+      session.dispose();
+    }
+  });
+
+  it('draft submit materializes the thread and delivers the first message', async () => {
+    const { session, db } = buildSession();
+    try {
+      await waitFor(() => session.store.getState().connected);
+      session.startDraft();
+      expect(session.store.getState().threadId).toBeNull();
+      expect(await db.threads.count()).toBe(0); // draft persists nothing
+
+      session.submit({ text: 'first message' });
+      // thread.created → subscribe → submit; the turn errors (no provider in
+      // this harness) but the thread row now exists.
+      await waitFor(() => session.store.getState().threadId !== null);
+      expect(await db.threads.count()).toBe(1);
     } finally {
       session.dispose();
     }

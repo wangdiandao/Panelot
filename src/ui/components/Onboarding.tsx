@@ -123,13 +123,19 @@ export function Onboarding({ onConfigured, onOpenSettings, onTryDemo }: Props) {
       {step === 1 && (
         <div className="w-full space-y-3 rounded-2xl border border-border bg-card p-5">
           <div className="text-[15px] font-semibold">① 连接你的模型</div>
-          <div className="flex flex-wrap gap-1">
-            {CONNECTION_TEMPLATES.filter((t) => t.name !== 'Custom').map((t) => (
-              <Badge key={t.name} asChild variant={templateName === t.name ? 'default' : 'outline'} className="cursor-pointer">
-                <button type="button" onClick={() => { setTemplateName(t.name); setVerified(null); }}>{t.name}</button>
-              </Badge>
-            ))}
-          </div>
+          {/* Grouped by interface type (wire protocol), not vendor. */}
+          {([['anthropic', 'Anthropic 接口'], ['openai', 'OpenAI 兼容接口']] as const).map(([kind, label]) => (
+            <div key={kind} className="space-y-1">
+              <div className="text-[11px] text-faint-foreground">{label}</div>
+              <div className="flex flex-wrap gap-1">
+                {CONNECTION_TEMPLATES.filter((t) => t.kind === kind && t.name !== 'Custom').map((t) => (
+                  <Badge key={t.name} asChild variant={templateName === t.name ? 'default' : 'outline'} className="cursor-pointer">
+                    <button type="button" onClick={() => { setTemplateName(t.name); setVerified(null); }}>{t.name}</button>
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          ))}
           <div className="space-y-1.5">
             <Label htmlFor="ob-key" className="text-[12px] text-muted-foreground">API Key</Label>
             <Input

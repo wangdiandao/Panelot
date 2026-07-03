@@ -235,10 +235,23 @@ function ConnectionForm({
     <div className="max-w-xl space-y-4">
       <h2 className="text-[15px] font-semibold">{connection.name ? `编辑 ${connection.name}` : '添加连接'}</h2>
 
+      {/* Classified by interface type, not vendor: pick the wire protocol
+          first, then an optional endpoint preset within it. */}
       <div>
-        <Label className={labelCls}>预置模板</Label>
+        <Label className={labelCls}>接口类型</Label>
+        <Select value={conn.kind} onValueChange={(v) => setConn({ ...conn, kind: v as Connection['kind'] })}>
+          <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="openai">OpenAI 兼容（/chat/completions）</SelectItem>
+            <SelectItem value="anthropic">Anthropic（/v1/messages）</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div>
+        <Label className={labelCls}>常用端点（可选，点选自动填 Base URL）</Label>
         <div className="flex flex-wrap gap-1">
-          {CONNECTION_TEMPLATES.map((t) => (
+          {CONNECTION_TEMPLATES.filter((t) => t.kind === conn.kind && t.name !== 'Custom').map((t) => (
             <Badge
               key={t.name}
               asChild
@@ -251,21 +264,9 @@ function ConnectionForm({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <Label className={labelCls} htmlFor="conn-name">名称</Label>
-          <Input id="conn-name" value={conn.name} onChange={(e) => setConn({ ...conn, name: e.target.value })} />
-        </div>
-        <div>
-          <Label className={labelCls}>协议</Label>
-          <Select value={conn.kind} onValueChange={(v) => setConn({ ...conn, kind: v as Connection['kind'] })}>
-            <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="openai">OpenAI 兼容</SelectItem>
-              <SelectItem value="anthropic">Anthropic</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+      <div>
+        <Label className={labelCls} htmlFor="conn-name">名称</Label>
+        <Input id="conn-name" value={conn.name} onChange={(e) => setConn({ ...conn, name: e.target.value })} placeholder="给这个连接起个名字" />
       </div>
 
       <div>

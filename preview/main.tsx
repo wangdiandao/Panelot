@@ -8,6 +8,7 @@ import React, { useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import { Markdown } from '../src/ui/components/Markdown';
 import { ToolCallGroup } from '../src/ui/components/ToolCallCard';
+import { SettingsModal } from '../src/ui/settings/SettingsModal';
 import '../src/ui/styles/global.css';
 
 const ASSISTANT_MD = `我已经打开三个商品页并读取了评价，下面是对比：
@@ -72,6 +73,7 @@ function Composer() {
 
 function Preview() {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [settingsOpen, setSettingsOpen] = useState(false);
   React.useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
   }, [theme]);
@@ -104,6 +106,10 @@ function Preview() {
           <button onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-muted-foreground hover:bg-muted hover:text-foreground">
             <span className="opacity-70">⚙</span> 切换主题（预览）
           </button>
+          <button onClick={() => setSettingsOpen(true)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-muted-foreground hover:bg-muted hover:text-foreground">
+            <span className="opacity-70">⚙</span> 设置（预览）
+          </button>
+          <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
         </div>
       </aside>
 

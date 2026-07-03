@@ -42,7 +42,8 @@ export function CommandPalette({ open, onOpenChange, onOpenThread, onNewThread, 
   useEffect(() => {
     if (!open) return;
     void db.threads.orderBy('updatedAt').reverse().limit(50).toArray().then((list) => {
-      setThreads(list.filter((t) => !t.deleting && !t.archived));
+      // Only chats with content are listed (drafts never persist a row).
+      setThreads(list.filter((t) => !t.deleting && !t.archived && t.leafId !== null));
     });
   }, [open]);
 

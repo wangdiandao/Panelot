@@ -1,6 +1,13 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
+/* Explicit content sources: WXT and the preview harness run Vite with
+ * different roots, so auto-detection alone misses files outside the root.
+ * Paths are relative to this stylesheet. */
+@source '../../../src';
+@source '../../../entrypoints';
+@source '../../../preview';
+
 @custom-variant dark (&:is(.dark *));
 
 /*

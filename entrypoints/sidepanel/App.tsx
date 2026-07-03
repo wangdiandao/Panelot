@@ -54,7 +54,7 @@ export function App() {
         setPaletteOpen((v) => !v);
       } else if (mod && e.key.toLowerCase() === 'n') {
         e.preventDefault();
-        session.createThread();
+        session.startDraft();
       } else if (mod && e.key.toLowerCase() === 'e') {
         // Ctrl/Cmd+E: expand to the full-page form (docs/09 §6).
         e.preventDefault();
@@ -74,10 +74,11 @@ export function App() {
   useEffect(() => {
     checkProvider();
     void db.threads.orderBy('updatedAt').reverse().limit(20).toArray().then((list) => {
-      const live = list.filter((t) => !t.deleting && !t.archived);
+      // Only chats with content are listed (drafts never persist a row).
+      const live = list.filter((t) => !t.deleting && !t.archived && t.leafId !== null);
       setThreads(live);
       if (live[0] && !session.store.getState().threadId) session.openThread(live[0].id);
-      else if (!live[0]) session.createThread();
+      else if (!live[0]) session.startDraft();
     });
   }, [session]);
 
@@ -142,7 +143,7 @@ export function App() {
           const threadId = session.store.getState().threadId;
           void chrome.tabs.create({ url: chrome.runtime.getURL(`/chat.html${threadId ? `?thread=${threadId}` : ''}`) });
         })}
-        {iconButton('新会话', Plus, () => session.createThread())}
+        {iconButton('新会话', Plus, () => session.startDraft())}
         {iconButton('设置', Settings, () => setSettingsOpen(true))}
       </header>
 
@@ -178,7 +179,7 @@ export function App() {
         open={paletteOpen}
         onOpenChange={setPaletteOpen}
         onOpenThread={(id) => session.openThread(id)}
-        onNewThread={() => session.createThread()}
+        onNewThread={() => session.startDraft()}
         onOpenSettings={() => setSettingsOpen(true)}
       />
       <ShortcutHelp />

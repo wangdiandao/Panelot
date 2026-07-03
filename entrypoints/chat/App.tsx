@@ -84,7 +84,8 @@ export function App() {
 
   const refreshThreads = () =>
     db.threads.orderBy('updatedAt').reverse().limit(200).toArray().then((list) => {
-      setThreads(list.filter((t) => !t.deleting && !t.archived));
+      // Only chats with content are listed (drafts never persist a row).
+      setThreads(list.filter((t) => !t.deleting && !t.archived && t.leafId !== null));
     });
 
   const checkProvider = () =>
@@ -104,9 +105,9 @@ export function App() {
         return;
       }
       if (fromUrl) history.replaceState(null, '', location.pathname);
-      const recent = await db.threads.orderBy('updatedAt').reverse().first();
-      if (recent && !recent.deleting) session.openThread(recent.id);
-      else session.createThread();
+      const recent = await db.threads.orderBy('updatedAt').reverse().filter((t) => !t.deleting && t.leafId !== null).first();
+      if (recent) session.openThread(recent.id);
+      else session.startDraft();
     });
   }, [session]);
 
@@ -119,7 +120,7 @@ export function App() {
       const mod = e.ctrlKey || e.metaKey;
       if (mod && e.key.toLowerCase() === 'n') {
         e.preventDefault();
-        session.createThread();
+        session.startDraft();
       } else if (mod && e.key === ',') {
         e.preventDefault();
         setSettingsOpen(true);
@@ -145,7 +146,7 @@ export function App() {
     if (!deleting) return;
     await tree.deleteThread(deleting.id);
     await refreshThreads();
-    if (state.threadId === deleting.id) session.createThread();
+    if (state.threadId === deleting.id) session.startDraft();
     setDeleting(null);
   };
   const confirmRename = async () => {
@@ -167,7 +168,7 @@ export function App() {
           <Button
             variant="outline"
             className="w-full justify-start gap-2 text-[13px] font-medium"
-            onClick={() => session.createThread()}
+            onClick={() => session.startDraft()}
           >
             <Plus className="size-4" /> 新会话
           </Button>
@@ -342,7 +343,7 @@ export function App() {
         open={paletteOpen}
         onOpenChange={setPaletteOpen}
         onOpenThread={(id) => session.openThread(id)}
-        onNewThread={() => session.createThread()}
+        onNewThread={() => session.startDraft()}
         onOpenSettings={() => setSettingsOpen(true)}
       />
 
