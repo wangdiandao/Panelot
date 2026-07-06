@@ -1,18 +1,20 @@
 /**
  * Settings-backed ProviderResolver: thread → preset → connection → adapter
- * (docs/03 §1.3-1.5). Also resolves the task model for compaction/titles.
+ * (docs/03 §1.3-1.5). Also resolves the task model for titles.
  */
 
 import { PanelotDB } from '../db/schema';
-import { createAdapter, inferCapabilities } from '../providers/registry';
+import { createAdapter } from '../providers/registry';
 import type { Connection, GenParams, ProviderAdapter } from '../providers/types';
 import { mergeParams } from '../providers/types';
 import { SettingsStore } from '../settings/store';
 import { decryptSecret } from '../settings/crypto';
 import type { ProviderResolver } from './core';
-import type { TaskModelRef } from '../agent/compactionRunner';
 
-const DEFAULT_CONTEXT_WINDOW = 128_000;
+export interface TaskModelRef {
+  provider: ProviderAdapter;
+  model: string;
+}
 
 export class SettingsProviderResolver implements ProviderResolver {
   private adapterCache = new Map<string, ProviderAdapter>();
@@ -40,6 +42,15 @@ export class SettingsProviderResolver implements ProviderResolver {
     }
   }
 
+  /** Global default model, only if its connection still exists and is enabled. */
+  private async usableDefaultModel(): Promise<{ connectionId: string; modelId: string } | undefined> {
+    const { defaultModel } = await SettingsStore.global.get();
+    if (!defaultModel) return undefined;
+    const connections = await SettingsStore.connections.get();
+    const alive = connections.some((c) => c.id === defaultModel.connectionId && c.enabled);
+    return alive ? defaultModel : undefined;
+  }
+
   private async adapterFor(connectionId: string): Promise<ProviderAdapter> {
     const connections = await SettingsStore.connections.get();
     const conn = connections.find((c) => c.id === connectionId && c.enabled);
@@ -59,7 +70,7 @@ export class SettingsProviderResolver implements ProviderResolver {
   async resolve(
     threadId: string,
     override?: { connectionId: string; modelId: string },
-  ): Promise<{ provider: ProviderAdapter; model: string; params: GenParams; contextWindow: number; pricing?: { input: number; output: number; cacheRead?: number } }> {
+  ): Promise<{ provider: ProviderAdapter; model: string; params: GenParams; pricing?: { input: number; output: number; cacheRead?: number } }> {
     let connectionId: string;
     let modelId: string;
     let presetParams: GenParams | undefined;
@@ -67,11 +78,17 @@ export class SettingsProviderResolver implements ProviderResolver {
     if (override) {
       ({ connectionId, modelId } = override);
     } else {
+      // Fallback chain: thread preset (exact match) → global default model →
+      // first preset → first enabled connection's first model.
       const thread = await this.db.threads.get(threadId);
       const presets = await SettingsStore.presets.get();
-      const preset = presets.find((p) => p.id === thread?.preset) ?? presets[0];
-      if (!preset) {
-        // No preset configured: fall back to the first enabled connection's
+      const threadPreset = presets.find((p) => p.id === thread?.preset);
+      const globalDefault = threadPreset ? undefined : await this.usableDefaultModel();
+      const preset = threadPreset ?? (globalDefault ? undefined : presets[0]);
+      if (globalDefault) {
+        ({ connectionId, modelId } = globalDefault);
+      } else if (!preset) {
+        // Nothing configured: fall back to the first enabled connection's
         // first model — manual list first, then live GET /models.
         const connections = await SettingsStore.connections.get();
         const conn = connections.find((c) => c.enabled);
@@ -90,8 +107,7 @@ export class SettingsProviderResolver implements ProviderResolver {
     const provider = await this.adapterFor(connectionId);
     const threadParams = await SettingsStore.threadParams.get(threadId);
     const params = mergeParams(presetParams, threadParams);
-    const contextWindow = inferCapabilities(modelId).maxContext ?? DEFAULT_CONTEXT_WINDOW;
-    return { provider, model: modelId, params, contextWindow };
+    return { provider, model: modelId, params };
   }
 
   /** Task model (docs/03 §1.5) — falls back to the thread's main model. */

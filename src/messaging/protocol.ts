@@ -21,7 +21,7 @@ export type ContentBlock =
 
 /** A context block attached to user input via @-references (page, selection…). */
 export interface ContextBlock {
-  kind: 'page' | 'selection' | 'screenshot' | 'tab' | 'mcp_resource' | 'file';
+  kind: 'page' | 'selection' | 'screenshot' | 'tab' | 'mcp_resource' | 'file' | 'skill';
   /** Human label shown on the chip, e.g. the page title. */
   label: string;
   /** Origin the content came from — drives untrusted-content fencing (docs/10 §4). */
@@ -51,8 +51,15 @@ export interface Usage {
  * When to stop and ask the user.
  * `never` means "auto-DENY anything that would need approval" — it is NOT
  * auto-approve (docs/06 §1, Codex semantic-ambiguity lesson).
+ * Composer-facing tiers (2026-07-05):
+ *  - `always`: EVERY tool call asks, reads included (the one policy where
+ *    reads are gated — implemented as ask, never deny);
+ *  - `untrusted` (default): reads free, writes ask;
+ *  - `auto`: writes auto-allowed; the safety floor (sensitive-origin
+ *    blacklist, sensitive-payload forced ask, rule-table deny/ask) still
+ *    applies — auto is NOT a bypass.
  */
-export type ApprovalPolicy = 'untrusted' | 'on-request' | 'never' | 'granular';
+export type ApprovalPolicy = 'always' | 'untrusted' | 'on-request' | 'never' | 'granular' | 'auto';
 
 /**
  * Hard capability boundary — approval cannot cross it. Blacklist-only model
@@ -87,13 +94,14 @@ export interface ApprovalRequestPayload {
 // ---------------------------------------------------------------------------
 
 export type ItemKind =
+  | 'user_message'
   | 'assistant_message'
   | 'reasoning'
   | 'tool_call'
   | 'approval'
   | 'system_notice';
 
-export type TurnKind = 'user' | 'compaction' | 'title';
+export type TurnKind = 'user' | 'title';
 
 export type StopReason = 'done' | 'interrupted' | 'error' | 'budget_pause';
 
@@ -132,8 +140,6 @@ export interface SnapshotItem {
     | 'tool_call'
     | 'tool_result'
     | 'approval_decision'
-    | 'compaction'
-    | 'branch_summary'
     | 'system_notice';
   ts: number;
   payload: unknown;
@@ -206,6 +212,20 @@ export type Op =
       overrides?: TurnOverrides;
     }
   | {
+      /**
+       * Branch-and-run (docs/02 §3.2 forkAt): append `input` as a SIBLING of
+       * `siblingOfNodeId` and start a turn from there. Regenerate = fork at
+       * the assistant message with its parent user text; edit-and-resend =
+       * fork at the user message with the edited text.
+       */
+      type: 'turn.fork';
+      submissionId: string;
+      threadId: string;
+      siblingOfNodeId: string;
+      input: UserInput;
+      overrides?: TurnOverrides;
+    }
+  | {
       type: 'turn.steer';
       submissionId: string;
       threadId: string;
@@ -221,7 +241,6 @@ export type Op =
       approvalId: string;
       decision: ApprovalDecision;
     }
-  | { type: 'thread.compact'; submissionId: string; threadId: string }
   | { type: 'ping'; submissionId: string };
 
 // ---------------------------------------------------------------------------
@@ -276,8 +295,6 @@ export type AgentEvent =
       turnId: string;
       usage: Usage;
       costUsd?: number;
-      /** 0–100, share of the model context window currently used. */
-      contextPct: number;
     }
 
   // —— item three-phase ——
@@ -291,11 +308,13 @@ export type AgentEvent =
     }
   | {
       type: 'item.delta';
+      threadId: string;
       itemId: string;
       delta: { text?: string; reasoning?: string; toolProgress?: unknown };
     }
   | {
       type: 'item.complete';
+      threadId: string;
       itemId: string;
       result?: { ok: boolean; details?: unknown };
     }
@@ -314,10 +333,20 @@ export type AgentEvent =
   | { type: 'thread.updated'; threadId: string; patch: Partial<ThreadSnapshotMeta> }
   | { type: 'queue.updated'; threadId: string; pending: number }
   | {
-      /** Controlled-tab set changed (docs/05 §6 → task panel, docs/09 §3.1). */
+      /** Agent touched-tab audit trail changed (docs/05 §6 → task panel, docs/09 §3.1). */
       type: 'tabs.updated';
       threadId: string;
       tabs: { tabId: number; title: string; url: string }[];
+    }
+  | {
+      /**
+       * Cross-thread activity signal for the sidebar (docs/09 §3.1 row
+       * indicators). Deliberately has NO top-level threadId — the host's
+       * broadcast filter is thread-scoped, and this event must reach clients
+       * subscribed to OTHER threads (the whole point).
+       */
+      type: 'activity.updated';
+      activity: { threadId: string; running: boolean; pendingApprovals: number };
     };
 
 // ---------------------------------------------------------------------------
@@ -345,11 +374,11 @@ const OP_TYPES = new Set<Op['type']>([
   'thread.fork',
   'thread.selectBranch',
   'turn.submit',
+  'turn.fork',
   'turn.steer',
   'turn.enqueue',
   'turn.interrupt',
   'approval.response',
-  'thread.compact',
   'ping',
 ]);
 

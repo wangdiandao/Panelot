@@ -56,8 +56,6 @@ export type NodeType =
   | 'tool_result'
   | 'approval_decision'
   | 'turn_context'
-  | 'compaction'
-  | 'branch_summary'
   | 'system_notice';
 
 export interface UserMessagePayload {
@@ -108,40 +106,10 @@ export interface TurnContextPayload {
   promptVersion?: string;
 }
 
-/** Cumulative operation trail (docs/04 §5.1). */
-export interface TrackedOps {
-  visitedUrls: string[];
-  mutatedTargets: string[];
-}
-
-/** Compaction checkpoint (docs/02 §4) — prevents compound loss. */
-export interface CompactionPayload {
-  /** Handoff-document style summary. */
-  summary: string;
-  /**
-   * The summary covers [previous compaction's firstKeptNodeId (or root), this
-   * cut point); original messages from this node id onward are kept verbatim.
-   * The NEXT compaction must start its span from THIS id — never from the
-   * compaction node itself — so previously surviving messages get summarized
-   * instead of silently dropped.
-   */
-  firstKeptNodeId: string;
-  tokensBefore: number;
-  tokensAfter: number;
-  /** Cumulative across all compactions — the operation trail never vanishes. */
-  trackedOps: TrackedOps;
-}
-
-export interface BranchSummaryPayload {
-  summary: string;
-  abandonedLeafId: string;
-  commonAncestorId: string;
-}
-
 /** Visible to the user but never enters LLM history. */
 export interface SystemNoticePayload {
   text: string;
-  noticeKind?: 'paused' | 'compacting' | 'step_reminder' | 'recovered' | 'generic';
+  noticeKind?: 'paused' | 'step_reminder' | 'recovered' | 'generic';
 }
 
 export type NodePayload =
@@ -151,8 +119,6 @@ export type NodePayload =
   | ToolResultPayload
   | ApprovalDecisionPayload
   | TurnContextPayload
-  | CompactionPayload
-  | BranchSummaryPayload
   | SystemNoticePayload;
 
 export interface ThreadNode {
@@ -179,7 +145,7 @@ export interface Attachment {
   id: string;
   threadId: string;
   createdAt: number;
-  kind: 'image' | 'file' | 'page_snapshot' | 'screenshot';
+  kind: 'image' | 'file' | 'page_snapshot' | 'screenshot' | 'page_text';
   mime: string;
   bytes: Blob;
   meta?: { url?: string; title?: string; w?: number; h?: number };

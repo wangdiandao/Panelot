@@ -121,9 +121,13 @@ describe('agent loop (docs/04 §2)', () => {
     const stop = await handle.done;
 
     expect(stop).toBe('done');
+    // No engine-side user echo: the optimistic client echo is the single
+    // visible rendering of the user message (double-display regression).
     expect(eventTypes()).toEqual([
       'turn.start', 'item.start', 'item.delta', 'item.delta', 'item.complete', 'token.usage', 'turn.complete',
     ]);
+    const firstItem = events.find((e) => e.type === 'item.start') as { kind: string };
+    expect(firstItem.kind).toBe('assistant_message');
 
     const meta = await tree.getThread(thread.id);
     const ctx = await buildSessionContext(tree, thread.id, meta!.leafId!);
@@ -168,6 +172,85 @@ describe('agent loop (docs/04 §2)', () => {
     const resultMsg = secondReq.messages.find((m) => m.role === 'tool_result')!;
     expect(resultMsg).toMatchObject({ isError: true });
     expect((resultMsg.content[0] as { text: string }).text).toMatch(/element not found/);
+  });
+
+  it('circuit breaker: 3 consecutive failures inject a reminder, 5 stop the turn', async () => {
+    tools.register(makeEchoTool({
+      execute: async () => {
+        throw new Error('element not found');
+      },
+    }));
+    const thread = await tree.createThread({});
+    // Each LLM round returns one failing tool call; round 4 should carry the
+    // failure reminder; after 5 failures the turn stops as 'error'.
+    for (let i = 0; i < 6; i++) {
+      provider.queue({ toolCalls: [{ id: `c${i}`, name: 'echo', params: { text: 'x' } }] });
+    }
+
+    const stop = await runTurn(makeEnv(), thread.id, { text: 'go' }).done;
+    expect(stop).toBe('error');
+
+    // The reminder appears exactly once, in the request AFTER the 3rd failure.
+    const reminderRounds = provider.requests
+      .map((req, i) => ({ i, hit: req.messages.some((m) => m.role === 'user' && m.content.some((c) => c.type === 'text' && c.text.includes('ALL failed'))) }))
+      .filter((r) => r.hit);
+    expect(reminderRounds).toHaveLength(1);
+    expect(reminderRounds[0]!.i).toBe(3);
+    // Stopped after the 5th failure: no more than 6 LLM rounds ran.
+    expect(provider.requests.length).toBeLessThanOrEqual(6);
+
+    // A system notice recorded the stop for the user.
+    const meta = await tree.getThread(thread.id);
+    const ctx = await buildSessionContext(tree, thread.id, meta!.leafId!);
+    const notice = ctx.path.find((n) => n.type === 'system_notice');
+    expect(notice).toBeDefined();
+    expect((notice!.payload as { text: string }).text).toMatch(/连续 5 次/);
+  });
+
+  it('user declines do NOT count toward the circuit breaker (deliberate no ≠ broken tool)', async () => {
+    // A write tool that always ASKs; the user declines every time.
+    tools.register(makeEchoTool({ effects: 'write' }));
+    const askGate: GatekeeperCheck = {
+      check: async () => ({ verdict: 'ask', request: { tool: 'echo', label: 'echo', params: {}, targetOrigin: '', flags: [] } }),
+    };
+    const thread = await tree.createThread({});
+    // 6 declined rounds + a final text round: if declines counted, the turn
+    // would have stopped at 5; it must instead run to completion.
+    for (let i = 0; i < 6; i++) {
+      provider.queue({ toolCalls: [{ id: `c${i}`, name: 'echo', params: { text: 'x' } }] });
+    }
+    provider.queue({ streamText: ['ok, stopping'] });
+
+    const stop = await runTurn(
+      makeEnv({ gatekeeper: askGate, requestApproval: async () => ({ kind: 'decline' }) }),
+      thread.id,
+      { text: 'go' },
+    ).done;
+    expect(stop).toBe('done');
+    // No auto-stop notice was written.
+    const meta = await tree.getThread(thread.id);
+    const ctx = await buildSessionContext(tree, thread.id, meta!.leafId!);
+    expect(ctx.path.some((n) => n.type === 'system_notice' && /连续 5 次/.test((n.payload as { text: string }).text))).toBe(false);
+  });
+
+  it('a success between failures resets the circuit breaker', async () => {
+    let calls = 0;
+    tools.register(makeEchoTool({
+      execute: async (_id, p: { text: string }) => {
+        calls++;
+        if (calls === 3) return { content: [{ type: 'text', text: `echo: ${p.text}` }] };
+        throw new Error('flaky');
+      },
+    }));
+    const thread = await tree.createThread({});
+    for (let i = 0; i < 4; i++) {
+      provider.queue({ toolCalls: [{ id: `c${i}`, name: 'echo', params: { text: 'x' } }] });
+    }
+    provider.queue({ streamText: ['done'] });
+
+    const stop = await runTurn(makeEnv(), thread.id, { text: 'go' }).done;
+    // 2 fails, 1 success (reset), 1 fail → never hits 5; turn completes.
+    expect(stop).toBe('done');
   });
 
   it('returns zod validation errors to the model (not thrown at user)', async () => {
@@ -341,7 +424,7 @@ describe('steering & interrupt (docs/04 §3)', () => {
   it('non-user turns are not steerable', async () => {
     const thread = await tree.createThread({});
     provider.queue({ streamText: ['summary'] });
-    const handle = runTurn(makeEnv(), thread.id, { text: 'compact' }, 'compaction');
+    const handle = runTurn(makeEnv(), thread.id, { text: 'title' }, 'title');
     expect(handle.steerable).toBe(false);
     expect(() => handle.steer({ text: 'x' })).toThrow(/not steerable/);
     await handle.done;

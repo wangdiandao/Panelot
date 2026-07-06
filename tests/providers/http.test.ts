@@ -93,7 +93,7 @@ describe('key failover (docs/03 §8, sticky + failover)', () => {
     expect(delays).toEqual([7000]);
   });
 
-  it('does not retry context_too_long (compaction is the caller`s job)', async () => {
+  it('does not retry context_too_long (not a transient failure)', async () => {
     const keys = createKeyRing(['k']);
     const attempt = vi.fn().mockRejectedValue(new ProviderError('context_too_long', 'too long'));
     await expect(withRetry(keys, attempt, { sleep: noSleep })).rejects.toMatchObject({ kind: 'context_too_long' });

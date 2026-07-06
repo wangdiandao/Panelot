@@ -7,19 +7,13 @@
  *
  * Output shape:
  *  1. Walk leaf → root (tombstones skipped), reverse to linear order.
- *  2. If a compaction node C exists, emit C.summary as a synthetic assistant
- *     message and keep only nodes from C.firstKeptNodeId onward — byte-for-byte
- *     the same history the compacting model saw (docs/04 §5.3).
- *  3. branch_summary nodes become in-place summary messages.
- *  4. system_notice nodes never enter LLM history (UI-only).
+ *  2. system_notice nodes never enter LLM history (UI-only).
  */
 
 import type { ContentBlock } from '../messaging/protocol';
 import type { ThreadTree } from './tree';
 import type {
   AssistantMessagePayload,
-  BranchSummaryPayload,
-  CompactionPayload,
   ThreadNode,
   ToolCallPayload,
   ToolResultPayload,
@@ -40,12 +34,10 @@ export interface UnifiedToolCall {
 }
 
 export interface SessionContext {
-  /** Linear message sequence for the LLM (post-compaction view). */
+  /** Linear message sequence for the LLM. */
   messages: UnifiedMessage[];
   /** Latest turn_context on the path — restores model/permissions on replay. */
   turnContext: TurnContextPayload | null;
-  /** Latest compaction on the path, if any (for trackedOps continuation). */
-  lastCompaction: CompactionPayload | null;
   /** Full node path (root-first, tombstones removed) for UI/snapshot use. */
   path: ThreadNode[];
 }
@@ -57,44 +49,22 @@ export async function buildSessionContext(
 ): Promise<SessionContext> {
   const path = await tree.getPath(threadId, leafId);
 
-  // Find last compaction & last turn_context.
-  let lastCompactionIdx = -1;
+  // Find the last turn_context.
   let turnContext: TurnContextPayload | null = null;
   for (let i = path.length - 1; i >= 0; i--) {
     const node = path[i]!;
-    if (lastCompactionIdx === -1 && node.type === 'compaction') lastCompactionIdx = i;
-    if (turnContext === null && node.type === 'turn_context') {
+    if (node.type === 'turn_context') {
       turnContext = node.payload as TurnContextPayload;
+      break;
     }
-    if (lastCompactionIdx !== -1 && turnContext !== null) break;
   }
 
   const messages: UnifiedMessage[] = [];
-  let lastCompaction: CompactionPayload | null = null;
-  let startIdx = 0;
-
-  if (lastCompactionIdx !== -1) {
-    lastCompaction = path[lastCompactionIdx]!.payload as CompactionPayload;
-    messages.push({
-      role: 'assistant',
-      content: [{ type: 'text', text: `[Context summary]\n${lastCompaction.summary}` }],
-    });
-    // Keep original messages from firstKeptNodeId onward. The kept node may
-    // precede the compaction node in the path (the cut point is historical).
-    const keptIdx = path.findIndex((n) => n.id === lastCompaction!.firstKeptNodeId);
-    startIdx = keptIdx !== -1 ? keptIdx : lastCompactionIdx + 1;
-  }
-
-  for (let i = startIdx; i < path.length; i++) {
-    const node = path[i]!;
-    // Nodes between the historical cut point and the compaction node are the
-    // "kept" originals; the compaction node itself and system notices are not
-    // LLM content.
-    if (i === lastCompactionIdx) continue;
+  for (const node of path) {
     appendNodeAsMessage(messages, node);
   }
 
-  return { messages, turnContext, lastCompaction, path };
+  return { messages, turnContext, path };
 }
 
 function appendNodeAsMessage(messages: UnifiedMessage[], node: ThreadNode): void {
@@ -137,19 +107,9 @@ function appendNodeAsMessage(messages: UnifiedMessage[], node: ThreadNode): void
       });
       break;
     }
-    case 'branch_summary': {
-      const p = node.payload as BranchSummaryPayload;
-      messages.push({
-        role: 'assistant',
-        content: [{ type: 'text', text: `[Abandoned branch summary]\n${p.summary}` }],
-      });
-      break;
-    }
-    // turn_context / approval_decision / compaction / system_notice:
-    // metadata, not LLM messages.
+    // turn_context / approval_decision / system_notice: metadata, not LLM messages.
     case 'turn_context':
     case 'approval_decision':
-    case 'compaction':
     case 'system_notice':
       break;
   }

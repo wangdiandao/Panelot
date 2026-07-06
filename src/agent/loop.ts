@@ -2,8 +2,7 @@
  * The agent loop (docs/04 §2) — Pi Agent's minimal kernel wrapped in Codex's
  * safety shell. The loop itself stays small: iterate until the model stops
  * calling tools. Steps are a soft reminder (25 calls → notice), token budget
- * is the only hard gate. All complexity lives outside (Gatekeeper, UI,
- * compaction).
+ * is the only hard gate. All complexity lives outside (Gatekeeper, UI).
  */
 
 import type { ThreadTree } from '../db/tree';
@@ -12,7 +11,7 @@ import type { UserInput, AgentEvent, ApprovalRequestPayload, ApprovalDecision, T
 import type { ProviderAdapter, GenParams, ToolSchema } from '../providers/types';
 import { ProviderError } from '../providers/types';
 import { validateParams, type ToolRegistry } from './tool';
-import { STEP_REMINDER } from '../prompts/kernel';
+import { CONSECUTIVE_FAILURE_REMIND, CONSECUTIVE_FAILURE_STOP, FAILURE_REMINDER, HARD_STEP_LIMIT, HARD_STEP_NOTICE, STEP_REMINDER, STUCK_REMINDER } from '../prompts/kernel';
 
 // ---------------------------------------------------------------------------
 // Collaborator interfaces (wired by EngineCore; mockable in tests)
@@ -47,8 +46,6 @@ export interface TurnEnv {
   enabledToolLevels?: readonly ('L0' | 'L1' | 'L2' | 'mcp')[];
   /** Optional hard token budget for the turn (docs/04 §1). */
   tokenBudget?: number;
-  /** Called before each LLM call so the engine can auto-compact (docs/04 §5). */
-  maybeCompact?: (threadId: string) => Promise<void>;
 }
 
 export interface TurnHandle {
@@ -110,14 +107,22 @@ export function runTurn(
 
       let toolCallCount = 0;
       let stepReminderPending = false;
+      let failureReminderPending = false;
+      let stuckReminderPending = false;
+      let consecutiveFailures = 0; // circuit breaker (browser-use max_failures)
       let turnTokens = 0;
+      // Stuck-loop detection (page-agent reflection pattern): track a rolling
+      // window of the last N tool+params fingerprints. If the same call repeats
+      // STUCK_REPEAT_THRESHOLD times consecutively, inject a reminder.
+      const recentCalls: string[] = [];
+      const STUCK_WINDOW = 6;
+      const STUCK_REPEAT_THRESHOLD = 3;
 
       loop: for (;;) {
         if (abort.signal.aborted) {
           stopReason = 'interrupted';
           break;
         }
-        await env.maybeCompact?.(threadId);
 
         const thread = await env.tree.getThread(threadId);
         const ctx = await buildSessionContext(env.tree, threadId, thread!.leafId!);
@@ -125,6 +130,14 @@ export function runTurn(
         if (stepReminderPending) {
           messages.push({ role: 'user', content: [{ type: 'text', text: STEP_REMINDER }] });
           stepReminderPending = false;
+        }
+        if (failureReminderPending) {
+          messages.push({ role: 'user', content: [{ type: 'text', text: FAILURE_REMINDER }] });
+          failureReminderPending = false;
+        }
+        if (stuckReminderPending) {
+          messages.push({ role: 'user', content: [{ type: 'text', text: STUCK_REMINDER }] });
+          stuckReminderPending = false;
         }
 
         // ---- one LLM call ----------------------------------------------------
@@ -144,21 +157,15 @@ export function runTurn(
         let final;
         try {
           for await (const ev of stream) {
-            if (ev.type === 'text') env.emit({ type: 'item.delta', itemId, delta: { text: ev.delta } });
-            else if (ev.type === 'reasoning') env.emit({ type: 'item.delta', itemId, delta: { reasoning: ev.delta } });
+            if (ev.type === 'text') env.emit({ type: 'item.delta', threadId, itemId, delta: { text: ev.delta } });
+            else if (ev.type === 'reasoning') env.emit({ type: 'item.delta', threadId, itemId, delta: { reasoning: ev.delta } });
           }
           final = await stream.final();
         } catch (e) {
           if (abort.signal.aborted || (e instanceof DOMException && e.name === 'AbortError')) {
             stopReason = 'interrupted';
-            env.emit({ type: 'item.complete', itemId, result: { ok: false } });
+            env.emit({ type: 'item.complete', threadId, itemId, result: { ok: false } });
             break;
-          }
-          if (e instanceof ProviderError && e.kind === 'context_too_long' && env.maybeCompact) {
-            // Force compaction and retry once (docs/03 §7).
-            await env.maybeCompact(threadId);
-            env.emit({ type: 'item.complete', itemId, result: { ok: false } });
-            continue;
           }
           throw e;
         }
@@ -173,17 +180,14 @@ export function runTurn(
             usage: final.usage,
           },
         });
-        env.emit({ type: 'item.complete', itemId, result: { ok: true } });
+        env.emit({ type: 'item.complete', threadId, itemId, result: { ok: true } });
         turnTokens += final.usage.input + final.usage.output;
-        env.emit({
-          type: 'token.usage',
-          threadId,
-          turnId,
-          usage: final.usage,
-          contextPct: 0, // engine layer fills this in with model context data
-        });
+        env.emit({ type: 'token.usage', threadId, turnId, usage: final.usage });
 
         // Steering: consume queued interjections after the LLM call (docs/04 §3).
+        // The optimistic client echo is the single visible rendering until
+        // the turn-complete snapshot supersedes it — no engine-side echo, or
+        // the message would show twice.
         for (const steerInput of steerQueue.splice(0)) {
           await env.tree.appendNode(threadId, {
             type: 'user_message',
@@ -205,9 +209,35 @@ export function runTurn(
             stopReason = 'interrupted';
             break loop;
           }
+          // Evaluated lazily at the next tool call (not the instant the Nth
+          // failure lands): the 3-failure reminder is queued and consumed at
+          // the next LLM round FIRST, so the model always gets one chance to
+          // change course before this hard-stops the turn. Don't add a stop
+          // check between queuing the reminder and the next LLM call.
+          if (consecutiveFailures >= CONSECUTIVE_FAILURE_STOP) {
+            await env.tree.appendNode(threadId, {
+              type: 'system_notice',
+              payload: { text: `连续 ${CONSECUTIVE_FAILURE_STOP} 次工具调用失败，任务已停止。请检查页面状态或换一种方式继续。`, noticeKind: 'paused' },
+            });
+            stopReason = 'error';
+            break loop;
+          }
 
           const callItemId = call.id;
           toolCallCount++;
+
+          // Hard step ceiling (page-agent max_steps). Emit a notice then break
+          // so the model can write a wrap-up message in the NEXT LLM call, which
+          // fires without tools and exits cleanly.
+          if (toolCallCount > HARD_STEP_LIMIT) {
+            await env.tree.appendNode(threadId, {
+              type: 'system_notice',
+              payload: { text: HARD_STEP_NOTICE, noticeKind: 'paused' },
+            });
+            stopReason = 'budget_pause';
+            break loop;
+          }
+
           if (toolCallCount === SOFT_STEP_LIMIT) {
             stepReminderPending = true;
             await env.tree.appendNode(threadId, {
@@ -227,12 +257,20 @@ export function runTurn(
             payload: { itemId: callItemId, toolName: call.name, params: call.params, level: tool?.level ?? 'builtin' },
           });
 
-          const fail = async (error: string) => {
+          // countsAsFailure=false for user declines / policy denies: those are
+          // deliberate "no", not a broken tool. Counting them would let 5
+          // declines (or a `never` policy) kill an otherwise-fine turn.
+          const fail = async (error: string, countsAsFailure = true) => {
             await env.tree.appendNode(threadId, {
               type: 'tool_result',
               payload: { itemId: callItemId, ok: false, contentForLlm: [{ type: 'text', text: error }] },
             });
-            env.emit({ type: 'item.complete', itemId: callItemId, result: { ok: false } });
+            env.emit({ type: 'item.complete', threadId, itemId: callItemId, result: { ok: false } });
+            if (!countsAsFailure) return;
+            // Circuit breaker: 3 consecutive failures → one-shot reminder to
+            // change approach; 5 → stop the turn instead of looping forever.
+            consecutiveFailures++;
+            if (consecutiveFailures === CONSECUTIVE_FAILURE_REMIND) failureReminderPending = true;
           };
 
           if (call.parseError) {
@@ -255,7 +293,7 @@ export function runTurn(
             threadId,
           );
           if (verdictResult.verdict === 'deny') {
-            await fail(`Action denied by policy: ${verdictResult.reason}`);
+            await fail(`Action denied by policy: ${verdictResult.reason}`, false);
             continue;
           }
           if (verdictResult.verdict === 'ask') {
@@ -266,7 +304,7 @@ export function runTurn(
             });
             if (decision.kind === 'decline' || decision.kind === 'cancel') {
               const note = decision.kind === 'decline' && decision.note ? ` User said: ${decision.note}` : '';
-              await fail(`The user declined this action.${note} Do not retry it verbatim — adapt or ask.`);
+              await fail(`The user declined this action.${note} Do not retry it verbatim — adapt or ask.`, false);
               if (decision.kind === 'cancel') {
                 stopReason = 'interrupted';
                 break loop;
@@ -280,13 +318,25 @@ export function runTurn(
               callItemId,
               validation.params as never,
               abort.signal,
-              (partial) => env.emit({ type: 'item.delta', itemId: callItemId, delta: { toolProgress: partial } }),
+              (partial) => env.emit({ type: 'item.delta', threadId, itemId: callItemId, delta: { toolProgress: partial } }),
             );
             await env.tree.appendNode(threadId, {
               type: 'tool_result',
               payload: { itemId: callItemId, ok: true, contentForLlm: result.content, details: result.details },
             });
-            env.emit({ type: 'item.complete', itemId: callItemId, result: { ok: true, details: result.details } });
+            env.emit({ type: 'item.complete', threadId, itemId: callItemId, result: { ok: true, details: result.details } });
+            consecutiveFailures = 0;
+            // Stuck-loop detection (page-agent reflection pattern): fingerprint
+            // every successful call. If the same tool+params hash appears
+            // STUCK_REPEAT_THRESHOLD times in the last STUCK_WINDOW calls,
+            // queue a reminder so the model reassesses before the next LLM call.
+            const fp = `${call.name}:${JSON.stringify(call.params)}`;
+            recentCalls.push(fp);
+            if (recentCalls.length > STUCK_WINDOW) recentCalls.shift();
+            const repeats = recentCalls.filter((x) => x === fp).length;
+            if (repeats >= STUCK_REPEAT_THRESHOLD && !stuckReminderPending) {
+              stuckReminderPending = true;
+            }
           } catch (e) {
             if (abort.signal.aborted) {
               stopReason = 'interrupted';

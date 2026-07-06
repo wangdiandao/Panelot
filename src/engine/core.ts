@@ -8,6 +8,7 @@ import type {
   AgentEvent,
   ApprovalDecision,
   ApprovalRequestPayload,
+  ContextBlock,
   Op,
   PendingApproval,
   SnapshotItem,
@@ -20,7 +21,6 @@ import { ThreadTree } from '../db/tree';
 import { buildSessionContext } from '../db/sessionContext';
 import { runTurn, type GatekeeperCheck, type TurnEnv, type TurnHandle } from '../agent/loop';
 import { ToolRegistry } from '../agent/tool';
-import type { CompactionRunner } from '../agent/compactionRunner';
 import { assembleSystemPrompt, type AssembleOptions } from '../prompts/assemble';
 import type { ProviderAdapter, GenParams } from '../providers/types';
 
@@ -33,10 +33,11 @@ export interface ProviderResolver {
     provider: ProviderAdapter;
     model: string;
     params: GenParams;
-    contextWindow: number;
     /** $/Mtok, for cost accounting (docs/03 §1.2). */
     pricing?: { input: number; output: number; cacheRead?: number };
   }>;
+  /** Task model for titles (docs/03 §1.5); falls back to the thread's main model. */
+  resolveTaskModel?(fallbackThreadId: string): Promise<{ provider: ProviderAdapter; model: string }>;
 }
 
 interface ActiveTurn {
@@ -58,12 +59,15 @@ export class RealEngineCore {
   >();
   /** Broadcast sink, wired by the host. */
   onBroadcast: (ev: AgentEvent) => void = () => {};
-  /** Optional compaction runner (wired at startup; absent in minimal tests). */
-  compaction: CompactionRunner | null = null;
   /** Called after an approval decision to apply its side effects (docs/06 §4). */
   onApprovalDecision?: (threadId: string, tool: string, targetOrigin: string, decision: ApprovalDecision) => Promise<void>;
-  /** Most recent context token estimate per thread (from usage events). */
-  private lastContextTokens = new Map<string, number>();
+  /** Per-turn approval-policy override → gatekeeper thread config (docs/06 §1). */
+  onPermissionOverride?: (threadId: string, approvalPolicy: NonNullable<TurnOverrides['approvalPolicy']>) => void;
+  /**
+   * Slash-command hook (docs/08): "/skill-name …" resolves to a context block
+   * carrying the skill body, attached to the user message. Null = plain text.
+   */
+  resolveSlashCommand?: (text: string) => Promise<ContextBlock | null>;
 
   constructor(
     private db: PanelotDB,
@@ -84,6 +88,22 @@ export class RealEngineCore {
     return 'threadId' in op ? (op as { threadId: string }).threadId : null;
   }
 
+  /**
+   * Cross-thread activity broadcast (docs/09 §3.1 sidebar indicators) — the
+   * event intentionally carries no top-level threadId so the host's
+   * thread-scoped broadcast filter lets it reach every client.
+   */
+  private broadcastActivity(threadId: string): void {
+    let pendingApprovals = 0;
+    for (const p of this.pendingApprovals.values()) {
+      if (p.threadId === threadId) pendingApprovals++;
+    }
+    this.onBroadcast({
+      type: 'activity.updated',
+      activity: { threadId, running: this.activeTurns.has(threadId), pendingApprovals },
+    });
+  }
+
   // -------------------------------------------------------------------------
   // Op dispatch
   // -------------------------------------------------------------------------
@@ -97,6 +117,24 @@ export class RealEngineCore {
       }
       case 'turn.submit':
         return this.handleSubmit(op, emit);
+      case 'turn.fork': {
+        // Branch-and-run (docs/02 §3.2): reposition leafId to the anchor's
+        // parent so the turn's user message appends as a SIBLING branch.
+        // Busy threads reject rather than enqueue — a queued fork would
+        // reposition the cursor under a moving tree.
+        if (this.activeTurns.has(op.threadId)) {
+          emit({ type: 'error', submissionId: op.submissionId, code: 'turn_mismatch', message: 'cannot fork while a turn is active', retryable: true });
+          return;
+        }
+        try {
+          await this.tree.repositionLeafForFork(op.threadId, op.siblingOfNodeId);
+        } catch (e) {
+          emit({ type: 'error', submissionId: op.submissionId, code: 'thread_not_found', message: (e as Error).message, retryable: false });
+          return;
+        }
+        await this.startTurn(op.threadId, op.input, op.overrides);
+        return;
+      }
       case 'turn.steer': {
         const active = this.activeTurns.get(op.threadId);
         if (!active) {
@@ -140,6 +178,7 @@ export class RealEngineCore {
           // session/site grants) before resolving so the next check sees them.
           await this.onApprovalDecision?.(pending.threadId, pending.request.tool, pending.request.targetOrigin, op.decision);
           pending.resolve(op.decision);
+          this.broadcastActivity(pending.threadId);
         }
         return;
       }
@@ -165,14 +204,6 @@ export class RealEngineCore {
           return;
         }
         this.onBroadcast({ type: 'thread.updated', threadId: op.threadId, patch: {} });
-        return;
-      }
-      case 'thread.compact': {
-        if (!this.compaction) {
-          emit({ type: 'error', submissionId: op.submissionId, code: 'not_configured', message: 'compaction not available', retryable: false });
-          return;
-        }
-        await this.compaction.compact(op.threadId);
         return;
       }
       default:
@@ -206,6 +237,16 @@ export class RealEngineCore {
     input: UserInput,
     overrides?: TurnOverrides,
   ): Promise<void> {
+    // Sticky per-session permission tier from the composer switch: applied
+    // before the turn so every gate check this turn sees it.
+    if (overrides?.approvalPolicy) this.onPermissionOverride?.(threadId, overrides.approvalPolicy);
+    // Slash-command activation: attach the matched skill body to the message.
+    if (this.resolveSlashCommand && /^\s*\//.test(input.text)) {
+      try {
+        const block = await this.resolveSlashCommand(input.text);
+        if (block) input = { ...input, attachedContext: [...(input.attachedContext ?? []), block] };
+      } catch { /* unresolved command → send as plain text */ }
+    }
     const resolved = await this.providers.resolve(threadId, overrides?.model);
     const promptOpts = await this.promptOptions();
     const systemPrompt = assembleSystemPrompt(promptOpts);
@@ -217,19 +258,13 @@ export class RealEngineCore {
       requestApproval: (turnId, request) => this.requestApproval(threadId, turnId, request),
       emit: (ev) => {
         if (ev.type === 'token.usage') {
-          const contextTokens = ev.usage.input + ev.usage.output + (ev.usage.cacheRead ?? 0);
-          this.lastContextTokens.set(threadId, contextTokens);
           // Cost from pricing ($/Mtok), if the resolver supplied it (docs/03 §1.2).
           const pricing = resolved.pricing;
           const costUsd = pricing
             ? (ev.usage.input * pricing.input + ev.usage.output * pricing.output +
                (ev.usage.cacheRead ?? 0) * (pricing.cacheRead ?? pricing.input)) / 1_000_000
             : undefined;
-          ev = {
-            ...ev,
-            costUsd,
-            contextPct: Math.min(100, Math.round((contextTokens / resolved.contextWindow) * 100)),
-          };
+          ev = { ...ev, costUsd };
           // Accumulate into thread.stats for the session list (docs/02 §2.1).
           const addedTokens = ev.usage.input + ev.usage.output;
           void this.tree.getThread(threadId).then((t) => {
@@ -250,21 +285,18 @@ export class RealEngineCore {
       systemPrompt,
       params: resolved.params,
       enabledToolLevels: overrides?.enabledToolLevels,
-      maybeCompact: this.compaction
-        ? (tid) =>
-            this.compaction!.maybeCompact(
-              tid,
-              this.lastContextTokens.get(tid) ?? 0,
-              resolved.contextWindow,
-            )
-        : undefined,
     };
 
     const handle = runTurn(env, threadId, input);
     this.activeTurns.set(threadId, { handle, threadId });
+    this.broadcastActivity(threadId);
     void this.tree.getThread(threadId).then((t) => {
       if (t) void this.tree.updateThread(threadId, { stats: { ...t.stats, turns: t.stats.turns + 1 } });
     });
+    // Title generation runs in parallel with the turn (ChatGPT semantics):
+    // the list shows a name seconds after the first message, not minutes
+    // later when a long agent turn finally completes.
+    void this.generateTitle(threadId, input);
 
     void handle.done.finally(() => {
       this.activeTurns.delete(threadId);
@@ -275,7 +307,7 @@ export class RealEngineCore {
           this.pendingApprovals.delete(id);
         }
       }
-      void this.scheduleTaskModelJobs(threadId);
+      this.broadcastActivity(threadId);
       void this.drainQueue(threadId);
     });
   }
@@ -309,28 +341,46 @@ export class RealEngineCore {
   }
 
   // -------------------------------------------------------------------------
-  // Task-model jobs: title generation (docs/03 §1.5, docs/10 §5.3)
+  // Title generation (docs/03 §1.5, docs/10 §5.3) — fired at turn start from
+  // the first user message, in parallel with the turn itself
   // -------------------------------------------------------------------------
 
-  private async scheduleTaskModelJobs(threadId: string): Promise<void> {
+  private async setTitle(threadId: string, title: string): Promise<void> {
+    await this.tree.updateThread(threadId, { title });
+    this.onBroadcast({ type: 'thread.updated', threadId, patch: { title } });
+  }
+
+  /**
+   * Two-stage titling (OpenWebUI semantics): the list shows a truncated
+   * first-message title instantly, then the task model upgrades it. The
+   * fallback survives even when the LLM call fails or no provider exists.
+   */
+  private async generateTitle(threadId: string, input: UserInput): Promise<void> {
     try {
       const thread = await this.tree.getThread(threadId);
-      if (!thread || thread.title || !thread.leafId) return; // title only generated once
-      const ctx = await buildSessionContext(this.tree, threadId, thread.leafId);
-      const firstExchange = ctx.messages
-        .slice(0, 4)
-        .map((m) => m.content.map((c) => (c.type === 'text' ? c.text : '')).join(' '))
-        .join('\n')
-        .slice(0, 2000);
-      if (!firstExchange.trim()) return;
+      if (!thread || thread.title) return; // title only generated once
+      // Empty text with attached context (attach-page-and-send): title from
+      // the first attachment's label instead of leaving 未命名会话.
+      const excerpt = (input.text.trim() || input.attachedContext?.[0]?.label || '').slice(0, 2000);
+      if (!excerpt) return;
 
-      const { provider, model, params } = await this.providers.resolve(threadId);
+      // Stage 1 — instant fallback: first line of the message, truncated.
+      const fallback = excerpt.split('\n')[0]!.slice(0, 40);
+      await this.setTitle(threadId, fallback);
+
+      // Stage 2 — LLM title via the task model (docs/03 §1.5).
+      const { provider, model } = this.providers.resolveTaskModel
+        ? await this.providers.resolveTaskModel(threadId)
+        : await this.providers.resolve(threadId);
+      // maxTokens must leave room for reasoning models (DeepSeek etc.) that
+      // spend tokens on reasoning_content BEFORE any text — 30 tokens starved
+      // the title to empty. Text output is still ~6 words; cost is negligible.
       const stream = provider.stream({
-        messages: [{ role: 'user', content: [{ type: 'text', text: `${firstExchange}\n\n---\nGenerate a title for this conversation: ≤6 words, user's language, no punctuation, name the task not the tool. Reply with the title only.` }] }],
+        messages: [{ role: 'user', content: [{ type: 'text', text: `${excerpt}\n\n---\nGenerate a title for this conversation: ≤6 words, user's language, no punctuation, name the task not the tool. Reply with the title only.` }] }],
         tools: [],
-        params: { ...params, maxTokens: 30 },
+        params: { maxTokens: 512 },
         model,
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(20_000),
       });
       const final = await stream.final();
       const title = final.message
@@ -340,10 +390,9 @@ export class RealEngineCore {
         .replace(/^["'「]|["'」]$/g, '')
         .slice(0, 60);
       if (!title) return;
-      await this.tree.updateThread(threadId, { title });
-      this.onBroadcast({ type: 'thread.updated', threadId, patch: { title } });
+      await this.setTitle(threadId, title);
     } catch {
-      // Title generation is best-effort — never surfaces errors.
+      // Best-effort: the fallback title (if set) remains; errors never surface.
     }
   }
 
@@ -361,6 +410,7 @@ export class RealEngineCore {
       const timer = setTimeout(() => {
         // Timeout → decline (docs/06 §4).
         this.pendingApprovals.delete(approvalId);
+        this.broadcastActivity(threadId);
         resolve({ kind: 'decline', note: 'approval timed out after 5 minutes' });
       }, APPROVAL_TIMEOUT_MS);
       this.pendingApprovals.set(approvalId, {
@@ -372,6 +422,7 @@ export class RealEngineCore {
         timer,
       });
       this.onBroadcast({ type: 'approval.request', threadId, turnId, approvalId, request });
+      this.broadcastActivity(threadId);
     });
   }
 
@@ -389,7 +440,11 @@ export class RealEngineCore {
       const ctx = await buildSessionContext(this.tree, threadId, leafId);
       for (const node of ctx.path) {
         if (node.type === 'turn_context') continue;
-        const siblings = await this.tree.getSiblings(threadId, node.id);
+        // Branch counters use LOGICAL siblings (turn_context is invisible
+        // structure — a fork's branch physically hangs under its own
+        // turn_context node); only message nodes can branch.
+        const branchable = node.type === 'user_message' || node.type === 'assistant_message';
+        const siblings = branchable ? await this.tree.getLogicalSiblings(threadId, node.id) : [];
         items.push({
           nodeId: node.id,
           kind: node.type as SnapshotItem['kind'],

@@ -9,8 +9,10 @@
 import type { Connection, ModelPreset, GenParams } from '../providers/types';
 
 export interface GlobalSettings {
-  /** Task model for titles/compaction/suggestions (docs/03 §1.5). */
+  /** Task model for titles/suggestions (docs/03 §1.5). */
   taskModel?: { connectionId: string; modelId: string };
+  /** Global default chat model — used when a thread has no preset/override. */
+  defaultModel?: { connectionId: string; modelId: string };
   userGlobalPrompt?: string;
   language?: 'zh-CN' | 'en';
   theme?: 'system' | 'light' | 'dark';
@@ -19,6 +21,12 @@ export interface GlobalSettings {
   defaultCapabilityScope?: string;
   /** Optional hard token budget per turn. */
   turnTokenBudget?: number;
+  /** Full-page thread sidebar width in px (user-resizable, docs/09 §3.1). */
+  sidebarWidth?: number;
+  /** Full-page thread sidebar collapsed to the icon rail. */
+  sidebarCollapsed?: boolean;
+  /** Collapsed time-group ids in the thread sidebar. */
+  sidebarGroupsCollapsed?: string[];
 }
 
 const memoryStore = new Map<string, unknown>();
@@ -67,6 +75,11 @@ export const SettingsStore = {
     get: () => storageGet<GlobalSettings>('global_settings', {}),
     set: (v: GlobalSettings) => storageSet('global_settings', v),
   },
+  /** Last model the user picked in the selector — new chats reuse it. */
+  lastModel: {
+    get: () => storageGet<{ connectionId: string; modelId: string } | null>('last_model', null),
+    set: (v: { connectionId: string; modelId: string } | null) => storageSet('last_model', v),
+  },
   /** Per-thread param overrides layer onto preset params (docs/03 §1.4). */
   threadParams: {
     get: (threadId: string) => storageGet<GenParams>(`thread_params:${threadId}`, {}),
@@ -76,5 +89,13 @@ export const SettingsStore = {
   sitePrompts: {
     get: () => storageGet<{ pattern: string; prompt: string }[]>('site_prompts', []),
     set: (v: { pattern: string; prompt: string }[]) => storageSet('site_prompts', v),
+  },
+  /**
+   * Per-thread last-seen timestamps for the sidebar unread indicator.
+   * UI-side map — deliberately NOT a ThreadMeta field (no DB migration).
+   */
+  threadSeen: {
+    get: () => storageGet<Record<string, number>>('thread_seen', {}),
+    set: (v: Record<string, number>) => storageSet('thread_seen', v),
   },
 };

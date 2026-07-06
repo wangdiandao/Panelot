@@ -109,7 +109,7 @@ function buildEngine(dbInstance?: PanelotDB) {
   provider = provider ?? new MockProvider();
   tools = new ToolRegistry();
   const resolver: ProviderResolver = {
-    resolve: async () => ({ provider, model: 'mock', params: {}, contextWindow: 128_000 }),
+    resolve: async () => ({ provider, model: 'mock', params: {} }),
   };
   const core = new RealEngineCore(db, tools, allowAll, resolver);
   const host = new EngineHost(core);
@@ -159,7 +159,11 @@ describe('engine integration (Op → events → DB)', () => {
     client.post({ type: 'turn.submit', threadId, input: { text: 'hi' } });
     await client.waitFor('turn.complete');
 
-    // Deltas were coalesced (16ms window) but content is intact.
+    // Deltas were coalesced (16ms window) but content is intact. The user
+    // message renders via the client-side optimistic echo — the engine emits
+    // no user item (that echoed the message twice).
+    const starts = client.events.filter((e) => e.type === 'item.start') as { itemId: string; kind: string }[];
+    expect(starts.map((s) => s.kind)).toEqual(['assistant_message']);
     const deltas = client.events.filter((e) => e.type === 'item.delta');
     const text = deltas.map((d) => (d as { delta: { text?: string } }).delta.text ?? '').join('');
     expect(text).toBe('Hello!');
@@ -371,6 +375,69 @@ describe('engine integration (Op → events → DB)', () => {
     const texts = snapSwitched.items.map((i) => JSON.stringify(i.payload));
     expect(texts.some((t) => t.includes('first answer'))).toBe(true);
     expect(texts.some((t) => t.includes('second answer'))).toBe(false);
+  });
+
+  it('title generates from the first message in parallel with the turn (before turn.complete)', async () => {
+    db = new PanelotDB(`int-test-title-${Date.now()}`);
+    provider = new MockProvider();
+    const taskProvider = new MockProvider();
+    tools = new ToolRegistry();
+    let releaseTool: () => void;
+    const gate = new Promise<void>((r) => (releaseTool = r));
+    tools.register({
+      name: 'slow',
+      label: 'Slow',
+      description: 'blocks until released',
+      parameters: z.object({}),
+      level: 'builtin',
+      effects: 'read',
+      execute: async () => {
+        await gate;
+        return { content: [{ type: 'text', text: 'done' }] };
+      },
+    });
+    const resolver: ProviderResolver = {
+      resolve: async () => ({ provider, model: 'mock', params: {} }),
+      resolveTaskModel: async () => ({ provider: taskProvider, model: 'task-mock' }),
+    };
+    const core = new RealEngineCore(db, tools, allowAll, resolver);
+    const host = new EngineHost(core);
+    core.onBroadcast = (ev) => host.broadcast(ev);
+    const client = connect(host);
+
+    client.post({ type: 'initialize', protocolVersion: 1 });
+    await client.waitFor('initialized');
+    client.post({ type: 'thread.create' });
+    const created = await client.waitFor('thread.created');
+    client.post({ type: 'thread.subscribe', threadId: created.threadId });
+
+    taskProvider.queue({ streamText: ['帮我写周报'] });
+    provider.queue(
+      { toolCalls: [{ id: 'c1', name: 'slow', params: {} }] },
+      { streamText: ['answer'] },
+    );
+    client.post({ type: 'turn.submit', threadId: created.threadId, input: { text: '帮我写一份周报' } });
+
+    // Two-stage titling, both landing while the turn is still blocked on the
+    // slow tool: instant truncated fallback, then the LLM title.
+    const titleUpdates = () =>
+      client.events
+        .filter((e) => e.type === 'thread.updated')
+        .map((e) => (e as { patch: { title?: string } }).patch.title)
+        .filter((t): t is string => t !== undefined);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`timeout; titles: ${titleUpdates().join(',')}`)), 3000);
+      const check = () => (titleUpdates().length >= 2 ? (clearTimeout(timer), resolve()) : setTimeout(check, 5));
+      check();
+    });
+    expect(titleUpdates()).toEqual(['帮我写一份周报', '帮我写周报']);
+    expect(client.events.some((e) => e.type === 'turn.complete')).toBe(false);
+    // The LLM title request went to the task model, from the raw first message.
+    expect(taskProvider.requests).toHaveLength(1);
+    expect(taskProvider.requests[0]!.model).toBe('task-mock');
+
+    releaseTool!();
+    await client.waitFor('turn.complete');
   });
 
   it('turn.submit overrides.enabledToolLevels filters the tool registry', async () => {
