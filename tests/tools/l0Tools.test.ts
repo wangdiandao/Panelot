@@ -1,0 +1,204 @@
+/**
+ * L0 tab tools — view-state honesty (docs/05 §6): the agent's working tab and
+ * the user's visible tab are different things. Tool results must state
+ * explicitly whether the USER's view changed, so the model never offers to
+ * "switch back" after an operation that didn't touch the user's screen.
+ */
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { BrowserToolGateway } from '../../src/tools/gateway';
+import { createL0Tools } from '../../src/tools/browserTools';
+import type { AnyAgentTool } from '../../src/agent/tool';
+
+type TabStub = {
+  id: number;
+  url: string;
+  title?: string;
+  active: boolean;
+  windowId?: number;
+  lastFocused?: boolean;
+  lastAccessed?: number;
+  status?: string;
+};
+
+let tabs: TabStub[] = [];
+let removed: number[];
+let updated: { tabId: number; props: Record<string, unknown> }[];
+let windowsUpdated: number[];
+
+beforeEach(() => {
+  tabs = [];
+  removed = [];
+  updated = [];
+  windowsUpdated = [];
+  (globalThis as unknown as { chrome: unknown }).chrome = {
+    tabs: {
+      query: vi.fn(async (q: { active?: boolean; lastFocusedWindow?: boolean; currentWindow?: boolean }) =>
+        tabs.filter((t) => {
+          if (q.active !== undefined && t.active !== q.active) return false;
+          if (q.lastFocusedWindow && !t.lastFocused) return false;
+          return true;
+        })),
+      get: vi.fn(async (id: number) => {
+        const t = tabs.find((x) => x.id === id);
+        if (!t) throw new Error('no tab');
+        return { status: 'complete', ...t };
+      }),
+      remove: vi.fn(async (id: number) => {
+        removed.push(id);
+        const t = tabs.find((x) => x.id === id);
+        tabs = tabs.filter((x) => x.id !== id);
+        // Chrome auto-activates a neighbor when the active tab closes.
+        if (t?.active && tabs.length > 0) {
+          tabs[0]!.active = true;
+          tabs[0]!.lastFocused = true;
+        }
+      }),
+      create: vi.fn(async (props: { url: string }) => {
+        const tab = { id: 900, url: props.url, active: false, status: 'complete' };
+        tabs.push(tab);
+        return tab;
+      }),
+      update: vi.fn(async (id: number, props: Record<string, unknown>) => {
+        updated.push({ tabId: id, props });
+      }),
+      sendMessage: vi.fn(async () => ({ requestId: 'x', ok: true, result: { resultText: 'snap' } })),
+    },
+    windows: {
+      update: vi.fn(async (id: number) => {
+        windowsUpdated.push(id);
+      }),
+    },
+    scripting: { executeScript: vi.fn(async () => {}) },
+  };
+});
+
+function toolset(): { gw: BrowserToolGateway; tool: (name: string) => AnyAgentTool } {
+  const gw = new BrowserToolGateway();
+  const all = createL0Tools(gw, () => 't1');
+  return { gw, tool: (name) => all.find((t) => t.name === name)! };
+}
+
+const text = (r: { content: { type: string; text?: string }[] }) => r.content[0]!.text!;
+const abort = () => new AbortController().signal;
+
+describe('tab_close view-state honesty', () => {
+  it('closing a background tab says the user view did NOT change', async () => {
+    tabs = [
+      { id: 1, url: 'https://a.com/', title: '用户页面', active: true, lastFocused: true },
+      { id: 2, url: 'https://b.com/', title: '视频页', active: false },
+    ];
+    const { tool } = toolset();
+    const result = await tool('tab_close').execute('c1', { tabId: 2 } as never, abort(), undefined);
+    expect(removed).toEqual([2]);
+    expect(text(result)).toContain('后台标签页');
+    expect(text(result)).toContain('没有变化');
+    expect(text(result)).toContain('不需要切换回去');
+    expect(text(result)).toContain('用户页面');
+  });
+
+  it('closing the tab the user is LOOKING at says the browser switched', async () => {
+    tabs = [
+      { id: 1, url: 'https://a.com/', title: '要关的页', active: true, lastFocused: true },
+      { id: 2, url: 'https://b.com/', title: '邻居页', active: false },
+    ];
+    const { tool } = toolset();
+    const result = await tool('tab_close').execute('c1', { tabId: 1 } as never, abort(), undefined);
+    expect(removed).toEqual([1]);
+    expect(text(result)).toContain('用户正在看的页面');
+    expect(text(result)).toContain('自动切换');
+  });
+
+  it('closing a non-existent tab reports a clean error', async () => {
+    tabs = [{ id: 1, url: 'https://a.com/', active: true, lastFocused: true }];
+    const { tool } = toolset();
+    await expect(tool('tab_close').execute('c1', { tabId: 99 } as never, abort(), undefined))
+      .rejects.toThrow(/不存在/);
+  });
+
+  it('can close any tab, not just ones the agent touched (user asked for it)', async () => {
+    tabs = [
+      { id: 1, url: 'https://a.com/', active: true, lastFocused: true },
+      { id: 7, url: 'https://c.com/', title: '别的页', active: false },
+    ];
+    const { gw, tool } = toolset();
+    expect(gw.touchedTabs('t1')).toEqual([]); // never targeted
+    await tool('tab_close').execute('c1', { tabId: 7 } as never, abort(), undefined);
+    expect(removed).toEqual([7]);
+  });
+});
+
+describe('tab_activate background vs foreground', () => {
+  it('default retarget is background-only and says the user view is unchanged', async () => {
+    tabs = [
+      { id: 1, url: 'https://a.com/', title: 'A', active: true, lastFocused: true },
+      { id: 2, url: 'https://b.com/', title: 'B', active: false },
+    ];
+    const { gw, tool } = toolset();
+    const result = await tool('tab_activate').execute('c1', { tabId: 2 } as never, abort(), undefined);
+    expect(gw.currentTarget('t1')).toBe(2);
+    expect(updated).toEqual([]); // no chrome.tabs.update — nothing focused
+    expect(text(result)).toContain('用户看到的页面没有变化');
+  });
+
+  it('focus:true brings the tab to the foreground and says so', async () => {
+    tabs = [
+      { id: 1, url: 'https://a.com/', title: 'A', active: true, lastFocused: true, windowId: 10 },
+      { id: 2, url: 'https://b.com/', title: 'B', active: false, windowId: 10 },
+    ];
+    const { tool } = toolset();
+    const result = await tool('tab_activate').execute('c1', { tabId: 2, focus: true } as never, abort(), undefined);
+    expect(updated).toEqual([{ tabId: 2, props: { active: true } }]);
+    expect(windowsUpdated).toEqual([10]);
+    expect(text(result)).toContain('前台');
+  });
+});
+
+describe('tabs_list user-view marking', () => {
+  it("marks the user's visible tab distinctly from the agent's target tab", async () => {
+    tabs = [
+      { id: 1, url: 'https://a.com/', title: 'A', active: true, lastFocused: true },
+      { id: 2, url: 'https://b.com/', title: 'B', active: false },
+    ];
+    const { gw, tool } = toolset();
+    gw.pinTarget('t1', 2);
+    const result = await tool('tabs_list').execute('c1', {} as never, abort(), undefined);
+    expect(text(result)).toContain('[1] (用户正在看) A');
+    expect(text(result)).toContain('[2] (当前操作目标) B');
+  });
+
+  it('lists ALL tabs in the window — the whole browser is in scope', async () => {
+    tabs = [
+      { id: 1, url: 'https://a.com/', title: 'A', active: true, lastFocused: true },
+      { id: 2, url: 'https://b.com/', title: 'B', active: false },
+      { id: 3, url: 'https://c.com/', title: 'C', active: false },
+    ];
+    const { tool } = toolset();
+    // No tab ever touched — every open tab still shows up.
+    const result = await tool('tabs_list').execute('c1', {} as never, abort(), undefined);
+    expect(text(result)).toContain('[1]');
+    expect(text(result)).toContain('[2]');
+    expect(text(result)).toContain('[3]');
+  });
+});
+
+describe('tab_open stays in the background', () => {
+  it('opening a new tab reports background + user view unchanged', async () => {
+    tabs = [{ id: 1, url: 'https://a.com/', title: 'A', active: true, lastFocused: true }];
+    const { tool } = toolset();
+    const result = await tool('tab_open').execute('c1', { url: 'https://new.example.com/x' } as never, abort(), undefined);
+    expect(text(result)).toContain('后台');
+    expect(text(result)).toContain('用户看到的页面没有变化');
+  });
+
+  it('reusing an existing tab does not focus it', async () => {
+    tabs = [
+      { id: 1, url: 'https://a.com/', title: 'A', active: true, lastFocused: true },
+      { id: 3, url: 'https://shop.com/cart', title: '购物车', active: false },
+    ];
+    const { tool } = toolset();
+    const result = await tool('tab_open').execute('c1', { url: 'https://shop.com/cart' } as never, abort(), undefined);
+    expect(updated).toEqual([]); // never touches active state
+    expect(text(result)).toContain('复用');
+    expect(text(result)).toContain('没有变化');
+  });
+});
