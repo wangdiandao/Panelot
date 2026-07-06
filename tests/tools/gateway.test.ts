@@ -64,6 +64,28 @@ describe('BrowserToolGateway.getTargetTab fallback', () => {
     await expect(gw.getTargetTab('t1')).resolves.toBe(5);
   });
 
+  it('suppresses manual-operation reports during the agent-input window', () => {
+    const gw = new BrowserToolGateway();
+    const paused: number[] = [];
+    gw.onManualOperation = (tabId) => paused.push(tabId);
+    gw.markAgentInput(7); // agent about to dispatch CDP input on tab 7
+    gw.handleManualOperationReport(7);
+    expect(paused).toEqual([]); // agent's own input — no pause
+    gw.handleManualOperationReport(8);
+    expect(paused).toEqual([8]); // another tab is a genuine manual op
+  });
+
+  it('droveThisTurn only after a write; reset at the turn boundary', () => {
+    const gw = new BrowserToolGateway();
+    expect(gw.droveThisTurn('t1', 5)).toBe(false);
+    gw.markDriven('t1', 5);
+    expect(gw.droveThisTurn('t1', 5)).toBe(true);
+    expect(gw.droveThisTurn('t1', 6)).toBe(false);
+    expect(gw.droveThisTurn('t2', 5)).toBe(false);
+    gw.releaseFloatingTarget('t1'); // turn.complete hook
+    expect(gw.droveThisTurn('t1', 5)).toBe(false);
+  });
+
   it('a pinned target survives releaseFloatingTarget; an auto-discovered one is released', async () => {
     tabs = [
       { id: 2, url: 'https://example.com/', active: true, lastAccessed: 2000 },

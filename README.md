@@ -76,7 +76,7 @@ Key design decisions (full rationale in [docs/](./docs)):
 2. Open `chrome://extensions`, enable **Developer mode**.
 3. Drag the zip onto the page, or unzip it and use **Load unpacked**.
    (`.crx` files install directly only on Linux or via enterprise policy — on Windows/macOS Chrome requires Web-Store-signed CRX, so use the zip.)
-4. Click the toolbar icon (or press `Alt+P`) to open the side panel.
+4. Click the toolbar icon or press **`Alt+P`** to toggle the side panel (rebind at `chrome://extensions/shortcuts`). From the side panel, `Ctrl/Cmd+E` expands the conversation into the full-page view.
 
 **First run**
 
@@ -178,7 +178,7 @@ Panelot 是一款 Chrome（MV3）扩展，把 Claude Code / Codex 级别的 Agen
 2. 打开 `chrome://extensions`，开启右上角**开发者模式**。
 3. 把 zip 直接拖进页面，或解压后用**加载已解压的扩展程序**。
    （`.crx` 直接双击安装仅限 Linux 或企业策略环境——Windows/macOS 的 Chrome 只接受商店签名的 CRX，请用 zip。）
-4. 点工具栏图标（或按 `Alt+P`）打开侧边栏。
+4. 点工具栏图标或按 **`Alt+P`** 开关侧边栏（可在 `chrome://extensions/shortcuts` 改绑）。侧边栏内按 `Ctrl/Cmd+E` 可展开为全屏对话页。
 
 **首次配置**
 

@@ -78,6 +78,9 @@ export function createL2Tools(
       effects: 'write',
       execute: async (_id, params: { x: number; y: number }) => {
         const tabId = await targetTab();
+        // CDP mouse events are isTrusted — suppress the manual-op watcher.
+        gateway.markAgentInput(tabId);
+        gateway.markDriven(getThreadId(), tabId);
         return cdp.withTab(tabId, async () => {
           const base = { x: params.x, y: params.y, button: 'left' as const, clickCount: 1 };
           await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...base });
@@ -98,6 +101,8 @@ export function createL2Tools(
       effects: 'write',
       execute: async (_id, params: { from: { x: number; y: number }; to: { x: number; y: number } }) => {
         const tabId = await targetTab();
+        gateway.markAgentInput(tabId);
+        gateway.markDriven(getThreadId(), tabId);
         return cdp.withTab(tabId, async () => {
           await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...params.from, button: 'left', clickCount: 1 });
           await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...params.to, button: 'left' });

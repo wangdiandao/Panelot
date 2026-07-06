@@ -73,6 +73,21 @@ export class BrowserToolGateway {
    */
   private target = new Map<string, { tabId: number; pinned: boolean }>();
   private touched = new Map<string, Set<number>>();
+  /**
+   * tabId → timestamp until which trusted input on that tab is the AGENT's
+   * own doing (CDP Input.dispatch*). The content script cannot tell CDP
+   * events from user events — both are isTrusted — so the engine, which
+   * knows when it is dispatching, drops manual-operation reports inside
+   * this window. Without it every press_key/click_xy pauses its own turn.
+   */
+  private agentInputUntil = new Map<number, number>();
+  /**
+   * threadId → tabs the agent has WRITTEN to in the current turn. The
+   * manual-operation auto-pause only fires for these: a turn that merely
+   * READS the page (Q&A about the user's own tab) must not pause when the
+   * user scrolls or clicks their own page mid-answer.
+   */
+  private drivenTabs = new Map<string, Set<number>>();
   /** Called when the user manually operates a page the agent is driving. */
   onManualOperation: (tabId: number) => void = () => {};
   /** Called after a thread's touched set changes (task panel display). */
@@ -82,7 +97,7 @@ export class BrowserToolGateway {
     if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
       chrome.runtime.onMessage.addListener((msg: unknown, sender) => {
         if ((msg as { type?: string })?.type === 'panelot.manualOperation' && sender.tab?.id !== undefined) {
-          this.onManualOperation(sender.tab.id);
+          this.handleManualOperationReport(sender.tab.id);
         }
       });
       // Tab closed (by user or agent) → drop it everywhere.
@@ -120,6 +135,37 @@ export class BrowserToolGateway {
     return tab;
   }
 
+  /**
+   * Declare that the agent is about to dispatch trusted (CDP) input on a tab:
+   * manual-operation reports from that tab are suppressed for `durationMs`.
+   * Call BEFORE the dispatch — the report races the dispatch's completion.
+   */
+  markAgentInput(tabId: number, durationMs = 1500): void {
+    this.agentInputUntil.set(tabId, Date.now() + durationMs);
+  }
+
+  /** Content-script manual-op report → drop the agent's own CDP input. */
+  handleManualOperationReport(tabId: number): void {
+    const until = this.agentInputUntil.get(tabId) ?? 0;
+    if (Date.now() < until) return;
+    this.onManualOperation(tabId);
+  }
+
+  /** Record that the agent performed a WRITE on the tab this turn. */
+  markDriven(threadId: string, tabId: number): void {
+    let set = this.drivenTabs.get(threadId);
+    if (!set) {
+      set = new Set();
+      this.drivenTabs.set(threadId, set);
+    }
+    set.add(tabId);
+  }
+
+  /** Has the agent written to this tab in the current turn? */
+  droveThisTurn(threadId: string, tabId: number): boolean {
+    return this.drivenTabs.get(threadId)?.has(tabId) ?? false;
+  }
+
   /** Explicit target choice (tab_open / tab_activate): survives across turns. */
   pinTarget(threadId: string, tabId: number): void {
     this.target.set(threadId, { tabId, pinned: true });
@@ -135,10 +181,13 @@ export class BrowserToolGateway {
   /**
    * Turn boundary hook: an auto-discovered (unpinned) target is released when
    * the turn ends, so the NEXT turn follows the tab the user is looking at by
-   * then. Pinned targets persist — the agent chose them deliberately.
+   * then. Pinned targets persist — the agent chose them deliberately. The
+   * driven-tab set resets too: auto-pause is a mid-turn conflict guard, and
+   * touching a page after the turn finished is not a conflict.
    */
   releaseFloatingTarget(threadId: string): void {
     if (this.target.get(threadId)?.pinned === false) this.target.delete(threadId);
+    this.drivenTabs.delete(threadId);
   }
 
   private markTouched(threadId: string, tabId: number): void {
@@ -193,8 +242,12 @@ export class BrowserToolGateway {
 
   // ---- L1 dispatch (docs/01 §5) ----------------------------------------------
 
+  /** L1 write tools: user input on the tab during these = a real conflict. */
+  private static WRITE_CONTENT_TOOLS = new Set(['click', 'type', 'select_option', 'press_key', 'hover', 'batch_actions', 'upload']);
+
   async callContentTool(threadId: string, tool: string, params: unknown): Promise<ExecuteResult> {
     const tabId = await this.getTargetTab(threadId);
+    if (BrowserToolGateway.WRITE_CONTENT_TOOLS.has(tool)) this.markDriven(threadId, tabId);
     await this.ensureInjected(tabId);
     return this.sendToTab(tabId, tool, params);
   }
