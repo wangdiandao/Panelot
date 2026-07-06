@@ -25,7 +25,7 @@ Title: 登录 - Example
 - link "忘记密码？" [ref=s3_6]
 - text: "还没有账号？"
 - link "注册" [ref=s3_7]
---- 正文摘录 (Readability, 截断至 2000 tokens) ---
+--- 正文摘录 (截断至 2000 tokens) ---
 <Markdown 正文>
 ```
 
@@ -127,7 +127,7 @@ L1 DOM 遍历建树
 
 ### 内置（引擎内执行）
 
-`fetch_url`（后台抓取→Readability→Markdown）、`web_search`、`memory_read/write`、`ask_user`、`load_skill`（08）、`todo_write`（任务面板）、`download`。
+`fetch_url`（后台抓取→正文文本化）、`web_search`、`memory_read/write`、`ask_user`、`load_skill`（08）、`todo_write`（任务面板）、`download`。
 
 ## 4. 等待与稳定性
 

@@ -20,14 +20,3 @@ export class PanelotDB extends Dexie {
   }
 }
 
-let instance: PanelotDB | null = null;
-
-export function getDB(): PanelotDB {
-  if (!instance) instance = new PanelotDB();
-  return instance;
-}
-
-/** Test helper: swap in an isolated database. */
-export function setDBForTesting(db: PanelotDB): void {
-  instance = db;
-}
