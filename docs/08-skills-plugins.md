@@ -53,7 +53,7 @@ interface SkillRecord {
 
 ## 2. 渐进披露（与 Claude Code 行为一致）
 
-1. **索引常驻**：所有 enabled Skill 的 `name + description` 拼入 system prompt 的 Skills 区块（10 §6）；有 `sites` 作用域的 Skill 仅在当前受控 tab 匹配时进入索引（省 prompt 空间）；
+1. **索引常驻**：所有 enabled Skill 的 `name + description` 拼入 system prompt 的 Skills 区块（10 §6）；有 `sites` 作用域的 Skill 仅在当前操作目标 tab 匹配时进入索引（省 prompt 空间）；
 2. **按需加载**：模型判断相关时调用内置工具 `load_skill{name}` → 返回完整 body 作为 tool_result 进入上下文；
 3. `load_skill` effects:'read'、默认 allow；同一 Skill 每 Thread 只完整加载一次（重复调用返回「已加载」提示）；
 4. `auto_suggest`：content script 报告 URL 变化 → 匹配 sites → 侧边栏顶部出现建议胶囊（点击 = 预填 `/command` 或直接以该 Skill 开启对话）。
@@ -70,7 +70,7 @@ interface SkillRecord {
 
 | 来源 | 形态 | 示例 |
 |---|---|---|
-| 内置 | 固定实现 | `/clear` `/compact` `/export` `/model` `/cost` `/permissions` |
+| 内置 | 固定实现 | `/clear` `/export` `/model` `/cost` `/permissions` |
 | Skill | `panelot.command` 声明 | `/xhs` → 弹变量表单 → 组装为 user 消息（Skill body 经 load_skill 注入） |
 | MCP Prompt | 自动注册 | `/github:review-pr` → 参数表单 → `prompts/get` 结果注入 |
 
@@ -99,7 +99,7 @@ my-plugin/
 
 ## 6. 站点级指令
 
-独立于 Skill 的轻量机制（类似 per-domain CLAUDE.md）：设置页维护 `{ pattern: string, prompt: string }[]`，匹配当前受控 tab 时拼入 system prompt 站点层（10 §6）。Plugin 的 site-prompts 归并于此。
+独立于 Skill 的轻量机制（类似 per-domain CLAUDE.md）：设置页维护 `{ pattern: string, prompt: string }[]`，匹配当前操作目标 tab 时拼入 system prompt 站点层（10 §6）。Plugin 的 site-prompts 归并于此。
 
 ## 7. 开放问题
 

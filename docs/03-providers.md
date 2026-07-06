@@ -36,7 +36,7 @@ interface ModelEntry {
     toolUse: boolean;                    // false 则该模型不可用于 Agent 模式（仅纯聊天）
     vision: boolean;                     // 决定 screenshot 工具与图片附件可用性
     reasoning?: boolean;                 // 显示思考块 / 支持 reasoning_effort
-    maxContext?: number;                 // 压缩触发依据（04 §5）
+    maxContext?: number;                 // 上下文窗口大小（能力元数据）
   };
   pricing?: { input: number; output: number; cacheRead?: number };  // $/Mtok
 }
@@ -74,7 +74,7 @@ interface GenParams {
 
 ### 1.5 Task Model —— 副任务路由
 
-全局设置一个「任务模型」（可指向任意 connection 的廉价模型）：标题生成、上下文压缩摘要、branch summary、follow-up 建议全部走它。未配置时回退主对话模型并在设置页提示。
+全局设置一个「任务模型」（可指向任意 connection 的廉价模型）：标题生成、follow-up 建议全部走它。未配置时回退主对话模型并在设置页提示。
 
 ## 2. 适配层接口
 
@@ -156,7 +156,7 @@ type ProviderError =
   | { kind: 'auth' }               // 401/403 → 换下一个 key；全失败则提示用户
   | { kind: 'rate_limit'; retryAfterMs?: number }  // 429 → 尊重 retry-after，指数退避（1s 起 ×2 上限 32s，最多 4 次）；多 key 时先 failover
   | { kind: 'overloaded' }         // 529/503 → 同 429 策略
-  | { kind: 'context_too_long' }   // → 触发强制 compaction 后重试一次（04 §5）
+  | { kind: 'context_too_long' }   // → 不重试，直接报错并建议用户新开会话
   | { kind: 'content_filter' } | { kind: 'network' } | { kind: 'protocol'; raw: string };
 ```
 

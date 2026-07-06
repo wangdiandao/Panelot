@@ -12,15 +12,15 @@
 | 章 | 详细文档 | 内容 |
 |---|---|---|
 | 架构与协议 | [docs/01-architecture.md](./docs/01-architecture.md) | 上下文拓扑、Op/AgentEvent 协议、Thread/Turn/Item、握手与 SW 生命周期 |
-| 数据模型 | [docs/02-data-model.md](./docs/02-data-model.md) | Dexie schema、会话树、压缩数据结构、buildSessionContext |
+| 数据模型 | [docs/02-data-model.md](./docs/02-data-model.md) | Dexie schema、会话树、buildSessionContext |
 | Provider | [docs/03-providers.md](./docs/03-providers.md) | Connection/ModelPreset、适配器与 SSE、quirks、Verify、task model |
-| Agent 引擎 | [docs/04-agent-engine.md](./docs/04-agent-engine.md) | loop、AgentTool、steering、压缩、恢复时序 |
+| Agent 引擎 | [docs/04-agent-engine.md](./docs/04-agent-engine.md) | loop、AgentTool、steering、恢复时序 |
 | 浏览器工具 | [docs/05-browser-tools.md](./docs/05-browser-tools.md) | 快照格式、L1/L2 分级、工具 schema 全表、等待策略 |
 | 权限与安全 | [docs/06-permissions.md](./docs/06-permissions.md) | 两轴模型、Gatekeeper、审批 RPC、注入防线 |
 | MCP | [docs/07-mcp.md](./docs/07-mcp.md) | 远端 MCP、OAuth 2.1、能力映射 |
 | Skills/Plugin | [docs/08-skills-plugins.md](./docs/08-skills-plugins.md) | SKILL.md 规范、渐进披露、斜杠命令、Plugin 包 |
 | 界面 | [docs/09-ui.md](./docs/09-ui.md) | 设计 token、线框、组件树、交互状态机、快捷键 |
-| 提示词 | [docs/10-prompts.md](./docs/10-prompts.md) | 内核 system prompt 全文、工具文案、压缩提示词 |
+| 提示词 | [docs/10-prompts.md](./docs/10-prompts.md) | 内核 system prompt 全文、工具文案 |
 | 参考项目 | [docs/11-references.md](./docs/11-references.md) | 七个开源项目的借鉴决策表与踩坑清单 |
 | 体验目标 | [docs/12-experience-targets.md](./docs/12-experience-targets.md) | 各维度对标基线、量化指标（CH/OP/PV/AP/EC/RL/OB）、里程碑验收绑定 |
 
@@ -61,15 +61,14 @@ WXT (MV3) + React 19 + TypeScript · shadcn/ui + Tailwind v4 · Zustand · Dexie
 
 - Connection（baseUrl + kind + **多 key** + **自定义头** + quirks 兼容开关）；预置十余家模板，本地 Ollama/LM Studio 直连；
 - **ModelPreset = 命名 Agent**（base model + system prompt + 工具级别 + 参数覆盖），新会话选 preset；
-- **Task model**：标题/压缩/建议路由到廉价模型；
+- **Task model**：标题/建议路由到廉价模型；
 - Verify 连接测试 + 并发短超时拉取模型；错误归一化 + key failover；Anthropic 侧启用 prompt caching。
 
 ## 5. Agent 引擎摘要 → [docs/04](./docs/04-agent-engine.md)
 
 - 极简 loop：循环到模型不再调用工具；**步数护栏为软提醒（25 步注入自省提示），token 预算是唯一硬闸**；
 - AgentTool 统一接口，**content（给 LLM）/ details（给 UI）双通道**；工具错误 throw → 模型自纠；
-- 运行中交互三通路：**steer 插话 / enqueue 排队 / interrupt 打断**；压缩等内部轮不可插话；
-- 上下文压缩：token 触发的 auto-compaction（CompactionPayload 防复合丢失 + 操作轨迹累积追踪）+ 切分支时的 branch summarization。
+- 运行中交互三通路：**steer 插话 / enqueue 排队 / interrupt 打断**；标题生成等内部轮不可插话。
 
 ## 6. 浏览器操作摘要 → [docs/05](./docs/05-browser-tools.md)
 
@@ -101,7 +100,7 @@ WXT (MV3) + React 19 + TypeScript · shadcn/ui + Tailwind v4 · Zustand · Dexie
 
 ## 10. 提示词摘要 → [docs/10](./docs/10-prompts.md)
 
-内核 system prompt + 工具定义 ≤1500 tokens（全文草案见文档）；分层拼装（内核→用户全局→站点→Skills 索引→环境）配合 cache 断点；不可信内容随机后缀定界；压缩提示词 =「给接手 LLM 的交接文档」。回归集（含注入攻击样本）从 M2 起维护。
+内核 system prompt + 工具定义 ≤1500 tokens（全文草案见文档）；分层拼装（内核→用户全局→站点→Skills 索引→环境）配合 cache 断点；不可信内容随机后缀定界。回归集（含注入攻击样本）从 M2 起维护。
 
 ## 11. 权限清单与商店上架
 
@@ -132,7 +131,7 @@ WXT (MV3) + React 19 + TypeScript · shadcn/ui + Tailwind v4 · Zustand · Dexie
 | **M1 对话核心（~3 周）** | WXT 骨架、Port 协议、Dexie、消息树、双适配器流式、Provider 设置、侧边栏+全屏页、页面上下文附着 | 填 Key 流畅对话+问当前页，体验不低于主流聊天插件 |
 | **M2 浏览器 Agent（~4 周）** | 工具注册表、Gatekeeper 两轴、L0/L1 全套+快照、L2 升级流、可视化、checkpoint 恢复、任务面板、注入防线、回归集 | 端到端完成「三站比价出对比表」，全程审批可控 |
 | **M3 生态（~3 周）** | Skills 全流程、远端 MCP+OAuth、斜杠命令、@ 引用完整版、Plugin 格式+精选列表 | 导入社区 SKILL.md 可用；接入一个 OAuth MCP 服务器 |
-| **M4 打磨上架（~2 周）** | 双压缩、成本统计、i18n、导入导出、快捷键、e2e、权限审计、商店素材、提审 | Chrome/Edge 双店提审通过 |
+| **M4 打磨上架（~2 周）** | 成本统计、i18n、导入导出、快捷键、e2e、权限审计、商店素材、提审 | Chrome/Edge 双店提审通过 |
 
 ## 14. 风险与开放问题
 
@@ -141,7 +140,7 @@ WXT (MV3) + React 19 + TypeScript · shadcn/ui + Tailwind v4 · Zustand · Dexie
 | debugger 权限审核受阻 | 描述披露 + 去 L2 降级构建 Plan B |
 | MV3 SW 休眠打断长任务 | checkpoint+回放恢复已设计（01 §4），上线前专项压测 |
 | 「OpenAI 兼容」端点差异 | QuirkFlags 表 + Verify 探测（03 §5-6） |
-| 快照撑爆上下文 | 增量快照 + 体积上限 + 双压缩（05 §1.3、04 §5） |
+| 快照撑爆上下文 | 增量快照 + 体积上限（05 §1.3） |
 | Prompt injection 实战对抗 | 五层防线，硬闸兜底；发布前红队回归集（06 §6、10 §8） |
 | 人机争抢 tab | 手动操作即暂停；V2 后台窗口模式 |
 

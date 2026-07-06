@@ -15,7 +15,7 @@
 | Connection 抽象「协议优先」+ enable/disable 不删除 | 兼容一切 OpenAI 兼容端点 | [03 §1.1](./03-providers.md) |
 | 补齐其短板：customHeaders、多 key、并发短超时拉模型 | 其无自定义头 UI、串行拉取等满超时是公认痛点 | 03 §1.1/§6 |
 | ModelPreset（base model + prompt + 工具 = 命名 Agent） | 同一模型服务多种 Agent 用途，契合 Panelot 定位 | 03 §1.3 |
-| Task model（副任务路由廉价模型） | 标题/压缩/建议不该烧主模型的钱 | 03 §1.5 |
+| Task model（副任务路由廉价模型） | 标题/建议不该烧主模型的钱 | 03 §1.5 |
 | 流式未闭合代码块暂缓高亮渲染 | 防闪烁与渲染报错 | [09 §4.1](./09-ui.md) |
 | 触发符统一框架（@ / 斜杠 / 变量表单）、动态变量 | 浏览器场景天然映射（{{PAGE_URL}} 等） | 09 §5、[08 §4](./08-skills-plugins.md) |
 | 文件夹 = 上下文容器（绑 prompt/preset 继承） | 比纯收纳高一档 | 02 §2.1（V1.5） |
@@ -48,8 +48,6 @@
 | AgentTool 签名 + **content(LLM)/details(UI) 双通道** | 浏览器工具的富 UI 信息不污染上下文 | 04 §4 |
 | 错误 throw → isError 回填 → 模型自纠 | 元素找不到→重新快照的自纠路径基础 | 04 §2 |
 | 会话树单存储内多子节点分叉（优于 Codex 复制文件式 fork） | 存储省、天然支持分支 | 02 §1 |
-| CompactionEntry（落地为 `CompactionPayload {summary, firstKeptNodeId}`）防复合丢失 + trackedOps 累积追踪 | 恢复历史与压缩当时逐字一致；操作轨迹跨压缩不丢 | 02 §4、04 §5 |
-| Branch summarization（公共祖先摘要） | 切分支不丢弃已获知识 | 04 §5.2 |
 | transport 抽象（Port 生产 / 直连测试） | 引擎可无浏览器回归测试 | 04 §7 |
 | 「turn 结束 = 所有订阅者处理完」 | 防 SW 在落库前挂起 | 04 §2 |
 | 内核提示词 + 工具 <1500 tokens 的极简纪律 | token 成本与可靠性双赢 | 10 §1 |
@@ -93,7 +91,7 @@
 
 - Open WebUI: [docs.openwebui.com](https://docs.openwebui.com)、DeepWiki（chat history / markdown / message input / model config）、issues #15189/#788/#20658
 - Codex CLI: [github.com/openai/codex](https://github.com/openai/codex)（codex-rs/protocol、app-server README、protocol_v1.md）、[developers.openai.com/codex](https://developers.openai.com/codex)（approvals、app-server、config）
-- Pi Agent: [github.com/badlogic/pi-mono](https://github.com/badlogic/pi-mono)、[mariozechner.at 2025-11-30 博文](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/)、compaction.md
+- Pi Agent: [github.com/badlogic/pi-mono](https://github.com/badlogic/pi-mono)、[mariozechner.at 2025-11-30 博文](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/)
 - Playwright MCP: [github.com/microsoft/playwright-mcp](https://github.com/microsoft/playwright-mcp)、playwright.dev/mcp
 - Chrome DevTools MCP: [github.com/ChromeDevTools/chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp)（tool-reference.md）
 - nanobrowser: [github.com/nanobrowser/nanobrowser](https://github.com/nanobrowser/nanobrowser)、issues #126/#166、discussion #85

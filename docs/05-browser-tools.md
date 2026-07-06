@@ -85,12 +85,14 @@ L1 DOM 遍历建树
 
 | 工具 | 参数 | effects |
 |---|---|---|
-| `tabs_list` | — | read |
-| `tab_open` | `{ url }` | write |
-| `tab_activate` | `{ tabId }` | write |
-| `tab_close` | `{ tabId }` | write |
-| `navigate` | `{ url }`（当前受控 tab） | write |
+| `tabs_list` | `{ all? }` — 当前窗口全部 tab（`all:true` 跨窗口），标注「用户正在看」与「当前操作目标」 | read |
+| `tab_open` | `{ url }` — 后台打开/复用，不抢用户前台 | write |
+| `tab_activate` | `{ tabId, focus? }` — 默认仅后台换操作目标；`focus:true` 才切用户前台 | write |
+| `tab_close` | `{ tabId }` — 任意 tab（经审批）；结果显式说明用户视图是否变化 | write |
+| `navigate` | `{ url }`（当前操作目标 tab） | write |
 | `go_back` / `go_forward` | — | write |
+
+**视图状态诚实契约**：Agent 的「操作目标 tab」与用户的「可见 tab」是两回事。tab 工具默认后台工作，每个结果显式说明用户看到的页面有没有变——模型不得在结果声明「用户视图未变」后再提议"切换回原页面"。
 
 ### L1 —— 感知与交互
 
@@ -106,11 +108,13 @@ L1 DOM 遍历建树
 | `scroll` | `{ target?: ref, direction, amount?: 'page'\|'end'\|px }` | read |
 | `hover` | `{ element, ref }` | write |
 | `wait_for` | `{ text? , textGone?, timeMs? }` 三态其一 | read |
-| `extract` | `{ schema: JsonSchema, scope?: ref }` → 结构化 JSON | read |
+| `extract` | `{ scope?: ref, fromChar? }` → 干净 Markdown（保留链接），超长落盘为附件 | read |
 | `batch_actions` | `{ actions: (click\|type\|select_option)[] (≤4) }` | write |
 | `run_javascript` | `{ code, world: 'MAIN' }` — 默认 deny，设置页显式开启 | write |
 
 `batch_actions` 语义（抄 browser-use）：按序执行，**任一动作导致 DOM 显著变化立即中断剩余动作**，返回已执行清单 + 新增量快照。审批时整批一次展示。
+
+`extract` 语义（借鉴 browser-use 的 `extract` 动作 + browsercluster 的 GNE 正文抽取 + chrome-agent-skill 的输出体量控制）：在内容脚本内**确定性**地把页面/子树转干净 Markdown（保留 `[text](url)` 链接与标题层级、剥离 script/nav/footer 等），不额外调 LLM——结构化交给循环里的主模型。职责分层：内容脚本返回**完整** Markdown（至硬上限 200k 字符）；引擎侧工具负责**开窗**（每次给模型 8000 字符，`fromChar` 翻页）与**落盘**——正文超一屏且有 db 时，把**完整正文**存为 `page_text` 附件（`mime: text/markdown`，附件纯 UI 侧、不回喂 LLM，全文不进上下文），模型靠 `fromChar` 翻阅其余部分。`scope` 限定某 ref 子树。读操作，输出经 fence 包裹。
 
 ### L2 —— 高级（均触发升级确认）
 
@@ -145,15 +149,18 @@ L1 DOM 遍历建树
 - 页面右下角浮动指示器（Shadow DOM）：`Panelot 正在操作 · ⏸ ⏹`；**用户在页面上有任何手动输入（真实 isTrusted 事件）→ 自动暂停当前 turn** 并通知 UI（system_notice），避免人机争抢；
 - 工具的 `details` 通道携带高亮元素的 boundingBox + 截图 id，供 UI 工具卡片回放展示。
 
-## 6. 多标签管理
+## 6. 多标签管理（浏览器级控制权，2026-07-06）
 
-- Thread 绑定一个「受控 tab 集合」（Agent 打开的 + 用户显式附着的），`tabs_list` 默认只列受控集合 + 活跃 tab（全量需参数 `all:true`——最小化窥探面）；
-- 受控 tab 被用户手动关闭 → tool_result 告知模型；tab 导航到敏感站点 → 该 tab 自动移出受控集合。
+Agent 的控制权是**整个浏览器**，不是某个标签页子集——安全闸是写操作审批 + 敏感域名黑名单（06），不是 tab 成员资格。Thread 级维护两个概念：
+
+- **操作目标（target）**：页面工具当下作用的 tab。Agent 显式选择的目标（`tab_open`/`tab_activate`）**钉住**、跨 turn 持续；未显式选择时自动取用户当前所在的网页 tab，且 turn 内锁定（用户中途切 tab 不会把点击重定向到错误页面）、turn 结束释放（下一轮重新跟随用户）。
+- **触达痕迹（touched）**：Agent 操作过的 tab 集合——纯审计展示（任务面板"Agent 操作过的标签页"），**不是权限边界**。
+
+其他行为：tab 被关闭（用户或 Agent）→ 从目标与痕迹中移除；用户在 Agent **正在操作的目标 tab** 上手动输入 → 自动暂停该 thread（在别的曾操作过的 tab 上操作不算冲突）。
 
 ## 7. tool_result 体积规范
 
-- 快照/正文类结果 ≤ 3000 tokens（§1.3）；`extract` 结果 ≤ 4000 tokens 超限分页；
-- 压缩时（04 §5）tool_result 优先被摘要——原始大结果在 nodes 中仍可查看（UI 展开），LLM 历史中被替换为一行摘要。
+- 快照/正文类结果 ≤ 3000 tokens（§1.3）；`extract` 结果 ≤ 4000 tokens 超限分页。
 
 ## 8. 开放问题
 

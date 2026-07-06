@@ -1,7 +1,7 @@
 # 02 — 数据模型与存储
 
 > 上级文档：[DESIGN.md](../DESIGN.md) · 关联：[01 架构](./01-architecture.md) · [04 Agent 引擎](./04-agent-engine.md)
-> 借鉴来源：OpenWebUI 消息树（及其双份存储的反面教训）、Pi Agent 会话树 + CompactionEntry、Codex rollout（SessionMeta 头 + 重放式恢复）
+> 借鉴来源：OpenWebUI 消息树（及其双份存储的反面教训）、Pi Agent 会话树、Codex rollout（SessionMeta 头 + 重放式恢复）
 
 ---
 
@@ -9,7 +9,7 @@
 
 1. **会话是一棵树，且只存树**。节点 `{id, parentId}`，编辑重发/重新生成/分叉全部表达为「追加兄弟节点 + 移动游标」。不维护任何平行的扁平消息数组（OpenWebUI 因双份存储产生孤儿节点与渲染死锁，引以为戒）。
 2. **Append-only**。节点一经写入不修改（唯一例外：流式中的 assistant 节点在 `item.complete` 时写入终稿；删除操作见 §5.3）。恢复 = 回放，不是快照反序列化。
-3. **给 LLM 的历史是派生视图**：`buildSessionContext(leafId)` 从叶子回溯到根产出线性消息序列，压缩节点在此处被替换为摘要。
+3. **给 LLM 的历史是派生视图**：`buildSessionContext(leafId)` 从叶子回溯到根产出线性消息序列。
 
 ## 2. Dexie Schema
 
@@ -81,8 +81,6 @@ type NodeType =
   | 'approval_decision'  // { approvalId, request: ApprovalRequestPayload, decision, ts }
   | 'turn_context'       // { turnId, model, approvalPolicy, capabilityScope, activeSkills[] }
                          //   —— 每轮开头一条，恢复时复原环境
-  | 'compaction'         // CompactionPayload（见 §4）
-  | 'branch_summary'     // { summary, abandonedLeafId, commonAncestorId }
   | 'system_notice';     // 用户可见但不进 LLM 历史的提示（如"已自动暂停"）
 ```
 
@@ -129,39 +127,14 @@ appendNode(threadId, parentId = thread.leafId, node)
 
 写入前校验：`parentId` 必须存在于同 thread（或为 null 根）；加载时校验 `leafId` 可回溯到根，失败则回退到 seq 最大的可达叶子并记 `system_notice`。**任何情况下渲染层不因坏数据死循环**——回溯步数上限 = 节点总数。
 
-## 4. 压缩数据结构（防复合丢失）
-
-照搬 Pi Agent 的两种压缩（触发逻辑见 [04 §5](./04-agent-engine.md)）：
-
-```ts
-interface CompactionPayload {
-  summary: string;            // "交接文档"式摘要
-  firstKeptNodeId: string;    // 摘要覆盖 [上次 firstKept（或根）, 本节点前] 区间，
-                              // 此 id 之后的原始消息被保留
-  tokensBefore: number; tokensAfter: number;
-  trackedOps: {               // 跨压缩累积追踪，永不丢失的操作轨迹
-    visitedUrls: string[];
-    mutatedTargets: string[]; // 填过的表单/点过的关键按钮描述
-  };
-}
-```
-
-关键规则：**下一次压缩的摘要跨度从上一次的 `firstKeptNodeId` 开始**，而不是从上一条 compaction 节点开始——保证上次幸存的消息这次被纳入摘要而非凭空消失。
-
-`branch_summary`：切换分支时对被弃分支做摘要（公共祖先之后的部分），作为一等节点注入新分支路径。
-
 ## 5. buildSessionContext —— 恢复与渲染的同一算法
 
 ```ts
 function buildSessionContext(leafId: string): UnifiedMessage[] {
   // 1. 从 leaf 沿 parentId 回溯到根，reverse 得到线性节点序列（跳过墓碑与 system_notice）
-  // 2. 找到序列中最后一个 compaction 节点 C：
-  //    输出 = [ systemPrompt 层（由最后一个 turn_context 复原）,
-  //             C.summary 作为一条 assistant 摘要消息,
-  //             C.firstKeptNodeId 之后的节点转换为 UnifiedMessage ]
-  //    无 C 则输出全序列
-  // 3. branch_summary 节点转为一条摘要消息原位保留
-  // 4. tool_result 的大体积 contentForLlm 按 05 §7 的截断规则二次裁剪
+  // 2. 输出 = [ systemPrompt 层（由最后一个 turn_context 复原）,
+  //             序列节点转换为 UnifiedMessage ]
+  // 3. tool_result 的大体积 contentForLlm 按 05 §7 的截断规则二次裁剪
 }
 ```
 

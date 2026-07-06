@@ -82,7 +82,6 @@ type Op =
   | { type: 'approval.response'; submissionId: string;
       approvalId: string;
       decision: ApprovalDecision }                // 见 06 章
-  | { type: 'thread.compact'; submissionId: string; threadId: string }  // 手动压缩
   | { type: 'ping'; submissionId: string };       // UI 心跳，兼作 SW 保活
 
 interface TurnOverrides {
@@ -105,13 +104,13 @@ type AgentEvent =
 
   // —— Turn 生命周期 ——
   | { type: 'turn.start'; threadId: string; turnId: string;
-      turnKind: 'user' | 'compaction' | 'title';   // 内部轮标记为 non-steerable
+      turnKind: 'user' | 'title';                  // 内部轮标记为 non-steerable
       steerable: boolean }
   | { type: 'turn.complete'; threadId: string; turnId: string;
       stopReason: 'done' | 'interrupted' | 'error' | 'budget_pause' }
   | { type: 'token.usage'; threadId: string; turnId: string;
       usage: { input: number; output: number; cacheRead?: number };
-      costUsd?: number; contextPct: number }
+      costUsd?: number }
 
   // —— Item 三段式 ——
   | { type: 'item.start'; threadId: string; turnId: string; itemId: string;
