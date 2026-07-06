@@ -109,7 +109,8 @@ export function createL2Tools(
     {
       name: 'upload_file',
       label: '上传文件',
-      description: 'Set files on a file input (element+ref) from a user-provided attachment id. Only attachments the user explicitly provided can be uploaded.',
+      description:
+        'Set a file on a file input (element+ref from the latest snapshot) from a user-provided attachment id. Only attachments the user explicitly provided can be uploaded (≤8MB).',
       parameters: z.object({
         element: z.string(),
         ref: z.string(),
@@ -117,29 +118,28 @@ export function createL2Tools(
       }),
       level: 'L2',
       effects: 'write',
-      execute: async (_id, _params) => {
-        // File upload needs the ref → backendNodeId translation via the content
-        // script's selector_map plus DOM.setFileInputFiles; wired when the
-        // selector_map↔CDP bridge lands. Fail loudly rather than silently.
-        throw new Error('upload_file 需要 selector_map↔CDP 桥接（后续实现）。当前可让用户手动选择文件。');
-      },
-    },
-    {
-      name: 'press_keys_raw',
-      label: '原生键序',
-      description: 'Dispatch a trusted raw key sequence via CDP for pages that ignore synthetic events. Prefer press_key (L1) unless it was ignored.',
-      parameters: z.object({ sequence: z.string() }),
-      level: 'L2',
-      effects: 'write',
-      execute: async (_id, params: { sequence: string }) => {
-        const tabId = await targetTab();
-        return cdp.withTab(tabId, async () => {
-          for (const ch of params.sequence) {
-            await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', text: ch });
-            await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', text: ch });
-          }
-          return { content: [{ type: 'text', text: `已输入原生键序（${params.sequence.length} 键）` }] };
+      execute: async (_id, params: { element: string; ref: string; attachmentId: string }) => {
+        const threadId = getThreadId();
+        const attachment = await db.attachments.get(params.attachmentId);
+        if (!attachment) throw new Error(`附件 ${params.attachmentId} 不存在。只能上传用户提供的附件。`);
+        if (attachment.threadId !== threadId) throw new Error('该附件不属于当前会话。');
+        const MAX = 8 * 1024 * 1024;
+        if (attachment.bytes.size > MAX) {
+          throw new Error(`附件过大（${(attachment.bytes.size / 1024 / 1024).toFixed(1)} MB > 8 MB 上限），请让用户手动选择文件。`);
+        }
+        const buf = new Uint8Array(await attachment.bytes.arrayBuffer());
+        let binary = '';
+        const CHUNK = 0x8000;
+        for (let i = 0; i < buf.length; i += CHUNK) binary += String.fromCharCode(...buf.subarray(i, i + CHUNK));
+        const base64 = btoa(binary);
+        const ext = attachment.mime.split('/')[1]?.split('+')[0] ?? 'bin';
+        const result = await gateway.callContentTool(threadId, 'upload', {
+          ref: params.ref,
+          filename: attachment.meta?.title ?? `attachment-${params.attachmentId.slice(0, 8)}.${ext}`,
+          mime: attachment.mime,
+          base64,
         });
+        return { content: [{ type: 'text' as const, text: result.resultText }] };
       },
     },
   ];

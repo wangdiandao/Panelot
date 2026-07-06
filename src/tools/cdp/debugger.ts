@@ -5,6 +5,8 @@
  * debugged" banner time (docs/01 §5).
  */
 
+import { keyEventSequence, parseKeyCombo } from './keycodes';
+
 const IDLE_DETACH_MS = 30_000;
 const CDP_VERSION = '1.3';
 
@@ -85,6 +87,20 @@ export class CdpManager {
 
   isAttached(tabId: number): boolean {
     return this.attached?.tabId === tabId;
+  }
+
+  /**
+   * Trusted key press (docs/05 §3): synthetic KeyboardEvents can't trigger
+   * native behavior (Enter-submit, Tab-focus, Escape-dismiss); CDP input can.
+   * Accepts 'Enter', 'Control+a', 'Shift+Tab' style combos.
+   */
+  async dispatchKey(tabId: number, combo: string): Promise<void> {
+    const payload = parseKeyCombo(combo);
+    await this.withTab(tabId, async () => {
+      for (const ev of keyEventSequence(payload)) {
+        await this.send(ev.type, ev.params);
+      }
+    });
   }
 
   /**

@@ -77,6 +77,25 @@ export class SkillManager {
     const skill = await this.db.skills.where('name').equals(name).first();
     return skill?.body ?? null;
   }
+
+  /**
+   * Resolve a leading slash command ("/xhs …") to an enabled skill — by
+   * skill name or by its panelot.command alias. Null when nothing matches
+   * (the message is then sent as plain text).
+   */
+  async resolveCommand(text: string): Promise<SkillRecord | null> {
+    const m = /^\/([\w:-]+)/.exec(text.trim());
+    if (!m) return null;
+    const token = m[1]!.toLowerCase();
+    const skills = await this.db.skills.filter((s) => s.enabled).toArray();
+    return (
+      skills.find((s) => {
+        const fm = s.frontmatter as SkillFrontmatter;
+        const command = fm.panelot?.command?.replace(/^\//, '').toLowerCase();
+        return s.name.toLowerCase() === token || command === token;
+      }) ?? null
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

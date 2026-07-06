@@ -28,7 +28,28 @@ export function createFetchUrlTool(): AnyAgentTool {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status} for ${params.url}`);
       const contentType = res.headers.get('content-type') ?? '';
-      const raw = await res.text();
+      // Stream with a hard byte cap — `await res.text()` on an unbounded
+      // response can OOM the service worker.
+      const MAX_BYTES = 512 * 1024;
+      let raw = '';
+      if (res.body) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let received = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          received += value.byteLength;
+          raw += decoder.decode(value, { stream: true });
+          if (received >= MAX_BYTES) {
+            await reader.cancel();
+            raw += '\n[响应过大，已在 512KB 处截断]';
+            break;
+          }
+        }
+      } else {
+        raw = await res.text();
+      }
 
       let text: string;
       if (contentType.includes('html')) {

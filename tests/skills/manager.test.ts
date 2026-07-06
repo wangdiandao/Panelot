@@ -49,6 +49,30 @@ describe('SkillManager storage & disclosure (docs/08 §2)', () => {
   });
 });
 
+describe('resolveCommand (slash-command activation, docs/08 §4)', () => {
+  it('matches "/name args" to the enabled skill by name', async () => {
+    await manager.importFromText(skill('xhs-writer'));
+    const hit = await manager.resolveCommand('/xhs-writer 写一篇笔记');
+    expect(hit?.name).toBe('xhs-writer');
+  });
+
+  it('matches the panelot.command alias', async () => {
+    await manager.importFromText(
+      '---\nname: long-name\ndescription: d\npanelot:\n  command: /xhs\n---\nbody',
+    );
+    const hit = await manager.resolveCommand('/xhs hello');
+    expect(hit?.name).toBe('long-name');
+  });
+
+  it('ignores disabled skills and non-command text', async () => {
+    const rec = await manager.importFromText(skill('off'));
+    await manager.setEnabled(rec.id, false);
+    expect(await manager.resolveCommand('/off go')).toBeNull();
+    expect(await manager.resolveCommand('plain /off text')).toBeNull();
+    expect(await manager.resolveCommand('/unknown')).toBeNull();
+  });
+});
+
 describe('load_skill tool (progressive disclosure, once per thread)', () => {
   it('returns the body on first call, then a cached notice', async () => {
     await manager.importFromText(skill('helper'));

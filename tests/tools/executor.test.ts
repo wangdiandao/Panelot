@@ -37,6 +37,51 @@ describe('read_page / snapshot lifecycle', () => {
   });
 });
 
+describe('extract (borrowed from browser-use extract + browsercluster GNE)', () => {
+  it('preserves links as markdown and strips chrome (nav/footer)', async () => {
+    document.body.innerHTML =
+      '<nav>导航垃圾</nav><article><h2>小标题</h2><p>看 <a href="/docs/x">这篇文档</a> 了解详情。</p></article><footer>页脚垃圾</footer>';
+    const r = await executeContentTool('extract', {});
+    expect(r.resultText).toContain('[这篇文档](');
+    expect(r.resultText).toMatch(/\/docs\/x/); // relative href resolved to absolute
+    expect(r.resultText).toContain('## 小标题');
+    expect(r.resultText).not.toContain('导航垃圾');
+    expect(r.resultText).not.toContain('页脚垃圾');
+    // extract is read-only: no fresh snapshot on the result (write path only).
+    expect(r.snapshot).toBeUndefined();
+  });
+
+  it('scope limits extraction to a ref\'d subtree', async () => {
+    document.body.innerHTML =
+      '<main><button id="a">甲区块内容</button><section id="b"><p>乙区块内容</p></section></main>';
+    // The button is the only ref'd element containing 甲区块内容; grab the ref
+    // off that specific line (the aggregate <main> line carries no ref).
+    const yaml = await readPage();
+    const line = yaml.split('\n').find((l) => l.includes('甲区块内容') && /\[ref=/.test(l))!;
+    const scope = line.match(/\[ref=(s\d+_\d+)\]/)![1]!;
+    const r = await executeContentTool('extract', { scope });
+    expect(r.resultText).toContain('甲区块内容');
+    expect(r.resultText).not.toContain('乙区块内容');
+  });
+
+  it('returns the FULL markdown (windowing is done engine-side, not here)', async () => {
+    const long = '甲'.repeat(20_000);
+    document.body.innerHTML = `<article><p>${long}</p></article>`;
+    const r = await executeContentTool('extract', {});
+    // Content-script layer returns everything up to the hard cap — no fromChar
+    // windowing or continuation footer at this layer.
+    expect(r.resultText.length).toBeGreaterThan(19_000);
+    expect(r.resultText).not.toMatch(/fromChar/);
+  });
+
+  it('drops javascript: links (no markdown link emitted)', async () => {
+    document.body.innerHTML = '<article><p><a href="javascript:steal()">点我</a> 安全文本</p></article>';
+    const r = await executeContentTool('extract', {});
+    expect(r.resultText).not.toContain('javascript:');
+    expect(r.resultText).toContain('安全文本');
+  });
+});
+
 describe('stale-ref rejection (docs/05 §1.1 — protocol-level expiry)', () => {
   it('rejects refs from an older snapshot with a re-read instruction', async () => {
     document.body.innerHTML = '<button>点我</button>';
@@ -175,5 +220,49 @@ describe('empty-tree explicit failure (docs/05 §1.4 — no silent empty)', () =
   it('throws EMPTY_TREE for a blank page so the fallback chain can trigger', async () => {
     document.body.innerHTML = '';
     await expect(executeContentTool('read_page', {})).rejects.toThrow(/EMPTY_TREE/);
+  });
+});
+
+describe('upload op (DataTransfer synthesis — real file set, no CDP path needed)', () => {
+  it('sets a File on the input and dispatches change', async () => {
+    document.body.innerHTML = '<input type="file" aria-label="附件上传">';
+    const yaml = await readPage();
+    const ref = refOf(yaml, '附件上传');
+    let changed = false;
+    document.querySelector('input')!.addEventListener('change', () => {
+      changed = true;
+    });
+
+    const result = await executeContentTool('upload', {
+      ref,
+      filename: 'report.txt',
+      mime: 'text/plain',
+      base64: btoa('hello panelot'),
+    });
+    expect(result.resultText).toContain('已选择文件 report.txt');
+    const input = document.querySelector('input')!;
+    expect(input.files).toHaveLength(1);
+    expect(input.files![0]!.name).toBe('report.txt');
+    expect(changed).toBe(true);
+  }, 15_000);
+
+  it('rejects non-file-input refs loudly', async () => {
+    document.body.innerHTML = '<button>不是输入框</button>';
+    const yaml = await readPage();
+    const ref = refOf(yaml, '不是输入框');
+    await expect(
+      executeContentTool('upload', { ref, filename: 'x', mime: 'text/plain', base64: btoa('x') }),
+    ).rejects.toThrow(/不是文件输入框/);
+  });
+});
+
+describe('focus op (CDP press_key pre-step)', () => {
+  it('focuses the target element', async () => {
+    document.body.innerHTML = '<input placeholder="搜索">';
+    const yaml = await readPage();
+    const ref = refOf(yaml, '搜索');
+    const result = await executeContentTool('focus', { ref });
+    expect(result.resultText).toBe('已聚焦');
+    expect(document.activeElement).toBe(document.querySelector('input'));
   });
 });

@@ -133,6 +133,75 @@ export class ThreadTree {
     return this.appendNode(threadId, { ...input, parentId: anchor.parentId });
   }
 
+  /**
+   * Position the cursor for a branch-and-run (turn.fork): leafId ← the
+   * anchor's nearest non-turn_context ancestor. The next turn prepends its
+   * own turn_context there, making its user_message a LOGICAL sibling of the
+   * anchor (see getLogicalSiblings). The anchor should be a user_message —
+   * regenerate forks at the assistant's preceding user message.
+   */
+  async repositionLeafForFork(threadId: string, siblingOfNodeId: string): Promise<void> {
+    const anchor = await this.db.nodes.get(siblingOfNodeId);
+    if (!anchor || anchor.threadId !== threadId) {
+      throw new Error(`node ${siblingOfNodeId} not found in thread ${threadId}`);
+    }
+    const total = await this.db.nodes.where('threadId').equals(threadId).count();
+    const guard = new TraversalGuard(total);
+    let ancestorId: string | null = anchor.parentId;
+    while (ancestorId !== null) {
+      guard.step();
+      const ancestor = await this.db.nodes.get(ancestorId);
+      if (!ancestor || ancestor.threadId !== threadId) throw new Error(`broken parent chain at ${ancestorId}`);
+      if (ancestor.type !== 'turn_context') break;
+      ancestorId = ancestor.parentId;
+    }
+    await this.db.threads.update(threadId, { leafId: ancestorId, updatedAt: Date.now() });
+  }
+
+  /**
+   * Logical siblings for branch UI (docs/02 §3.2): turn_context nodes are
+   * invisible structure — every turn prepends one, and a fork's turn_context
+   * lands as the physical sibling of the forked message. The branch set of a
+   * message node is therefore the LOGICAL children of its nearest
+   * non-turn_context ancestor, where each turn_context expands (recursively,
+   * seq-ordered) to the message nodes beneath it.
+   */
+  async getLogicalSiblings(threadId: string, nodeId: string): Promise<ThreadNode[]> {
+    const node = await this.db.nodes.get(nodeId);
+    if (!node || node.threadId !== threadId) return [];
+    const total = await this.db.nodes.where('threadId').equals(threadId).count();
+    const guard = new TraversalGuard(total);
+
+    // Nearest non-turn_context ancestor (null = root level).
+    let ancestorId: string | null = node.parentId;
+    while (ancestorId !== null) {
+      guard.step();
+      const ancestor = await this.db.nodes.get(ancestorId);
+      if (!ancestor || ancestor.threadId !== threadId) return [];
+      if (ancestor.type !== 'turn_context') break;
+      ancestorId = ancestor.parentId;
+    }
+
+    const liveChildren = async (parentId: string | null): Promise<ThreadNode[]> => {
+      const children = parentId === null
+        ? (await this.db.nodes.where('threadId').equals(threadId).toArray()).filter((n) => n.parentId === null)
+        : await this.db.nodes.where('parentId').equals(parentId).toArray();
+      return children.filter((n) => n.threadId === threadId && !n.deleted).sort((a, b) => a.seq - b.seq);
+    };
+
+    const expand = async (nodes: ThreadNode[]): Promise<ThreadNode[]> => {
+      const out: ThreadNode[] = [];
+      for (const n of nodes) {
+        guard.step();
+        if (n.type === 'turn_context') out.push(...(await expand(await liveChildren(n.id))));
+        else out.push(n);
+      }
+      return out;
+    };
+
+    return expand(await liveChildren(ancestorId));
+  }
+
   /** Live (non-tombstoned) siblings sharing a parent, ordered by seq. */
   async getSiblings(threadId: string, nodeId: string): Promise<ThreadNode[]> {
     const node = await this.db.nodes.get(nodeId);

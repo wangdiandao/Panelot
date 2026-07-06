@@ -58,7 +58,10 @@ export function isInteractive(el: Element, win: Window): boolean {
   if ((el as HTMLElement).isContentEditable) return true;
   // Rule 3: cursor:pointer on the innermost element (checked by caller for innermost-ness).
   try {
-    if (win.getComputedStyle(el).cursor === 'pointer') return true;
+    // Use the element's own window — `win` is the top frame, which can't
+    // compute styles for elements inside same-origin iframes.
+    const view = el.ownerDocument.defaultView ?? win;
+    if (view.getComputedStyle(el).cursor === 'pointer') return true;
   } catch {
     /* detached */
   }
@@ -70,7 +73,7 @@ export function isInteractive(el: Element, win: Window): boolean {
  * Innermost-hit-target folding: an element is the hit target if it is
  * interactive and none of its DESCENDANTS that would receive the click is a
  * better (more specific) target. Practically: skip a pointer-cursor container
- * when it contains an interactive descendant.
+ * when it contains an interactive descendant (including inside shadow roots).
  */
 function isInnermostTarget(el: Element, win: Window): boolean {
   if (!isInteractive(el, win)) return false;
@@ -78,10 +81,21 @@ function isInnermostTarget(el: Element, win: Window): boolean {
   // Semantic controls always win, even when nested inside each other (rare/invalid).
   if (INTERACTIVE_TAGS.has(tag)) return true;
   // Container-ish hits (cursor/tabindex/role) yield to interactive descendants.
-  for (const child of el.querySelectorAll('a,button,input,select,textarea,summary,[role],[tabindex],[contenteditable]')) {
-    if (isInteractive(child, win)) return false;
+  return !hasInteractiveDescendant(el, win);
+}
+
+const INTERACTIVE_SELECTOR = 'a,button,input,select,textarea,summary,[role],[tabindex],[contenteditable]';
+
+function hasInteractiveDescendant(el: Element, win: Window): boolean {
+  for (const child of el.querySelectorAll(INTERACTIVE_SELECTOR)) {
+    if (isInteractive(child, win)) return true;
   }
-  return true;
+  if (el.shadowRoot) {
+    for (const child of el.shadowRoot.querySelectorAll(INTERACTIVE_SELECTOR)) {
+      if (isInteractive(child, win)) return true;
+    }
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -113,12 +127,16 @@ export function computeRole(el: Element): string {
 }
 
 export function computeName(el: Element, win: Window): string {
+  // ID lookups must use the element's own root — document.getElementById
+  // can't see into shadow roots or same-origin iframes.
+  const root = el.getRootNode() as Document | ShadowRoot;
+  void win;
   // aria-labelledby > aria-label > <label for> > placeholder/alt/title > text content
   const labelledBy = el.getAttribute('aria-labelledby');
   if (labelledBy) {
     const parts = labelledBy
       .split(/\s+/)
-      .map((id) => win.document.getElementById(id)?.textContent?.trim() ?? '')
+      .map((id) => root.getElementById?.(id)?.textContent?.trim() ?? root.querySelector?.(`#${CSS.escape(id)}`)?.textContent?.trim() ?? '')
       .filter(Boolean);
     if (parts.length) return parts.join(' ');
   }
@@ -126,7 +144,7 @@ export function computeName(el: Element, win: Window): string {
   if (ariaLabel?.trim()) return ariaLabel.trim();
 
   if (el.id) {
-    const label = win.document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+    const label = root.querySelector?.(`label[for="${CSS.escape(el.id)}"]`);
     if (label?.textContent?.trim()) return label.textContent.trim();
   }
   const closestLabel = el.closest('label');
@@ -195,7 +213,8 @@ function isHidden(el: Element, win: Window): boolean {
   if (el.getAttribute('aria-hidden') === 'true') return true;
   if ((el as HTMLElement).hidden) return true;
   try {
-    const style = win.getComputedStyle(el);
+    const view = el.ownerDocument.defaultView ?? win;
+    const style = view.getComputedStyle(el);
     return style.display === 'none' || style.visibility === 'hidden';
   } catch {
     return false;
@@ -207,14 +226,71 @@ export interface BuildOptions {
   maxTokens?: number;
 }
 
+const MAX_IFRAME_DEPTH = 4;
+
 export function buildSnapshot(win: Window, opts: BuildOptions): SnapshotResult {
   const doc = win.document;
   const refMap = new Map<string, Element>();
   let refIndex = 0;
+  let iframeDepth = 0;
   const sid = opts.snapshotId;
 
+  /** Children in composed-tree order: open shadow root replaces light children. */
+  function childrenOf(el: Element): SnapshotNode[] {
+    // Open shadow DOM: walk the shadow tree (the rendered content). Slotted
+    // light-DOM children are reached through their <slot>'s assignedElements.
+    if (el.shadowRoot) {
+      const results: SnapshotNode[] = [];
+      for (const child of el.shadowRoot.children) results.push(...walk(child));
+      return results;
+    }
+    if (el.tagName.toLowerCase() === 'slot') {
+      const assigned = (el as HTMLSlotElement).assignedElements();
+      if (assigned.length > 0) {
+        const results: SnapshotNode[] = [];
+        for (const child of assigned) results.push(...walk(child));
+        return results;
+      }
+    }
+    const results: SnapshotNode[] = [];
+    for (const child of el.children) results.push(...walk(child));
+    return results;
+  }
+
+  function walkIframe(el: HTMLIFrameElement): SnapshotNode[] {
+    // Same-origin frames are walked recursively (login/payment forms live in
+    // iframes); cross-origin frames are announced as a blind spot so the
+    // model knows content exists that it cannot see.
+    let frameBody: Element | null = null;
+    try {
+      frameBody = el.contentDocument?.body ?? null;
+    } catch {
+      frameBody = null;
+    }
+    const label = el.title || el.getAttribute('aria-label') || el.src || '';
+    if (!frameBody) {
+      return [{ role: 'iframe', name: label, attrs: ['跨域不可见'], children: [] }];
+    }
+    // Depth guard: a same-origin self-embedding frame (dev harness, or a
+    // hostile page nesting frames to DoS the perception layer) would recurse
+    // unbounded and crash the whole snapshot.
+    if (iframeDepth >= MAX_IFRAME_DEPTH) {
+      return [{ role: 'iframe', name: label, attrs: ['递归深度超限'], children: [] }];
+    }
+    const node: SnapshotNode = { role: 'iframe', name: label, attrs: [], children: [] };
+    iframeDepth++;
+    try {
+      for (const child of frameBody.children) node.children.push(...walk(child));
+    } finally {
+      iframeDepth--;
+    }
+    return [node];
+  }
+
   function walk(el: Element): SnapshotNode[] {
-    if (SKIP_TAGS.has(el.tagName.toLowerCase()) || isHidden(el, win)) return [];
+    const tag = el.tagName.toLowerCase();
+    if (SKIP_TAGS.has(tag) || isHidden(el, win)) return [];
+    if (tag === 'iframe') return walkIframe(el as HTMLIFrameElement);
 
     const interactive = isInnermostTarget(el, win);
     const role = computeRole(el);
@@ -233,12 +309,17 @@ export function buildSnapshot(win: Window, opts: BuildOptions): SnapshotResult {
         refMap.set(node.ref, el);
       }
       // Interactive leaf: don't descend (name already summarizes content).
-      // Structural/containers: descend for children.
-      if (!interactive || ['form', 'combobox', 'list', 'table', 'dialog', 'navigation'].includes(role)) {
-        for (const child of el.children) node.children.push(...walk(child));
+      // Structural/containers: descend for children. A shadow host that is
+      // ALSO interactive (custom element with role=button) must still descend
+      // into its shadow root — its label/content lives there, not in light DOM.
+      if (!interactive || el.shadowRoot || ['form', 'combobox', 'list', 'table', 'dialog', 'navigation'].includes(role)) {
+        node.children.push(...childrenOf(el));
       }
       return [node];
     }
+
+    // Web component hosts / slots without their own role: splice through.
+    if (el.shadowRoot || tag === 'slot') return childrenOf(el);
 
     // Generic containers: splice children up; capture standalone text.
     const results: SnapshotNode[] = [];

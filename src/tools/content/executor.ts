@@ -9,6 +9,7 @@
  */
 
 import { buildSnapshot, type SnapshotResult } from '../snapshot/engine';
+import { BADGE_BG, BADGE_BORDER, BADGE_FG, BRAND_PRIMARY, BRAND_PRIMARY_HALO } from '../../styles/brand';
 
 // ---------------------------------------------------------------------------
 // State (per tab, in-memory only — docs/02 §2.2 "not persisted")
@@ -95,7 +96,7 @@ function highlight(el: Element): void {
     const rect = el.getBoundingClientRect();
     const shadow = getOverlay();
     const box = document.createElement('div');
-    box.style.cssText = `position:fixed;left:${rect.left - 3}px;top:${rect.top - 3}px;width:${rect.width + 6}px;height:${rect.height + 6}px;border:2px solid #f5a623;border-radius:4px;pointer-events:none;transition:opacity 300ms;box-shadow:0 0 0 2px rgba(245,166,35,.25);`;
+    box.style.cssText = `position:fixed;left:${rect.left - 3}px;top:${rect.top - 3}px;width:${rect.width + 6}px;height:${rect.height + 6}px;border:2px solid ${BRAND_PRIMARY};border-radius:4px;pointer-events:none;transition:opacity 300ms;box-shadow:0 0 0 2px ${BRAND_PRIMARY_HALO};`;
     shadow.appendChild(box);
     setTimeout(() => {
       box.style.opacity = '0';
@@ -113,7 +114,7 @@ export function showIndicator(text: string): void {
     badge = document.createElement('div');
     badge.id = 'indicator';
     badge.style.cssText =
-      'position:fixed;right:16px;bottom:16px;background:#18181d;color:#e8e8ed;border:1px solid #2a2a33;border-radius:999px;padding:6px 12px;font:12px Inter,system-ui;pointer-events:none;box-shadow:0 2px 12px rgba(0,0,0,.4);';
+      `position:fixed;right:16px;bottom:16px;background:${BADGE_BG};color:${BADGE_FG};border:1px solid ${BADGE_BORDER};border-radius:999px;padding:6px 12px;font:12px Inter,system-ui;pointer-events:none;box-shadow:0 2px 12px rgba(0,0,0,.4);`;
     shadow.appendChild(badge);
   }
   badge.textContent = text;
@@ -129,6 +130,29 @@ export function hideIndicator(): void {
 
 let manualHandler: (() => void) | null = null;
 let agentActing = false;
+
+// ---------------------------------------------------------------------------
+// Dialog reports from the MAIN-world patch (injected by the gateway):
+// auto-answered alert/confirm/prompt land here and ride along in the next
+// tool result so the model knows a dialog fired.
+// ---------------------------------------------------------------------------
+
+const pendingDialogs: { kind: string; message: string; response: string }[] = [];
+if (typeof document !== 'undefined') {
+  document.addEventListener('panelot:dialog', (e) => {
+    try {
+      const detail = JSON.parse((e as CustomEvent<string>).detail);
+      pendingDialogs.push(detail);
+    } catch { /* malformed — page interference, ignore */ }
+  });
+}
+
+function drainDialogReports(): string {
+  if (pendingDialogs.length === 0) return '';
+  const lines = pendingDialogs.map((d) => `- ${d.kind}("${d.message.slice(0, 200)}") → ${d.response}`);
+  pendingDialogs.length = 0;
+  return `\n[页面弹出了 ${lines.length} 个对话框，已自动处理:\n${lines.join('\n')}]`;
+}
 
 export function watchManualOperation(onManual: () => void): void {
   manualHandler = onManual;
@@ -164,6 +188,21 @@ function setNativeValue(el: HTMLInputElement | HTMLTextAreaElement, value: strin
 async function doClick(params: { ref: string; button?: 'left' | 'right'; doubleClick?: boolean }): Promise<string> {
   const el = resolveRef(params.ref) as HTMLElement;
   el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' as ScrollBehavior });
+  // Occlusion check: a covered element would silently "succeed" while a real
+  // user couldn't reach it. Hit-test the element's center.
+  const rect = el.getBoundingClientRect();
+  const doc = el.ownerDocument;
+  const hit = doc.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+  if (hit && hit !== el && !el.contains(hit) && !hit.contains(el)) {
+    const hitRoot = hit.getRootNode();
+    // The hit target may be inside the element's shadow root — that still counts.
+    const insideShadow = hitRoot instanceof ShadowRoot && el.contains(hitRoot.host);
+    if (!insideShadow) {
+      throw new Error(
+        `元素被 <${hit.tagName.toLowerCase()}${hit.id ? ` id="${hit.id}"` : ''}> 遮挡，真实用户无法点到。可能有弹层/遮罩——先处理遮挡物（关闭弹窗/滚动），或 read_page 查看当前状态。`,
+      );
+    }
+  }
   highlight(el);
   const opts = { bubbles: true, cancelable: true, view: window };
   if (params.button === 'right') {
@@ -293,15 +332,35 @@ async function doWaitFor(params: { text?: string; textGone?: boolean | string; t
   const target = gone ?? params.text;
   if (!target) throw new Error('wait_for 需要 text / textGone / timeMs 之一');
 
-  const deadline = Date.now() + 10_000;
+  const deadline = Date.now() + 30_000;
   for (;;) {
     const present = (document.body?.innerText ?? '').includes(target);
     if (gone ? !present : present) return gone ? `"${target}" 已消失` : `"${target}" 已出现`;
     if (Date.now() > deadline) {
-      throw new Error(`等待超时（10s）：${gone ? `"${target}" 未消失` : `"${target}" 未出现`}`);
+      throw new Error(`等待超时（30s）：${gone ? `"${target}" 未消失` : `"${target}" 未出现`}`);
     }
     await sleep(200);
   }
+}
+
+async function doUpload(params: { ref: string; filename: string; mime: string; base64: string }): Promise<string> {
+  const el = resolveRef(params.ref);
+  if (!(el instanceof HTMLInputElement) || el.type !== 'file') {
+    throw new Error(`ref ${params.ref} 不是文件输入框（<input type="file">）`);
+  }
+  highlight(el);
+  // DataTransfer synthesis — the extension-compatible path (CDP's
+  // DOM.setFileInputFiles needs local file paths extensions can't provide).
+  const binary = atob(params.base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const file = new File([bytes], params.filename, { type: params.mime });
+  const dt = new DataTransfer();
+  dt.items.add(file);
+  el.files = dt.files;
+  dispatchInputEvents(el);
+  if (el.files.length !== 1) throw new Error('文件设置未生效（页面可能重置了输入框）');
+  return `已选择文件 ${params.filename}（${(bytes.length / 1024).toFixed(1)} KB）`;
 }
 
 function doGetSelection(): string {
@@ -338,13 +397,92 @@ function takeSnapshot(params: { maxTokens?: number }): string {
   return currentSnapshot.yaml;
 }
 
+const EXTRACT_MAX_CHARS = 12_000; // ≈3k tokens
+const CHROME_SELECTOR = 'script,style,noscript,nav,footer,iframe,svg,header,aside';
+
 function articleExtract(): string {
   const root = document.querySelector('article') ?? document.querySelector('main') ?? document.body;
   const clone = root.cloneNode(true) as HTMLElement;
-  clone.querySelectorAll('script,style,noscript,nav,footer,iframe,svg,header,aside').forEach((el) => el.remove());
+  clone.querySelectorAll(CHROME_SELECTOR).forEach((el) => el.remove());
   const text = (clone.innerText ?? '').replace(/\n{3,}/g, '\n\n').trim();
-  const max = 12_000; // ≈3k tokens
-  return `# ${document.title}\nURL: ${location.href}\n\n${text.length > max ? `${text.slice(0, max)}\n[正文已截断]` : text}`;
+  return `# ${document.title}\nURL: ${location.href}\n\n${text.length > EXTRACT_MAX_CHARS ? `${text.slice(0, EXTRACT_MAX_CHARS)}\n[正文已截断]` : text}`;
+}
+
+/**
+ * Safety cap on the FULL extraction — beyond this even the offloaded attachment
+ * is truncated (pathological pages only; ~50k tokens). Windowing for the model's
+ * context is done by the engine-side tool, not here.
+ */
+const EXTRACT_HARD_CAP = 200_000;
+
+/**
+ * extract (borrowed from browser-use's `extract` action + browsercluster's GNE
+ * article extraction; output-size control from chrome-agent-skill's save_path):
+ * page/subtree → clean Markdown that PRESERVES links and heading levels, so the
+ * loop's model can structure it without a raw snapshot. scope limits to a ref'd
+ * subtree. Returns the FULL markdown (up to a hard cap); the engine-side tool
+ * windows it for context and offloads the full body to an attachment.
+ */
+function doExtract(params: { scope?: string }): string {
+  const root = params.scope
+    ? (resolveRef(params.scope) as HTMLElement)
+    : (document.querySelector('article') ?? document.querySelector('main') ?? document.body) as HTMLElement;
+  const clone = root.cloneNode(true) as HTMLElement;
+  clone.querySelectorAll(CHROME_SELECTOR).forEach((el) => el.remove());
+
+  const md = domToMarkdown(clone).replace(/\n{3,}/g, '\n\n').trim();
+  const header = `# ${document.title}\nURL: ${location.href}\n\n`;
+  const body = md.length > EXTRACT_HARD_CAP ? `${md.slice(0, EXTRACT_HARD_CAP)}\n[正文超长，已在 ${EXTRACT_HARD_CAP} 字符截断]` : md;
+  return header + body;
+}
+
+/** Minimal DOM→Markdown: headings, links, list items, paragraphs. Block-level
+ *  elements emit newlines; <a href> becomes [text](absolute-url). */
+function domToMarkdown(root: HTMLElement): string {
+  const parts: string[] = [];
+  const walk = (node: Node): void => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const t = (node.textContent ?? '').replace(/\s+/g, ' ');
+      if (t.trim()) parts.push(t);
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const el = node as HTMLElement;
+    const tag = el.tagName.toLowerCase();
+
+    const h = /^h([1-6])$/.exec(tag);
+    if (h) {
+      parts.push(`\n\n${'#'.repeat(Number(h[1]))} ${(el.textContent ?? '').trim()}\n`);
+      return; // heading text already captured
+    }
+    if (tag === 'a') {
+      const text = (el.textContent ?? '').replace(/\s+/g, ' ').trim();
+      const href = el.getAttribute('href');
+      if (text && href && !href.startsWith('javascript:')) {
+        let abs = href;
+        try { abs = new URL(href, location.href).href; } catch { /* keep raw */ }
+        parts.push(`[${text}](${abs})`);
+      } else if (text) {
+        parts.push(text);
+      }
+      return; // don't double-walk link children
+    }
+    if (tag === 'li') {
+      parts.push('\n- ');
+      el.childNodes.forEach(walk);
+      return;
+    }
+    if (tag === 'br') {
+      parts.push('\n');
+      return;
+    }
+    const isBlock = /^(p|div|section|article|ul|ol|table|tr|blockquote|pre|h[1-6])$/.test(tag);
+    if (isBlock) parts.push('\n');
+    el.childNodes.forEach(walk);
+    if (isBlock) parts.push('\n');
+  };
+  walk(root);
+  return parts.join('');
 }
 
 // ---------------------------------------------------------------------------
@@ -401,7 +539,7 @@ export interface ExecuteResult {
   pageStabilized?: boolean;
 }
 
-const WRITE_ACTIONS = new Set(['click', 'type', 'select_option', 'press_key', 'hover', 'batch_actions']);
+const WRITE_ACTIONS = new Set(['click', 'type', 'select_option', 'press_key', 'hover', 'batch_actions', 'upload']);
 
 export async function executeContentTool(tool: string, params: unknown): Promise<ExecuteResult> {
   agentActing = true;
@@ -419,6 +557,8 @@ export async function executeContentTool(tool: string, params: unknown): Promise
       }
       case 'find_in_page':
         return { resultText: doFindInPage(p) };
+      case 'extract':
+        return { resultText: doExtract(p) };
       case 'get_selection':
         return { resultText: doGetSelection() };
       case 'click':
@@ -430,6 +570,14 @@ export async function executeContentTool(tool: string, params: unknown): Promise
       case 'select_option':
         resultText = await doSelect(p);
         break;
+      case 'focus': {
+        // Focus for the CDP press_key path: bring the element into view and
+        // give it keyboard focus so the trusted key lands on it.
+        const el = resolveRef(p.ref) as HTMLElement;
+        el.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior });
+        el.focus();
+        return { resultText: '已聚焦' };
+      }
       case 'press_key':
         resultText = await doPressKey(p);
         break;
@@ -444,14 +592,9 @@ export async function executeContentTool(tool: string, params: unknown): Promise
       case 'batch_actions':
         resultText = await doBatch(p);
         break;
-      case 'run_javascript': {
-        // Executed in the content script's isolated world here; the MAIN-world
-        // variant needs page-context injection (L2), out of scope for L1.
-        // eslint-disable-next-line no-new-func
-        const fn = new Function(`return (async () => { ${p.code} })()`);
-        const value = await fn();
-        return { resultText: `执行结果: ${typeof value === 'string' ? value : JSON.stringify(value) ?? 'undefined'}` };
-      }
+      case 'upload':
+        resultText = await doUpload(p);
+        break;
       default:
         throw new Error(`content script 不支持工具: ${tool}`);
     }
@@ -464,7 +607,7 @@ export async function executeContentTool(tool: string, params: unknown): Promise
     }
     const snapshot = takeSnapshot({ maxTokens: 1500 });
     return {
-      resultText: resultText + (stabilized ? '' : '\n[页面可能未完全加载]'),
+      resultText: resultText + drainDialogReports() + (stabilized ? '' : '\n[页面可能未完全加载]'),
       snapshot,
       pageStabilized: stabilized,
     };

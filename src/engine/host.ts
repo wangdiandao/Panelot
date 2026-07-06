@@ -33,7 +33,7 @@ interface Client {
   subscribedThreadId: string | null;
   initialized: boolean;
   /** Coalescing buffer: itemId → accumulated text/reasoning deltas. */
-  pendingDeltas: Map<string, { text: string; reasoning: string }>;
+  pendingDeltas: Map<string, { threadId: string; text: string; reasoning: string }>;
   flushTimer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -131,11 +131,13 @@ export class EngineHost {
     // V1 policy (docs/01 §6): version mismatch warns, does not block.
     let snapshot: ThreadSnapshot | undefined;
     if (op.subscribe) {
-      const snap = await this.core.getSnapshot(op.subscribe.threadId);
-      if (snap) {
-        client.subscribedThreadId = op.subscribe.threadId;
-        snapshot = snap;
-      }
+      // Subscribe BEFORE the async snapshot build: events broadcast while
+      // getSnapshot awaits IndexedDB (turn.start, live items, thread.updated)
+      // must reach this client, not be dropped as "not subscribed".
+      client.subscribedThreadId = op.subscribe.threadId;
+      const snap = await this.core.getSnapshot(op.subscribe.threadId).catch(() => null);
+      if (snap) snapshot = snap;
+      else client.subscribedThreadId = null;
     }
     client.conn.post({
       type: 'initialized',
@@ -149,8 +151,14 @@ export class EngineHost {
     client: Client,
     op: Extract<Op, { type: 'thread.subscribe' }>,
   ): Promise<void> {
-    const snap = await this.core.getSnapshot(op.threadId);
+    // Same ordering rule as handleInitialize: register the subscription
+    // first so mid-snapshot broadcasts are delivered, then roll back if the
+    // thread turns out not to exist (or the snapshot build fails).
+    const previous = client.subscribedThreadId;
+    client.subscribedThreadId = op.threadId;
+    const snap = await this.core.getSnapshot(op.threadId).catch(() => null);
     if (!snap) {
+      client.subscribedThreadId = previous;
       client.conn.post({
         type: 'error',
         submissionId: op.submissionId,
@@ -160,7 +168,6 @@ export class EngineHost {
       });
       return;
     }
-    client.subscribedThreadId = op.threadId;
     client.conn.post({
       type: 'initialized',
       submissionId: op.submissionId,
@@ -226,7 +233,7 @@ export class EngineHost {
 
   private postToClient(client: Client, ev: AgentEvent): void {
     if (ev.type === 'item.delta' && (ev.delta.text !== undefined || ev.delta.reasoning !== undefined)) {
-      const buf = client.pendingDeltas.get(ev.itemId) ?? { text: '', reasoning: '' };
+      const buf = client.pendingDeltas.get(ev.itemId) ?? { threadId: ev.threadId, text: '', reasoning: '' };
       buf.text += ev.delta.text ?? '';
       buf.reasoning += ev.delta.reasoning ?? '';
       client.pendingDeltas.set(ev.itemId, buf);
@@ -249,7 +256,7 @@ export class EngineHost {
       const delta: { text?: string; reasoning?: string } = {};
       if (buf.text) delta.text = buf.text;
       if (buf.reasoning) delta.reasoning = buf.reasoning;
-      client.conn.post({ type: 'item.delta', itemId, delta });
+      client.conn.post({ type: 'item.delta', threadId: buf.threadId, itemId, delta });
     }
     client.pendingDeltas.clear();
   }

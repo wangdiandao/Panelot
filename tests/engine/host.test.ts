@@ -203,32 +203,77 @@ describe('EngineHost event routing', () => {
     expect(byEvents.some((e) => e.type === 'turn.start')).toBe(false);
   });
 
+  it('delivers activity.updated to clients subscribed to OTHER threads (sidebar indicators)', async () => {
+    const core: EngineCore = {
+      handleOp: vi.fn(async () => {}),
+      getSnapshot: async () => null,
+      threadIdOf: () => null,
+    };
+    const host = new EngineHost(core);
+
+    // Subscribed to thread B — must still hear about thread A's activity
+    // (the event has no top-level threadId, so the filter lets it through).
+    const otherThreadClient = connect(host);
+    const events = collect(otherThreadClient);
+    init(otherThreadClient);
+    await flush();
+
+    host.broadcast({ type: 'activity.updated', activity: { threadId: 'tA', running: true, pendingApprovals: 0 } });
+    await flush();
+
+    const got = events.find((e) => e.type === 'activity.updated');
+    expect(got).toBeDefined();
+    expect((got as { activity: { threadId: string; running: boolean } }).activity).toMatchObject({ threadId: 'tA', running: true });
+  });
+
+  // item.delta/complete now carry threadId (cross-thread isolation), so the
+  // client must be subscribed to receive them.
+  function subscribedHost(threadId: string) {
+    const snapshot: ThreadSnapshot = {
+      meta: {
+        id: threadId, title: '', createdAt: 1, updatedAt: 2, leafId: null,
+        archived: false, pinned: false,
+        stats: { turns: 0, totalTokens: 0, costUsd: 0 },
+      },
+      items: [],
+      activeTurn: null,
+      pendingApprovals: [],
+      queuedInputs: 0,
+    };
+    const core: EngineCore = {
+      handleOp: vi.fn(async () => {}),
+      getSnapshot: async (id) => (id === threadId ? snapshot : null),
+      threadIdOf: () => null,
+    };
+    return new EngineHost(core);
+  }
+
   it('coalesces consecutive text deltas for the same item within 16ms', async () => {
-    const host = new EngineHost(new StubEngineCore());
+    const host = subscribedHost('tC');
     const t = connect(host);
     const events = collect(t);
-    init(t);
+    init(t, 'tC');
     await flush();
 
     for (const ch of ['H', 'e', 'l', 'l', 'o']) {
-      host.broadcast({ type: 'item.delta', itemId: 'i1', delta: { text: ch } });
+      host.broadcast({ type: 'item.delta', threadId: 'tC', itemId: 'i1', delta: { text: ch } });
     }
     await flush();
 
     const deltas = events.filter((e) => e.type === 'item.delta');
     expect(deltas).toHaveLength(1);
-    expect(deltas[0]).toMatchObject({ itemId: 'i1', delta: { text: 'Hello' } });
+    expect(deltas[0]).toMatchObject({ itemId: 'i1', threadId: 'tC', delta: { text: 'Hello' } });
   });
 
   it('flushes buffered deltas before a non-delta event (ordering preserved)', async () => {
-    const host = new EngineHost(new StubEngineCore());
+    const host = subscribedHost('tC');
     const t = connect(host);
     const events = collect(t);
-    init(t);
+    init(t, 'tC');
     await flush();
 
-    host.broadcast({ type: 'item.delta', itemId: 'i1', delta: { text: 'partial' } });
-    host.broadcast({ type: 'item.complete', itemId: 'i1', result: { ok: true } });
+    host.broadcast({ type: 'item.delta', threadId: 'tC', itemId: 'i1', delta: { text: 'partial' } });
+    host.broadcast({ type: 'item.complete', threadId: 'tC', itemId: 'i1', result: { ok: true } });
     await flush();
 
     const relevant = events.filter((e) => e.type === 'item.delta' || e.type === 'item.complete');
