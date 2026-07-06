@@ -11,7 +11,7 @@
  *  - active row = bg tint + left accent bar (LibreChat Convo — shape channel,
  *    not color-only); unread = dot + font-medium (two channels);
  *  - a status slot per row for agent activity (running / awaiting approval),
- *    lit by the activity map (P2).
+ *    lit by the activity map.
  * Settings/model controls intentionally live elsewhere (header), so this
  * column is exactly: new chat, search, list.
  */
@@ -109,7 +109,7 @@ export function isUnread(thread: ThreadMeta, seen: Record<string, number>, activ
 
 // ---------------------------------------------------------------------------
 
-/** Per-thread agent activity (P2 wiring; empty map until then). */
+/** Per-thread agent activity, from the engine client's activity store. */
 export interface ThreadActivity {
   running: boolean;
   pendingApprovals: number;

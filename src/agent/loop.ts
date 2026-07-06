@@ -17,7 +17,7 @@ import { CONSECUTIVE_FAILURE_REMIND, CONSECUTIVE_FAILURE_STOP, FAILURE_REMINDER,
 // Collaborator interfaces (wired by EngineCore; mockable in tests)
 // ---------------------------------------------------------------------------
 
-/** Gatekeeper facade (full implementation in Phase 7). */
+/** Gatekeeper facade. */
 export interface GatekeeperCheck {
   check(call: { toolName: string; params: unknown; effects: 'read' | 'write' }, threadId: string):
     Promise<

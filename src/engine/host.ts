@@ -7,15 +7,15 @@
  *  - per-thread bounded Op queues with `overloaded` backpressure
  *  - 16ms delta coalescing before postMessage (docs/01 §3.5)
  *
- * The actual agent behavior lives behind `EngineCore` (Phase 4); Phase 1
- * ships a stub so the shell is fully testable now.
+ * The actual agent behavior lives behind `EngineCore`, so the shell is
+ * testable in isolation with a stub core.
  */
 
 import { PROTOCOL_VERSION, isOp } from '../messaging/protocol';
 import type { AgentEvent, Op, ThreadSnapshot } from '../messaging/protocol';
 import type { ConnectionHandler, EngineConnection } from '../messaging/transport';
 
-/** Engine business logic consumed by the host. Implemented fully in Phase 4. */
+/** Engine business logic consumed by the host. */
 export interface EngineCore {
   /** Handle one Op. Emit events via the provided sink; return when accepted. */
   handleOp(op: Op, emit: (ev: AgentEvent) => void): Promise<void>;
@@ -262,7 +262,7 @@ export class EngineHost {
   }
 }
 
-/** Phase-1 stub core: knows no threads, accepts nothing. Replaced in Phase 4. */
+/** Inert core for shell tests: knows no threads, accepts nothing. */
 export class StubEngineCore implements EngineCore {
   async handleOp(op: Op, emit: (ev: AgentEvent) => void): Promise<void> {
     emit({
