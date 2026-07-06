@@ -8,3 +8,4 @@ stats-*.json
 .DS_Store
 test-results/
 playwright-report/
+scratch/
