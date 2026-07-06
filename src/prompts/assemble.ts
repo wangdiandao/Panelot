@@ -17,7 +17,7 @@ export interface SkillIndexEntry {
 
 export interface AssembleOptions {
   userGlobalPrompt?: string;
-  /** Site-level prompts matching the current controlled tab (docs/08 §6). */
+  /** Site-level prompts matching the current target tab (docs/08 §6). */
   sitePrompts?: { pattern: string; prompt: string }[];
   skillsIndex?: SkillIndexEntry[];
   environment?: {
@@ -71,21 +71,24 @@ export function assembleSystemPrompt(opts: AssembleOptions = {}): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Wrap web/file/MCP-sourced content in delimiter markers with a random suffix
- * so page content cannot forge a closing tag. Applied by the engine at
- * tool_result assembly — tools themselves never fence.
+ * Wrap web/file/MCP-sourced content in delimiter markers with a per-call
+ * CSPRNG nonce (agent-browser's content-boundary design) so page content
+ * cannot forge a closing tag. Applied by the engine at tool_result assembly —
+ * tools themselves never fence.
  */
 export function fenceUntrusted(content: string, origin: string, tool: string): string {
   const suffix = randomSuffix();
   const tag = `web_content_${suffix}`;
-  // Defense in depth: if the content somehow contains our random tag (astronomically
-  // unlikely), strip it.
-  const safe = content.replaceAll(`<<<end_${tag}>>>`, '');
+  // Defense in depth: neutralize any fence-shaped marker already in the
+  // content. Forging OUR nonce is impossible to predict; forging a fence
+  // with a DIFFERENT nonce could still visually fake a boundary, so all
+  // <<<...>>> markers that look like fences are defanged.
+  const safe = content.replace(/<<<(\/?(?:end_)?web_content[^>]*)>>>/gi, '‹‹‹$1›››');
   return `<<<${tag} origin="${origin}" tool="${tool}">>>\n${safe}\n<<<end_${tag}>>>`;
 }
 
 function randomSuffix(): string {
-  const bytes = new Uint8Array(4);
+  const bytes = new Uint8Array(8);
   crypto.getRandomValues(bytes);
-  return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 6);
+  return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
