@@ -6,3 +6,5 @@ stats.html
 stats-*.json
 *.log
 .DS_Store
+test-results/
+playwright-report/
