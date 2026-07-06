@@ -20,6 +20,7 @@ import type { LiveItem } from '../engineClient';
 import { Markdown } from './Markdown';
 import { MessageActions } from './MessageActions';
 import { CitationsPill } from './CitationsPill';
+import { ReasoningBlock } from './ReasoningBlock';
 import { ToolCallGroup, type ToolCardData } from './ToolCallCard';
 import { Button } from './ui/button';
 import { t } from '../i18n';
@@ -357,9 +358,12 @@ function renderRow(row: Row, ctx: RowCtx) {
       // every reasoning/answer block is noise in multi-step turns.
       const text = row.liveText ?? row.payload.content.map((c) => (c.type === 'text' ? c.text : '')).join('');
       const reasoning = row.liveReasoning || row.payload.reasoning;
+      // Reasoning precedes text in the stream: once answer text arrives the
+      // thinking phase is OVER — collapse it even though the row still streams.
+      const reasoningLive = Boolean(row.streaming) && !text;
       return (
         <div className="group/msg min-w-0">
-          {reasoning && <ReasoningBlock text={reasoning} streaming={row.streaming} />}
+          {reasoning && <ReasoningBlock text={reasoning} streaming={reasoningLive} />}
           <Markdown content={text} streaming={row.streaming} />
           {row.streaming && !text && <span className="inline-block h-4 w-[3px] animate-[blink_1s_ease-in-out_infinite] rounded-full bg-primary align-middle" />}
           {!row.streaming && row.citations && <CitationsPill citations={row.citations} />}
@@ -444,36 +448,3 @@ function EditInPlace({ initial, onCancel, onResend }: { initial: string; onCance
   );
 }
 
-function ReasoningBlock({ text, streaming }: { text: string; streaming?: boolean }) {
-  // OpenWebUI semantics: auto-open while thinking streams (a peek window that
-  // follows the tail), auto-collapse when done; manual toggle wins afterward.
-  const [manualOpen, setManualOpen] = useState<boolean | null>(null);
-  const open = manualOpen ?? Boolean(streaming);
-  const peekRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (streaming && open && peekRef.current) {
-      peekRef.current.scrollTop = peekRef.current.scrollHeight;
-    }
-  }, [text, streaming, open]);
-  return (
-    <div className="mb-2">
-      <button
-        type="button"
-        onClick={() => setManualOpen(!open)}
-        className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
-        aria-expanded={open}
-      >
-        {streaming && <span className="inline-block size-1.5 animate-pulse rounded-full bg-info" />}
-        {open ? '▾' : '▸'} {streaming ? t('stream.reasoningLive') : t('stream.reasoning')}
-      </button>
-      {open && (
-        <div
-          ref={peekRef}
-          className={`mt-1 overflow-y-auto whitespace-pre-wrap rounded-md border-l-2 border-info/40 bg-card px-3 py-2 text-[12px] text-muted-foreground ${streaming ? 'max-h-32' : 'max-h-72'}`}
-        >
-          {text}
-        </div>
-      )}
-    </div>
-  );
-}

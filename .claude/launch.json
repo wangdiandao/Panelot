@@ -5,7 +5,7 @@
       "name": "preview",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["exec", "vite", "--config", "preview/vite.config.ts"],
-      "port": 5199
+      "port": 5391
     }
   ]
 }

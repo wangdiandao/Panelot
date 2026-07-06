@@ -142,6 +142,8 @@
 
   --shadow-pop: var(--elevation-pop);
   --shadow-soft: var(--elevation-soft);
+
+  --animate-shimmer: shimmer 2.5s linear infinite;
 }
 
 @layer base {
@@ -219,5 +221,15 @@
   }
   50% {
     opacity: 0.2;
+  }
+}
+
+/* Text shimmer for streaming labels (Thinking…) — pairs with bg-clip-text. */
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
   }
 }

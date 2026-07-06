@@ -11,5 +11,5 @@ export default defineConfig({
     alias: { '@': fileURLToPath(new URL('..', import.meta.url)) },
   },
   plugins: [react(), tailwindcss()],
-  server: { port: 5199 },
+  server: { port: 5391, strictPort: true },
 });

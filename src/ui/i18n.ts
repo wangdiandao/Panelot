@@ -215,7 +215,11 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   'stream.backToBottom': { 'zh-CN': '↓ 回到底部', en: '↓ Back to bottom' },
   'stream.reasoning': { 'zh-CN': '思考过程', en: 'Reasoning' },
   'stream.reasoningLive': { 'zh-CN': '思考中…', en: 'Thinking…' },
+  'stream.thoughtFor': { 'zh-CN': '思考了 {s} 秒', en: 'Thought for {s}s' },
   'stream.steps': { 'zh-CN': '{n} 步浏览器操作', en: '{n} browser steps' },
+  'tool.params': { 'zh-CN': '参数', en: 'Parameters' },
+  'tool.result': { 'zh-CN': '结果', en: 'Result' },
+  'tool.error': { 'zh-CN': '错误', en: 'Error' },
 };
 
 let currentLang: Lang = detectLang();

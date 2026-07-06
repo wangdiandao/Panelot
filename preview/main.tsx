@@ -9,6 +9,7 @@
 import React, { useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import { Markdown } from '../src/ui/components/Markdown';
+import { ReasoningBlock } from '../src/ui/components/ReasoningBlock';
 import { ToolCallGroup } from '../src/ui/components/ToolCallCard';
 import { PlanConfirmCard } from '../src/ui/components/PlanConfirmCard';
 import { PermissionSwitch } from '../src/ui/components/PermissionSwitch';
@@ -54,7 +55,18 @@ function Bubble() {
 function Assistant() {
   return (
     <div className="min-w-0 flex-1 pt-0.5">
+      <ReasoningBlock
+        text={'用户要对比三款耳机。先读取当前页面拿到第一款的评价，再打开另外两款的页面分别提取，最后汇总成表格。\n注意：评价要区分音质/降噪/佩戴三个维度。'}
+      />
       <Markdown content={ASSISTANT_MD} />
+    </div>
+  );
+}
+
+function AssistantThinking() {
+  return (
+    <div className="min-w-0 flex-1 pt-0.5">
+      <ReasoningBlock text={'正在分析页面结构，第一款耳机的评价集中在…'} streaming />
     </div>
   );
 }
@@ -162,11 +174,12 @@ function Preview() {
                 cards={[
                   { itemId: '1', toolName: 'navigate', label: '导航', status: 'ok', paramsSummary: 'taobao.com/item…', durationMs: 1200 },
                   { itemId: '2', toolName: 'read_page', label: '读取页面', status: 'ok', paramsSummary: '增量快照 s4', durationMs: 300 },
-                  { itemId: '3', toolName: 'extract', label: '提取', status: 'ok', durationMs: 800 },
-                  { itemId: '4', toolName: 'click', label: '点击元素', status: 'running', progressText: '等待加载…' },
+                  { itemId: '3', toolName: 'extract', label: '提取', status: 'fail', resultText: '快照已过期：ref "s3_2" 不属于当前快照，请重新 read_page' },
+                  { itemId: '4', toolName: 'click', label: '点击元素', status: 'running', progressText: '等待加载…', params: { element: '评价标签页', ref: 's4_11' } },
                 ]}
               />
             </div>
+            <AssistantThinking />
           </div>
         </div>
         {/* Plan confirm card replaces composer when plan is ready */}
