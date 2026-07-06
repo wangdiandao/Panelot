@@ -9,7 +9,8 @@
       "Bash(pnpm test *)",
       "Bash(pnpm compile *)",
       "Bash(pnpm build *)",
-      "Bash(pnpm dlx *)"
+      "Bash(pnpm dlx *)",
+      "Bash(npx vitest *)"
     ]
   }
 }
