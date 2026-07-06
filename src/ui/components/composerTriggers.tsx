@@ -1,20 +1,14 @@
 /**
  * Data sources for the TriggerMenu (docs/09 §5):
- *   @  → page / selection / screenshot / open tabs
- *   /  → built-in commands + Skill commands (panelot.command)
+ *   @  → open tabs
+ *   /  → built-in commands + all enabled Skills (activated on send)
  *   {{ → dynamic variables, evaluated at submit time
  * MCP Prompts join the / list with the command palette phase (S5).
  */
 
 import { useEffect, useState } from 'react';
 import type { ContextBlock } from '../../messaging/protocol';
-import {
-  attachCurrentPage,
-  attachScreenshot,
-  attachSelection,
-  attachTab,
-  listAttachableTabs,
-} from '../pageContext';
+import { attachSelection, attachTab, listAttachableTabs } from '../pageContext';
 import { PanelotDB } from '../../db/schema';
 import { SkillManager } from '../../skills/manager';
 import type { SkillFrontmatter, VariableDef } from '../../skills/parse';
@@ -59,6 +53,23 @@ export interface SkillCommand {
   variables?: VariableDef[];
 }
 
+/** Enabled skills as slash commands (shared by TriggerMenu and the + menu). */
+export async function listSkillCommands(): Promise<SkillCommand[]> {
+  const skills = await skillManager.list();
+  const cmds: SkillCommand[] = [];
+  for (const s of skills) {
+    if (!s.enabled) continue;
+    const fm = s.frontmatter as SkillFrontmatter;
+    cmds.push({
+      command: fm.panelot?.command ?? `/${s.name}`,
+      skillName: s.name,
+      description: fm.description,
+      variables: fm.panelot?.variables,
+    });
+  }
+  return cmds;
+}
+
 export interface BuiltinCommand {
   id: string;
   label: string;
@@ -87,22 +98,8 @@ export function useTriggerItems(trigger: TriggerState | null, cb: Callbacks): Tr
 
   useEffect(() => {
     if (trigger?.kind !== '/') return;
-    void skillManager.list().then((skills) => {
-      const cmds: SkillCommand[] = [];
-      for (const s of skills) {
-        if (!s.enabled) continue;
-        const fm = s.frontmatter as SkillFrontmatter;
-        if (fm.panelot?.command) {
-          cmds.push({
-            command: fm.panelot.command,
-            skillName: s.name,
-            description: fm.description,
-            variables: fm.panelot.variables,
-          });
-        }
-      }
-      setSkillCommands(cmds);
-    });
+    // Every enabled Skill is a slash command; panelot.command only renames it.
+    void listSkillCommands().then(setSkillCommands);
   }, [trigger?.kind]);
 
   if (!trigger) return [];
@@ -113,20 +110,15 @@ export function useTriggerItems(trigger: TriggerState | null, cb: Callbacks): Tr
       const block = await fn();
       if (block) cb.attachContext(block);
     };
-    return [
-      { id: 'page', kind: '@', group: '上下文', label: '当前页面正文', icon: 'page', action: attach(attachCurrentPage) },
-      { id: 'selection', kind: '@', group: '上下文', label: '当前选中文本', icon: 'selection', action: attach(attachSelection) },
-      { id: 'screenshot', kind: '@', group: '上下文', label: '截图当前页', icon: 'screenshot', action: attach(attachScreenshot) },
-      ...tabs.map((t) => ({
-        id: `tab-${t.id}`,
-        kind: '@' as const,
-        group: '打开的标签页',
-        label: t.title,
-        hint: new URL(t.url).hostname,
-        icon: 'tab' as const,
-        action: attach(() => attachTab(t.id, t.url)),
-      })),
-    ];
+    return tabs.map((t) => ({
+      id: `tab-${t.id}`,
+      kind: '@' as const,
+      group: '打开的标签页',
+      label: t.title,
+      hint: new URL(t.url).hostname,
+      icon: 'tab' as const,
+      action: attach(() => attachTab(t.id, t.url)),
+    }));
   }
 
   if (trigger.kind === '/') {
@@ -146,7 +138,7 @@ export function useTriggerItems(trigger: TriggerState | null, cb: Callbacks): Tr
       ...skillCommands.map((c) => ({
         id: c.command,
         kind: '/' as const,
-        group: 'Skill 命令',
+        group: 'Skills',
         label: c.command,
         hint: c.description,
         icon: 'command' as const,

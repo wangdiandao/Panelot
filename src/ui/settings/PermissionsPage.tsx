@@ -1,7 +1,8 @@
 /**
  * Browser permissions settings (docs/06 §7, docs/09 §3.4): two-axis default
- * selector + rule table (tool × site × verdict × source) + sensitive-origin
- * blacklist block. Built on shadcn/ui primitives.
+ * selector + rule table (tool × site × verdict × source, three-verdict
+ * allow/ask/deny with manual add) + sensitive-origin blacklist block.
+ * Built on shadcn/ui primitives.
  */
 
 import { useEffect, useState } from 'react';
@@ -19,12 +20,14 @@ import {
   SelectValue,
 } from '../components/ui/select';
 import { GatekeeperService } from '../../gatekeeper/service';
-import { DEFAULT_SENSITIVE_PATTERNS, type PermissionRule } from '../../gatekeeper/rules';
+import { ACTION_CATEGORIES, DEFAULT_SENSITIVE_PATTERNS, type PermissionRule } from '../../gatekeeper/rules';
 import { SettingsStore, type GlobalSettings, storageGet, storageSet } from '../../settings/store';
 
 const POLICY_DESC: Record<string, string> = {
-  untrusted: '只自动放行只读操作，其余一律弹审批（推荐默认）',
+  always: '全程询问：每一步都先征求同意，包括读取页面',
+  untrusted: '操作询问：只自动放行只读操作，写操作弹审批（推荐默认）',
   'on-request': '读操作放行；写操作首次弹审批，本轮同站同工具后续放行',
+  auto: '无需审批：写操作自动执行；敏感站点黑名单、敏感信息外发与 deny 规则仍然拦截',
   never: '从不弹窗 = 需要审批的动作直接拒绝（绝非自动批准）',
   granular: '完全按规则表裁决，未覆盖的按 untrusted 兜底',
 };
@@ -45,6 +48,11 @@ export function PermissionsPage() {
   const [rules, setRules] = useState<PermissionRule[]>([]);
   const [sensitive, setSensitive] = useState<string[]>([]);
   const [newPattern, setNewPattern] = useState('');
+  const [newRule, setNewRule] = useState<{ tool: string; origin: string; verdict: PermissionRule['verdict'] }>({
+    tool: '',
+    origin: '*',
+    verdict: 'ask',
+  });
 
   useEffect(() => {
     void SettingsStore.global.get().then(setSettings);
@@ -62,6 +70,16 @@ export function PermissionsPage() {
     await GatekeeperService.removeRule(id);
     setRules(await GatekeeperService.listRules());
     toast.success('规则已删除');
+  };
+
+  const addRule = async () => {
+    const tool = newRule.tool.trim();
+    const origin = newRule.origin.trim() || '*';
+    if (!tool) return;
+    await GatekeeperService.addRule({ tool, origin, verdict: newRule.verdict, source: 'user_setting' });
+    setRules(await GatekeeperService.listRules());
+    setNewRule({ tool: '', origin: '*', verdict: 'ask' });
+    toast.success('规则已添加');
   };
 
   const addSensitive = async () => {
@@ -83,49 +101,12 @@ export function PermissionsPage() {
     <div className="max-w-2xl space-y-6">
       <h2 className="text-[15px] font-semibold">浏览器权限</h2>
 
-      {/* Two-axis defaults */}
-      <div className="space-y-3">
-        <div className="text-[13px] font-medium text-muted-foreground">默认两轴档位</div>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <Label className="mb-1 block text-[12px] text-muted-foreground">审批策略（何时问）</Label>
-            <Select
-              value={settings.defaultApprovalPolicy ?? 'untrusted'}
-              onValueChange={(v) => void updateSettings({ defaultApprovalPolicy: v })}
-            >
-              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {Object.keys(POLICY_DESC).map((k) => (
-                  <SelectItem key={k} value={k}>{k}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <div className="mt-1 text-[11px] text-muted-foreground">{POLICY_DESC[settings.defaultApprovalPolicy ?? 'untrusted']}</div>
-          </div>
-          <div>
-            <Label className="mb-1 block text-[12px] text-muted-foreground">能力域（能做什么·硬闸）</Label>
-            <Select
-              value={normalizeScope(settings.defaultCapabilityScope)}
-              onValueChange={(v) => void updateSettings({ defaultCapabilityScope: v })}
-            >
-              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {Object.keys(SCOPE_DESC).map((k) => (
-                  <SelectItem key={k} value={k}>{k}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <div className="mt-1 text-[11px] text-muted-foreground">{SCOPE_DESC[normalizeScope(settings.defaultCapabilityScope)]}</div>
-          </div>
-        </div>
-      </div>
-
       {/* Rule table */}
       <div className="space-y-2">
-        <div className="text-[13px] font-medium text-muted-foreground">权限规则</div>
+        <div className="text-[13px] font-medium text-muted-foreground">权限规则（allow / ask / deny）</div>
         {rules.length === 0 ? (
           <div className="rounded-md border border-dashed border-border p-4 text-center text-[12px] text-muted-foreground">
-            暂无规则。审批时选择「本站始终」会在此生成持久规则。
+            暂无规则。审批时选择「本站始终」会在此生成持久规则，也可在下方手动添加。
           </div>
         ) : (
           <table className="w-full text-[12px]">
@@ -143,7 +124,7 @@ export function PermissionsPage() {
                 <tr key={r.id} className="border-b border-border/50">
                   <td className="py-1 font-mono">{r.tool}</td>
                   <td className="font-mono">{r.origin}</td>
-                  <td className={r.verdict === 'deny' ? 'text-destructive' : 'text-success'}>{r.verdict}</td>
+                  <td className={r.verdict === 'deny' ? 'text-destructive' : r.verdict === 'ask' ? 'text-warning' : 'text-success'}>{r.verdict}</td>
                   <td className="text-muted-foreground">{r.source}</td>
                   <td className="text-right">
                     <Button
@@ -160,6 +141,36 @@ export function PermissionsPage() {
             </tbody>
           </table>
         )}
+        {/* Manual rule creation: tool name, prefix wildcard, or category:xxx */}
+        <div className="flex gap-2">
+          <Input
+            value={newRule.tool}
+            onChange={(e) => setNewRule({ ...newRule, tool: e.target.value })}
+            placeholder="工具 / mcp__github__* / category:eval"
+            className="flex-1 font-mono"
+          />
+          <Input
+            value={newRule.origin}
+            onChange={(e) => setNewRule({ ...newRule, origin: e.target.value })}
+            placeholder="* 或 *.example.com"
+            className="w-40 font-mono"
+          />
+          <Select
+            value={newRule.verdict}
+            onValueChange={(v) => setNewRule({ ...newRule, verdict: v as PermissionRule['verdict'] })}
+          >
+            <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="allow">allow</SelectItem>
+              <SelectItem value="ask">ask</SelectItem>
+              <SelectItem value="deny">deny</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button size="sm" onClick={() => void addRule()}>添加</Button>
+        </div>
+        <div className="text-[11px] text-muted-foreground">
+          ask = 即使默认策略会放行也强制确认。类别：{Object.keys(ACTION_CATEGORIES).map((c) => `category:${c}`).join('、')}
+        </div>
       </div>
 
       {/* Sensitive-origin blacklist */}

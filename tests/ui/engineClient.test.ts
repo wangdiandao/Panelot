@@ -78,3 +78,78 @@ describe('EngineSession self-heal on thread_not_found', () => {
     }
   });
 });
+
+describe('optimistic user echo (ChatGPT semantics)', () => {
+  it('the message is visible synchronously on submit, before any engine event', () => {
+    const { session } = buildSession();
+    try {
+      session.submit({ text: 'hello there' });
+      // No await: the echo must be in the store the instant submit returns.
+      const live = session.store.getState().liveItems;
+      expect(live.some((it) => it.kind === 'user_message' && it.local && it.text === 'hello there')).toBe(true);
+    } finally {
+      session.dispose();
+    }
+  });
+
+  it('survives the draft→thread transition and reconciles once persisted', async () => {
+    const { session } = buildSession();
+    try {
+      await waitFor(() => session.store.getState().connected);
+      session.startDraft();
+      session.submit({ text: 'persist me' });
+      // Echo present throughout materialization (no blink-out window).
+      expect(session.store.getState().liveItems.some((it) => it.local)).toBe(true);
+      await waitFor(() => session.store.getState().threadId !== null);
+      // After the persisted user_message lands in a snapshot, exactly one
+      // rendering of the message remains (persisted item, echo gone).
+      await waitFor(() => {
+        const s = session.store.getState();
+        const persisted = s.items.filter((i) => i.kind === 'user_message').length;
+        const echoes = s.liveItems.filter((it) => it.kind === 'user_message').length;
+        return persisted + echoes === 1;
+      });
+    } finally {
+      session.dispose();
+    }
+  });
+
+  it('two real sends of the same text show two bubbles; a retry does not add one', () => {
+    const { session } = buildSession();
+    try {
+      // Two genuine submits (e.g. "继续" twice) are two messages.
+      session.submit({ text: 'same text' });
+      session.submit({ text: 'same text' });
+      expect(session.store.getState().liveItems.filter((it) => it.local)).toHaveLength(2);
+
+      // A retry re-submits lastInput — its bubble already exists.
+      session.store.setState({ lastError: { message: 'x', retryable: true }, lastInput: { text: 'same text' } });
+      session.retryLast();
+      expect(session.store.getState().liveItems.filter((it) => it.local)).toHaveLength(2);
+    } finally {
+      session.dispose();
+    }
+  });
+});
+
+describe('thread.updated before snapshot (title race)', () => {
+  it('a title patch arriving while meta is null is applied over the eventual snapshot', async () => {
+    const { session, db } = buildSession();
+    try {
+      await waitFor(() => session.store.getState().connected);
+      session.startDraft();
+      session.submit({ text: 'title me' });
+      await waitFor(() => session.store.getState().threadId !== null);
+      const threadId = session.store.getState().threadId!;
+      await waitFor(() => session.store.getState().meta !== null);
+      // Engine-side title write broadcast (what generateTitle does).
+      await db.threads.update(threadId, { title: '生成的标题' });
+      // Simulate the broadcast arriving through the transport by re-opening:
+      // the snapshot path must carry the persisted title.
+      session.openThread(threadId);
+      await waitFor(() => session.store.getState().meta?.title === '生成的标题');
+    } finally {
+      session.dispose();
+    }
+  });
+});

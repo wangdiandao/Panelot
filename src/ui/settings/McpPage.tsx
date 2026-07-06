@@ -146,7 +146,7 @@ export function McpPage() {
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-destructive text-white hover:bg-destructive/90"
+              variant="destructive"
               onClick={() => {
                 if (deleting) {
                   void save(servers.filter((x) => x.id !== deleting.id));

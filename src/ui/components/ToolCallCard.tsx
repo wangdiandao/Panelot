@@ -41,7 +41,7 @@ export function ToolCallCard({ card }: { card: ToolCardData }) {
     <Collapsible
       open={expanded}
       onOpenChange={setExpanded}
-      className="overflow-hidden rounded-xl border border-border-soft bg-card text-[12.5px]"
+      className="overflow-hidden rounded-xl border border-border/30 bg-card text-[13px]"
     >
       <CollapsibleTrigger className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-muted">
         {STATUS_ICON[card.status]}
@@ -58,12 +58,12 @@ export function ToolCallCard({ card }: { card: ToolCardData }) {
       <CollapsibleContent>
         <div className="space-y-2 border-t border-border-soft px-3 py-2">
           {card.params !== undefined && (
-            <pre className="max-h-40 overflow-auto rounded-lg bg-muted p-2 font-mono text-[11px] text-muted-foreground">
+            <pre className="max-h-40 overflow-auto rounded-md bg-muted p-2 font-mono text-[11px] text-muted-foreground">
               {JSON.stringify(card.params, null, 2)}
             </pre>
           )}
           {card.resultText && (
-            <pre className="max-h-60 overflow-auto whitespace-pre-wrap rounded-lg bg-muted p-2 font-mono text-[11px]">
+            <pre className="max-h-60 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-2 font-mono text-[11px]">
               {card.resultText}
             </pre>
           )}
@@ -73,10 +73,12 @@ export function ToolCallCard({ card }: { card: ToolCardData }) {
   );
 }
 
-export function ToolCallGroup({ cards }: { cards: ToolCardData[] }) {
+export function ToolCallGroup({ cards, historical }: { cards: ToolCardData[]; historical?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   if (cards.length === 0) return null;
-  if (cards.length < 3) {
+  // Historical turns fold at ANY size (completed work reads as one line);
+  // the current turn only groups runs of ≥3 (visibility while it happens).
+  if (!historical && cards.length < 3) {
     return (
       <div className="space-y-1">
         {cards.map((c) => (
@@ -90,13 +92,14 @@ export function ToolCallGroup({ cards }: { cards: ToolCardData[] }) {
   const failCount = cards.filter((c) => c.status === 'fail').length;
   const running = cards.some((c) => c.status === 'running' || c.status === 'pending');
   const tail = cards[cards.length - 1]!;
+  const totalMs = cards.reduce((sum, c) => sum + (c.durationMs ?? 0), 0);
 
   return (
     <div className="space-y-1">
       <button
         type="button"
         onClick={() => setExpanded((e) => !e)}
-        className="flex w-full items-center gap-2 rounded-xl border border-border-soft bg-card px-3 py-2 text-left text-[12.5px] text-muted-foreground transition-colors hover:bg-muted"
+        className={`flex w-full items-center gap-2 rounded-xl border border-border/30 px-3 py-2 text-left text-[13px] text-muted-foreground transition-colors hover:bg-muted ${historical ? 'bg-transparent' : 'bg-card'}`}
         aria-expanded={expanded}
       >
         <ChevronRight className={`size-3 opacity-60 transition-transform ${expanded ? 'rotate-90' : ''}`} />
@@ -105,6 +108,9 @@ export function ToolCallGroup({ cards }: { cards: ToolCardData[] }) {
           <span className="flex items-center text-success"><Check className="size-3" />{okCount}</span>
           {failCount > 0 && <span className="flex items-center text-destructive"><X className="size-3" />{failCount}</span>}
           {running && <Loader2 className="size-3 animate-spin text-info" />}
+          {historical && totalMs > 0 && (
+            <span className="text-[11px] text-faint-foreground">· {(totalMs / 1000).toFixed(1)}s</span>
+          )}
         </span>
       </button>
       {expanded && cards.map((c) => <ToolCallCard key={c.itemId} card={c} />)}

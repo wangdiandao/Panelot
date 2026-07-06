@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronDown, Expand, Paperclip, Plus, Settings } from 'lucide-react';
+import { ChevronDown, Expand, Paperclip, Plus } from 'lucide-react';
 import type { ContextBlock } from '../../src/messaging/protocol';
 import { EngineSession } from '../../src/ui/engineClient';
 import { ThreadView, useEngineState } from '../../src/ui/components/ThreadView';
@@ -25,6 +25,7 @@ import {
 } from '../../src/ui/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../src/ui/components/ui/tooltip';
 import { useTheme } from '../../src/ui/useTheme';
+import { t } from '../../src/ui/i18n';
 import { attachCurrentPage, getActiveTab } from '../../src/ui/pageContext';
 import { SettingsStore } from '../../src/settings/store';
 import { PanelotDB } from '../../src/db/schema';
@@ -39,7 +40,7 @@ export function App() {
   const [providerConfigured, setProviderConfigured] = useState(true);
   const [threads, setThreads] = useState<ThreadMeta[]>([]);
   const [staged, setStaged] = useState<ContextBlock[]>([]);
-  const [currentPageTitle, setCurrentPageTitle] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState<{ title: string; url?: string } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
 
@@ -71,19 +72,29 @@ export function App() {
       setProviderConfigured(conns.some((c) => c.enabled && (c.apiKeys.length > 0 || c.baseUrl.includes('localhost'))));
     });
 
+  const refreshThreads = () =>
+    db.threads.orderBy('updatedAt').reverse().limit(20).toArray().then((list) => {
+      // Only chats with content are listed (drafts never persist a row).
+      setThreads(list.filter((t) => !t.deleting && !t.archived && t.leafId !== null));
+    });
+
   useEffect(() => {
     checkProvider();
-    void db.threads.orderBy('updatedAt').reverse().limit(20).toArray().then((list) => {
-      // Only chats with content are listed (drafts never persist a row).
-      const live = list.filter((t) => !t.deleting && !t.archived && t.leafId !== null);
-      setThreads(live);
-      if (live[0] && !session.store.getState().threadId) session.openThread(live[0].id);
-      else if (!live[0]) session.startDraft();
+    void refreshThreads().then(() => {
+      const live = session.store.getState().threadId;
+      void db.threads.orderBy('updatedAt').reverse().filter((t) => !t.deleting && !t.archived && t.leafId !== null).first().then((recent) => {
+        if (recent && !live) session.openThread(recent.id);
+        else if (!recent && !live) session.startDraft();
+      });
     });
   }, [session]);
 
+  // Keep the dropdown list in sync with title generation / new turns.
+  useEffect(() => void refreshThreads(), [state.meta?.title, state.meta?.updatedAt, state.threadId]);
+
   useEffect(() => {
-    const refresh = () => void getActiveTab().then((tab) => setCurrentPageTitle(tab?.title ?? null));
+    const refresh = () =>
+      void getActiveTab().then((tab) => setCurrentPage(tab?.title ? { title: tab.title, url: tab.url } : null));
     refresh();
     chrome.tabs.onActivated.addListener(refresh);
     chrome.tabs.onUpdated.addListener(refresh);
@@ -128,7 +139,7 @@ export function App() {
             {threads.map((t) => (
               <DropdownMenuItem
                 key={t.id}
-                className={t.id === state.threadId ? 'text-primary' : ''}
+                className={t.id === state.threadId ? 'bg-accent font-medium' : ''}
                 onClick={() => session.openThread(t.id)}
               >
                 <span className="truncate">{t.title || '未命名会话'}</span>
@@ -144,20 +155,19 @@ export function App() {
           void chrome.tabs.create({ url: chrome.runtime.getURL(`/chat.html${threadId ? `?thread=${threadId}` : ''}`) });
         })}
         {iconButton('新会话', Plus, () => session.startDraft())}
-        {iconButton('设置', Settings, () => setSettingsOpen(true))}
       </header>
 
-      {currentPageTitle && !staged.some((c) => c.kind === 'page') && (
+      {currentPage && !staged.some((c) => c.kind === 'page') && (
         <div className="flex items-center gap-2 border-b border-border-soft bg-card px-3 py-1.5 text-[12px]">
           <span className="flex min-w-0 items-center gap-1 truncate text-muted-foreground">
-            <Paperclip className="size-3 shrink-0" /> {currentPageTitle}
+            <Paperclip className="size-3 shrink-0" /> {currentPage.title}
           </span>
           <Badge
             asChild
             variant="outline"
             className="ml-auto shrink-0 cursor-pointer hover:border-primary hover:text-primary"
           >
-            <button type="button" onClick={() => void attachPage()}>＋ 附着到对话</button>
+            <button type="button" onClick={() => void attachPage()}>{t('app.attachPage')}</button>
           </Badge>
         </div>
       )}
@@ -171,6 +181,16 @@ export function App() {
           stagedContext={staged}
           onRemoveStagedContext={(i) => setStaged((s) => s.filter((_, idx) => idx !== i))}
           onAttachContext={(block) => setStaged((s) => [...s, block])}
+          surface="panel"
+          pageUrl={currentPage?.url}
+          onBackspaceEmpty={() =>
+            // Cherry Studio ClipboardPreview semantics: Backspace on an empty
+            // composer removes the attached page chip.
+            setStaged((s) => {
+              const idx = s.findIndex((c) => c.kind === 'page');
+              return idx >= 0 ? s.filter((_, i) => i !== idx) : s;
+            })
+          }
         />
       </div>
 
@@ -183,7 +203,8 @@ export function App() {
         onOpenSettings={() => setSettingsOpen(true)}
       />
       <ShortcutHelp />
-      <Toaster />
+      {/* Bottom-center: top-right would overlap the thread-switcher header. */}
+      <Toaster position="bottom-center" />
     </div>
     </TooltipProvider>
   );

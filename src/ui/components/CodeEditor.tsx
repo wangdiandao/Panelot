@@ -34,6 +34,14 @@ export function CodeEditor({ value, onChange, placeholder, minHeight = '360px' }
       '.cm-gutters': { fontFamily: 'var(--font-mono)' },
       '&.cm-focused': { outline: 'none' },
     });
+    // Keep one-dark's syntax colors but let the chrome follow the app's
+    // surface tokens — otherwise its own #282c34 paints a two-tone frame
+    // inside the bg-muted wrapper.
+    const surfaceTheme = EditorView.theme({
+      '&': { backgroundColor: 'var(--muted)' },
+      '.cm-gutters': { backgroundColor: 'var(--muted)' },
+    });
+    const darkExtensions = [oneDark, surfaceTheme];
 
     const view = new EditorView({
       parent: hostRef.current,
@@ -45,7 +53,7 @@ export function CodeEditor({ value, onChange, placeholder, minHeight = '360px' }
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
           markdown(),
           baseTheme,
-          themeCompartment.current.of(isDark() ? oneDark : []),
+          themeCompartment.current.of(isDark() ? darkExtensions : []),
           ...(placeholder ? [cmPlaceholder(placeholder)] : []),
           EditorView.lineWrapping,
           EditorView.updateListener.of((update) => {
@@ -58,7 +66,7 @@ export function CodeEditor({ value, onChange, placeholder, minHeight = '360px' }
 
     // Track theme flips (useTheme toggles .dark on <html>).
     const observer = new MutationObserver(() => {
-      view.dispatch({ effects: themeCompartment.current.reconfigure(isDark() ? oneDark : []) });
+      view.dispatch({ effects: themeCompartment.current.reconfigure(isDark() ? darkExtensions : []) });
     });
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
 

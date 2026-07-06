@@ -14,6 +14,8 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { codeToHtml } from 'shiki';
+import { Check, Copy } from 'lucide-react';
+import { t } from '../i18n';
 import 'katex/dist/katex.min.css';
 
 /** Count ``` fences to detect an unclosed trailing code block. */
@@ -26,25 +28,65 @@ export function splitUnclosedFence(markdown: string): { closed: string; openTail
 
 // ---------------------------------------------------------------------------
 
+/**
+ * Sticky action header (OpenWebUI CodeBlock): language label left, copy
+ * right; the header stays reachable while a long block scrolls. Pure CSS
+ * sticky — no interaction with the streaming fence-deferral rules.
+ */
+function CodeHeader({ lang, code }: { lang: string; code: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="sticky top-0 z-10 flex items-center justify-between rounded-t-md bg-muted px-3 py-1 text-[11px] text-muted-foreground">
+      <span className="truncate font-mono">{lang}</span>
+      <button
+        type="button"
+        aria-label={t('actions.copy')}
+        onClick={() => {
+          void navigator.clipboard.writeText(code).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+          });
+        }}
+        className="flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors hover:bg-foreground/5 hover:text-foreground"
+      >
+        {copied ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
+        {copied ? t('actions.copied') : t('actions.copy')}
+      </button>
+    </div>
+  );
+}
+
 function ShikiBlock({ code, lang }: { code: string; lang: string }) {
   const [html, setHtml] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
-    codeToHtml(code, { lang: lang || 'text', theme: 'vitesse-dark' })
+    // Dual themes: tokens carry --shiki-light/dark variables; global.css picks
+    // the active one via the .dark class, so code follows the app theme.
+    codeToHtml(code, {
+      lang: lang || 'text',
+      themes: { light: 'vitesse-light', dark: 'vitesse-dark' },
+      defaultColor: false,
+    })
       .then((h) => alive && setHtml(h))
       .catch(() => alive && setHtml(null));
     return () => {
       alive = false;
     };
   }, [code, lang]);
-  if (html === null) {
-    return (
-      <pre className="overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs">
-        <code>{code}</code>
-      </pre>
-    );
-  }
-  return <div className="shiki-block overflow-x-auto text-xs [&>pre]:rounded-md [&>pre]:p-3" dangerouslySetInnerHTML={{ __html: html }} />;
+  return (
+    <div className="relative overflow-hidden rounded-md border border-border/30">
+      <CodeHeader lang={lang || 'text'} code={code} />
+      {html === null ? (
+        <pre className="overflow-x-auto bg-muted p-3 pt-1.5 font-mono text-xs">
+          <code>{code}</code>
+        </pre>
+      ) : (
+        // Shiki inlines the theme background — force the token surface instead
+        // so highlighted and fallback blocks sit on the same bg-muted.
+        <div className="shiki-block overflow-x-auto text-xs [&>pre]:!bg-muted [&>pre]:p-3 [&>pre]:pt-1.5" dangerouslySetInnerHTML={{ __html: html }} />
+      )}
+    </div>
+  );
 }
 
 function MermaidBlock({ code }: { code: string }) {
@@ -55,7 +97,8 @@ function MermaidBlock({ code }: { code: string }) {
     let alive = true;
     void import('mermaid').then(async ({ default: mermaid }) => {
       try {
-        mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'strict' });
+        const dark = document.documentElement.classList.contains('dark');
+        mermaid.initialize({ startOnLoad: false, theme: dark ? 'dark' : 'default', securityLevel: 'strict' });
         const { svg } = await mermaid.render(`m${id}`, code);
         if (alive && ref.current) ref.current.innerHTML = svg;
       } catch {
@@ -92,7 +135,7 @@ export const Markdown = memo(function Markdown({ content, streaming }: MarkdownP
             const text = String(children).replace(/\n$/, '');
             if (!match) {
               return (
-                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[12.5px]" {...props}>
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[13px]" {...props}>
                   {children}
                 </code>
               );

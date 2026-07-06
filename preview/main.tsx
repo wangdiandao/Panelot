@@ -2,12 +2,16 @@
  * Standalone visual preview of Panelot's presentational UI. No chrome APIs,
  * no engine — just the styled pieces with mock data, so the ChatGPT/OpenWebUI
  * look can be checked in a plain browser. Not shipped in the extension.
+ *
+ * Toggle "Plan mode" in the toolbar to preview the PlanConfirmCard UI.
  */
 
 import React, { useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import { Markdown } from '../src/ui/components/Markdown';
 import { ToolCallGroup } from '../src/ui/components/ToolCallCard';
+import { PlanConfirmCard } from '../src/ui/components/PlanConfirmCard';
+import { PermissionSwitch } from '../src/ui/components/PermissionSwitch';
 import { SettingsModal } from '../src/ui/settings/SettingsModal';
 import '../src/ui/styles/global.css';
 
@@ -26,12 +30,20 @@ const best = items.sort((a, b) => b.score - a.score)[0];
 \`\`\`
 `;
 
+const PLAN_TODOS = [
+  { text: '打开商品页 A', done: true },
+  { text: '打开商品页 B', done: false },
+  { text: '打开商品页 C', done: false },
+  { text: '读取并对比三款评价', done: false },
+  { text: '输出对比表格和结论', done: false },
+];
+
 function Bubble() {
   return (
     <div className="flex justify-end">
       <div className="max-w-[85%] rounded-2xl rounded-br-md bg-user-bubble px-4 py-2.5 text-[14.5px] leading-[1.65]">
         <div className="mb-1.5 flex flex-wrap gap-1">
-          <span className="inline-flex items-center gap-1 rounded-full bg-black/20 px-2 py-0.5 text-[11px] text-muted-foreground">📎 淘宝-XX耳机</span>
+          <span className="inline-flex items-center gap-1 rounded-full bg-foreground/10 px-2 py-0.5 text-[11px] text-muted-foreground">📎 淘宝-XX耳机</span>
         </div>
         <div className="whitespace-pre-wrap">帮我调研这三款耳机的评价并做对比表</div>
       </div>
@@ -41,32 +53,38 @@ function Bubble() {
 
 function Assistant() {
   return (
-    <div className="flex gap-3">
-      <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-[13px] text-primary">✦</div>
-      <div className="min-w-0 flex-1 pt-0.5">
-        <Markdown content={ASSISTANT_MD} />
-      </div>
+    <div className="min-w-0 flex-1 pt-0.5">
+      <Markdown content={ASSISTANT_MD} />
     </div>
   );
 }
 
-function Composer() {
+function Composer({ planMode, onPlanModeChange }: { planMode: boolean; onPlanModeChange: (v: boolean) => void }) {
   const [text, setText] = useState('');
   return (
     <div className="px-4 pb-4 pt-1">
-      <div className="flex flex-col rounded-[24px] border border-border bg-muted px-2 py-1.5 shadow-soft focus-within:border-primary/60">
+      <div className="relative flex flex-col rounded-[24px] border border-border bg-muted px-2 py-1.5 shadow-soft focus-within:border-primary/60">
         <div className="flex items-end gap-2">
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="给 Panelot 发消息…"
+            placeholder={planMode ? '描述你要完成的任务…' : '给 Panelot 发消息…'}
             rows={1}
             className="max-h-48 min-h-[36px] flex-1 resize-none bg-transparent px-2.5 py-1.5 text-[14.5px] leading-[1.5] outline-none placeholder:text-faint-foreground"
           />
-          <button className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-black" aria-label="发送">↑</button>
+          <button className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground" aria-label="发送">↑</button>
+        </div>
+        <div className="flex items-center gap-1 px-1.5 pt-0.5">
+          <PermissionSwitch
+            value={undefined}
+            planMode={planMode}
+            onSelect={(tier) => onPlanModeChange(tier === 'plan')}
+          />
         </div>
       </div>
-      <div className="mt-1.5 px-2 text-center text-[10.5px] text-faint-foreground">Enter 发送 · Shift+Enter 换行</div>
+      <div className="mt-1.5 px-2 text-center text-[11px] text-faint-foreground">
+        {planMode ? '计划模式：AI 先制定计划，确认后执行' : 'Enter 发送 · Shift+Enter 换行'}
+      </div>
     </div>
   );
 }
@@ -74,13 +92,15 @@ function Composer() {
 function Preview() {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [planMode, setPlanMode] = useState(false);
+  const [planConfirming, setPlanConfirming] = useState(false);
   React.useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
   }, [theme]);
 
   return (
     <div className="flex h-screen bg-background text-foreground">
-      {/* Sidebar mock */}
+      {/* Sidebar */}
       <aside className="flex w-64 shrink-0 flex-col border-r border-border-soft bg-card">
         <div className="space-y-2 p-3">
           <button className="flex w-full items-center gap-2 rounded-lg border border-border px-3 py-2 text-[13px] font-medium hover:bg-muted">
@@ -88,7 +108,7 @@ function Preview() {
           </button>
           <div className="relative">
             <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[12px] text-faint-foreground">⌕</span>
-            <input placeholder="搜索会话" className="w-full rounded-lg bg-muted py-1.5 pl-7 pr-2 text-[12.5px] outline-none placeholder:text-faint-foreground" />
+            <input placeholder="搜索会话" className="w-full rounded-lg bg-muted py-1.5 pl-7 pr-2 text-[13px] outline-none placeholder:text-faint-foreground" />
           </div>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
@@ -116,43 +136,70 @@ function Preview() {
       {/* Conversation */}
       <main className="flex min-w-0 flex-1 flex-col">
         <div className="flex items-center gap-2 border-b border-border-soft px-5 py-3">
-          <div className="truncate text-[14px] font-medium">耳机调研对比</div>
+          <div className="truncate text-[13px] font-medium">耳机调研对比</div>
+          <div className="ml-auto flex gap-2">
+            <button
+              onClick={() => { setPlanMode(true); setPlanConfirming(true); }}
+              className="rounded-lg bg-info/10 px-3 py-1 text-[12px] text-info hover:bg-info/20"
+            >
+              ← 模拟计划完成
+            </button>
+            <button
+              onClick={() => setPlanConfirming(false)}
+              className="rounded-lg bg-muted px-3 py-1 text-[12px] text-muted-foreground hover:bg-accent"
+            >
+              重置
+            </button>
+          </div>
         </div>
-        <div className="mx-auto flex min-h-0 w-full max-w-[768px] flex-1 flex-col">
-          <div className="flex-1 overflow-y-auto px-4 py-6">
-            <div className="space-y-6">
-              <Bubble />
-              <Assistant />
-              <div className="pl-10">
-                <ToolCallGroup
-                  cards={[
-                    { itemId: '1', toolName: 'navigate', label: '导航', status: 'ok', paramsSummary: 'taobao.com/item…', durationMs: 1200 },
-                    { itemId: '2', toolName: 'read_page', label: '读取页面', status: 'ok', paramsSummary: '增量快照 s4', durationMs: 300 },
-                    { itemId: '3', toolName: 'extract', label: '提取', status: 'ok', durationMs: 800 },
-                    { itemId: '4', toolName: 'click', label: '点击元素', status: 'running', progressText: '等待加载…' },
-                  ]}
-                />
-              </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6">
+          <div className="mx-auto max-w-[768px] space-y-6">
+            <Bubble />
+            {/* Assistant turn — flat, no avatar (Codex style) */}
+            <Assistant />
+            <div>
+              <ToolCallGroup
+                cards={[
+                  { itemId: '1', toolName: 'navigate', label: '导航', status: 'ok', paramsSummary: 'taobao.com/item…', durationMs: 1200 },
+                  { itemId: '2', toolName: 'read_page', label: '读取页面', status: 'ok', paramsSummary: '增量快照 s4', durationMs: 300 },
+                  { itemId: '3', toolName: 'extract', label: '提取', status: 'ok', durationMs: 800 },
+                  { itemId: '4', toolName: 'click', label: '点击元素', status: 'running', progressText: '等待加载…' },
+                ]}
+              />
             </div>
           </div>
-          <Composer />
         </div>
+        {/* Plan confirm card replaces composer when plan is ready */}
+        {planConfirming ? (
+          <PlanConfirmCard
+            todos={PLAN_TODOS}
+            onConfirm={() => { setPlanConfirming(false); setPlanMode(false); }}
+            onEdit={() => { setPlanConfirming(false); setPlanMode(false); }}
+            onCancel={() => { setPlanConfirming(false); setPlanMode(false); }}
+          />
+        ) : (
+          <div className="mx-auto w-full max-w-[768px]">
+            <Composer planMode={planMode} onPlanModeChange={setPlanMode} />
+          </div>
+        )}
       </main>
 
-      {/* Task panel */}
-      <aside className="w-60 shrink-0 border-l border-border-soft bg-card p-4">
-        <div className="mb-3 text-[12px] font-semibold uppercase tracking-wide text-faint-foreground">任务面板</div>
-        <div className="mb-4 space-y-1.5 text-[12.5px]">
-          <div className="flex gap-2 text-faint-foreground line-through"><span className="text-success">☑</span><span>打开商品页 A</span></div>
-          <div className="flex gap-2 text-faint-foreground line-through"><span className="text-success">☑</span><span>读取评价</span></div>
-          <div className="flex gap-2"><span className="text-faint-foreground">☐</span><span>汇总对比</span></div>
-        </div>
-        <div className="space-y-3 text-[12px]">
-          <div>
-            <div className="mb-1 flex justify-between text-muted-foreground"><span>上下文</span><span>42%</span></div>
-            <div className="h-1.5 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary" style={{ width: '42%' }} /></div>
+      {/* Task panel — simplified (no token display) */}
+      <aside className="w-56 shrink-0 border-l border-border-soft bg-card p-4">
+        <div className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-faint-foreground">任务面板</div>
+        <div className="space-y-1.5 text-[13px]">
+          <div className="flex items-start gap-2 text-faint-foreground">
+            <span className="mt-0.5 shrink-0 text-[11px] text-success">✓</span>
+            <span className="line-through">打开商品页 A</span>
           </div>
-          <div className="font-mono text-muted-foreground">$0.1840 · 31.0k tok</div>
+          <div className="flex items-start gap-2 text-faint-foreground">
+            <span className="mt-0.5 shrink-0 text-[11px] text-success">✓</span>
+            <span className="line-through">读取评价</span>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="mt-0.5 shrink-0 text-[11px] text-faint-foreground">○</span>
+            <span>汇总对比</span>
+          </div>
         </div>
       </aside>
     </div>

@@ -36,6 +36,7 @@ import { createAdapter, normalizeBaseUrl } from '../../providers/registry';
 import type { Connection, QuirkFlags, VerifyResult } from '../../providers/types';
 import { SettingsStore } from '../../settings/store';
 import { decryptSecret, encryptSecret, isEncrypted } from '../../settings/crypto';
+import { ModelSelector } from '../components/ModelSelector';
 
 const FAILURE_TEXT: Record<NonNullable<VerifyResult['failure']>, string> = {
   invalid_key: 'API Key 无效 — 检查 Key 是否正确、是否有余额',
@@ -48,10 +49,19 @@ export function ProvidersPage() {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [editing, setEditing] = useState<Connection | null>(null);
   const [deleting, setDeleting] = useState<Connection | null>(null);
+  const [defaultModel, setDefaultModel] = useState<{ connectionId: string; modelId: string } | null>(null);
 
   useEffect(() => {
     void SettingsStore.connections.get().then(setConnections);
+    void SettingsStore.global.get().then((g) => setDefaultModel(g.defaultModel ?? null));
   }, []);
+
+  const saveDefaultModel = async (model: { connectionId: string; modelId: string } | null) => {
+    setDefaultModel(model);
+    const g = await SettingsStore.global.get();
+    await SettingsStore.global.set({ ...g, defaultModel: model ?? undefined });
+    toast.success(model ? '默认模型已设置' : '默认模型已清除');
+  };
 
   const save = async (list: Connection[]) => {
     setConnections(list);
@@ -101,6 +111,17 @@ export function ProvidersPage() {
           还没有配置任何模型连接。点击「添加连接」，选择预置模板，填入 API Key 即可开聊。
         </div>
       )}
+      {connections.length > 0 && (
+        <div className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3">
+          <div className="min-w-0">
+            <div className="text-[13px] font-medium">默认模型</div>
+            <div className="text-[11px] text-muted-foreground">新会话默认使用的模型（会话内切换过则优先沿用上次选择）</div>
+          </div>
+          <div className="ml-auto">
+            <ModelSelector value={defaultModel} onSelect={(choice) => void saveDefaultModel(choice ? { connectionId: choice.connectionId, modelId: choice.modelId } : null)} />
+          </div>
+        </div>
+      )}
       {connections.map((c) => (
         <div key={c.id} className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3">
           <Switch
@@ -137,7 +158,7 @@ export function ProvidersPage() {
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-destructive text-white hover:bg-destructive/90"
+              variant="destructive"
               onClick={() => {
                 if (deleting) {
                   void save(connections.filter((x) => x.id !== deleting.id));
@@ -276,7 +297,7 @@ function ConnectionForm({
           兼容性开关（quirks）
         </CollapsibleTrigger>
         <CollapsibleContent>
-          <div className="mt-2 space-y-2 rounded-md border border-border p-3 text-[12.5px]">
+          <div className="mt-2 space-y-2 rounded-md border border-border p-3 text-[13px]">
             {(
               [
                 ['noStreamOptions', '端点不支持 stream_options.include_usage'],
@@ -312,7 +333,7 @@ function ConnectionForm({
 
       {verifyResult && (
         <Alert className={verifyResult.keyValid ? 'border-success/40 bg-success/5' : 'border-destructive/40 bg-destructive/5'}>
-          <AlertDescription className="text-[12.5px]">
+          <AlertDescription className="text-[13px]">
             <div className="flex gap-3">
               <span className={verifyResult.reachable ? 'text-success' : 'text-destructive'}>{verifyResult.reachable ? '✓' : '✗'} 可达</span>
               <span className={verifyResult.keyValid ? 'text-success' : 'text-destructive'}>{verifyResult.keyValid ? '✓' : '✗'} Key 有效</span>

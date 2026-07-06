@@ -11,74 +11,94 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * Design tokens — shadcn/ui semantic names over the existing graphite/amber
- * palette (ChatGPT / OpenWebUI / CodeX feel). Two-layer structure follows
+ * Design tokens — shadcn/ui semantic names over an indigo-on-cool-graphite
+ * palette. Two-layer structure follows
  * https://ui.shadcn.com/docs/tailwind-v4: raw values live on :root/.dark,
- * @theme inline exposes them to utilities. Color values are unchanged from
- * the previous bg/surface/accent token set; only the names moved:
- *   bg→background, surface→card/popover, surface-2→secondary/muted/input,
- *   surface-3→accent, accent(amber)→primary, danger→destructive,
- *   ok/warn/agent→success/warning/info, text-dim/faint→muted/faint-foreground.
+ * @theme inline exposes them to utilities.
+ *
+ * Palette contract (change these in pairs, never alone):
+ *  - primary/primary-foreground: indigo brand. Light = indigo-600 + white
+ *    (6.3:1). Dark = indigo-400 + indigo-950 (5.4:1) — the LIGHT fill keeps
+ *    text-primary readable on dark surfaces (6.4:1 vs background), which a
+ *    dark-mode indigo-600 would fail (~3:1).
+ *  - ring always equals primary (focus rings are brand-colored).
+ *  - warning/warning-foreground: amber — semantically distinct from primary
+ *    (approval cards, recovery banners keep their caution meaning). Light
+ *    uses amber-700 so text-warning stays readable on white.
+ *  - info: cyan — deliberately far from indigo so "agent activity" (spinners,
+ *    reasoning, L2 escalation) never reads as a brand accent. Light uses
+ *    cyan-700 for the same text-contrast reason.
+ *  - Neutrals carry a faint indigo cast (hue ~245) so the chrome and the
+ *    brand color feel like one system.
  */
 :root {
   --background: #ffffff;
-  --foreground: #1f1f24;
-  --card: #f7f7f8;
-  --card-foreground: #1f1f24;
-  --popover: #f7f7f8;
-  --popover-foreground: #1f1f24;
-  --primary: #f5a623;
-  --primary-foreground: #1f1f24;
-  --secondary: #ececf1;
-  --secondary-foreground: #1f1f24;
-  --muted: #ececf1;
-  --muted-foreground: #6b6b76;
-  --accent: #e0e0e6;
-  --accent-foreground: #1f1f24;
-  --destructive: #f0524f;
+  --foreground: #1f1f26;
+  --card: #f7f7fa;
+  --card-foreground: #1f1f26;
+  --popover: #f7f7fa;
+  --popover-foreground: #1f1f26;
+  --primary: #4f46e5;
+  --primary-foreground: #ffffff;
+  --secondary: #ececf2;
+  --secondary-foreground: #1f1f26;
+  --muted: #ececf2;
+  --muted-foreground: #63636f;
+  --accent: #e0e0ea;
+  --accent-foreground: #1f1f26;
+  --destructive: #dc2626;
   --destructive-foreground: #ffffff;
-  --border: #e3e3e8;
-  --input: #ececf1;
-  --ring: #f5a623;
-  /* Panelot extensions beyond the shadcn set */
-  --border-soft: #ededf0;
-  --faint-foreground: #9a9aa6;
-  --success: #3fb950;
-  --warning: #f5a623;
-  --info: #7c93ff;
-  --user-bubble: #ececf1;
-  --elevation-pop: 0 8px 30px rgba(0, 0, 0, 0.12);
-  --elevation-soft: 0 1px 3px rgba(0, 0, 0, 0.06);
+  --border: #e3e3ec;
+  --input: #ececf2;
+  --ring: #4f46e5;
+  /* Panelot extensions beyond the shadcn set.
+   * Status colors are per-mode: light needs darker shades to hit 4.5:1 as
+   * TEXT on white/card; dark needs brighter ones on near-black. */
+  --border-soft: #ededf2;
+  --faint-foreground: #9a9aa8;
+  --success: #1a7f37;
+  --warning: #b45309;
+  --warning-foreground: #ffffff;
+  --info: #0e7490;
+  --user-bubble: #e8eaf8;
+  /* Raised surface between card and popover — light mode can share card;
+   * dark mode needs a distinct lighter step (OpenWebUI's gray-850 lesson:
+   * elevated dark surfaces must sit visibly above the page background). */
+  --surface-raised: #f0f0f5;
+  --elevation-pop: 0 8px 30px rgba(31, 27, 75, 0.12);
+  --elevation-soft: 0 1px 3px rgba(31, 27, 75, 0.06);
 
   --radius: 0.75rem;
 }
 
 .dark {
-  --background: #0d0d0f;
-  --foreground: #ececf1;
-  --card: #171719;
-  --card-foreground: #ececf1;
-  --popover: #171719;
-  --popover-foreground: #ececf1;
-  --primary: #f5a623;
-  --primary-foreground: #1a1a1e;
-  --secondary: #212124;
-  --secondary-foreground: #ececf1;
-  --muted: #212124;
-  --muted-foreground: #9a9aa6;
-  --accent: #2b2b2f;
-  --accent-foreground: #ececf1;
+  --background: #0d0d12;
+  --foreground: #ececf3;
+  --card: #16161d;
+  --card-foreground: #ececf3;
+  --popover: #16161d;
+  --popover-foreground: #ececf3;
+  --primary: #818cf8;
+  --primary-foreground: #1e1b4b;
+  --secondary: #1f1f28;
+  --secondary-foreground: #ececf3;
+  --muted: #1f1f28;
+  --muted-foreground: #9d9dac;
+  --accent: #292934;
+  --accent-foreground: #ececf3;
   --destructive: #f0524f;
   --destructive-foreground: #ffffff;
-  --border: #2e2e33;
-  --input: #212124;
-  --ring: #f5a623;
-  --border-soft: #232327;
-  --faint-foreground: #6a6a75;
+  --border: #2d2d3a;
+  --input: #1f1f28;
+  --ring: #818cf8;
+  --border-soft: #22222c;
+  --faint-foreground: #7e7e90;
   --success: #3fb950;
   --warning: #f5a623;
-  --info: #7c93ff;
-  --user-bubble: #2b2b2f;
+  --warning-foreground: #1a1a20;
+  --info: #22d3ee;
+  --user-bubble: #262636;
+  --surface-raised: #1c1c25;
   --elevation-pop: 0 8px 30px rgba(0, 0, 0, 0.4);
   --elevation-soft: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
@@ -107,8 +127,10 @@
   --color-faint-foreground: var(--faint-foreground);
   --color-success: var(--success);
   --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
   --color-info: var(--info);
   --color-user-bubble: var(--user-bubble);
+  --color-surface-raised: var(--surface-raised);
 
   --font-sans: 'Inter', -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
@@ -138,6 +160,19 @@
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
+}
+
+/* Shiki dual themes (defaultColor: false): tokens carry --shiki-light/dark
+ * custom properties; the .dark class picks which one paints. Backgrounds are
+ * overridden to bg-muted at the component level so code blocks sit on the
+ * same surface tokens as everything else. */
+.shiki-block .shiki,
+.shiki-block .shiki span {
+  color: var(--shiki-light);
+}
+.dark .shiki-block .shiki,
+.dark .shiki-block .shiki span {
+  color: var(--shiki-dark);
 }
 
 /* Slim, unobtrusive scrollbars (ChatGPT-style) */

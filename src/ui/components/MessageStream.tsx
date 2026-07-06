@@ -5,14 +5,12 @@
  * the same "stop following when the user scrolls up" contract.
  */
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { BranchSwitcher, useBranchShortcuts } from './BranchSwitcher';
 import type { SnapshotItem } from '../../messaging/protocol';
 import type {
   AssistantMessagePayload,
-  BranchSummaryPayload,
-  CompactionPayload,
   SystemNoticePayload,
   ToolCallPayload,
   ToolResultPayload,
@@ -20,7 +18,10 @@ import type {
 } from '../../db/types';
 import type { LiveItem } from '../engineClient';
 import { Markdown } from './Markdown';
+import { MessageActions } from './MessageActions';
+import { CitationsPill } from './CitationsPill';
 import { ToolCallGroup, type ToolCardData } from './ToolCallCard';
+import { Button } from './ui/button';
 import { t } from '../i18n';
 
 // ---------------------------------------------------------------------------
@@ -29,11 +30,16 @@ import { t } from '../i18n';
 
 type Row =
   | { kind: 'user'; key: string; payload: UserMessagePayload; nodeId?: string; branch?: { index: number; count: number } }
-  | { kind: 'assistant'; key: string; payload: AssistantMessagePayload; streaming?: boolean; liveText?: string; liveReasoning?: string; nodeId?: string; branch?: { index: number; count: number } }
-  | { kind: 'tools'; key: string; cards: ToolCardData[] }
-  | { kind: 'notice'; key: string; text: string }
-  | { kind: 'compaction'; key: string; payload: CompactionPayload }
-  | { kind: 'branch_summary'; key: string; payload: BranchSummaryPayload };
+  | { kind: 'assistant'; key: string; payload: AssistantMessagePayload; streaming?: boolean; liveText?: string; liveReasoning?: string; nodeId?: string; branch?: { index: number; count: number }; citations?: { url: string }[] }
+  | { kind: 'tools'; key: string; cards: ToolCardData[]; historical?: boolean }
+  | { kind: 'notice'; key: string; text: string };
+
+/** URLs the agent visited this turn — from navigate/open_tab tool params. */
+function citationUrl(toolName: string, params: unknown): string | null {
+  if (toolName !== 'navigate' && toolName !== 'open_tab') return null;
+  const url = (params as { url?: unknown })?.url;
+  return typeof url === 'string' && /^https?:/.test(url) ? url : null;
+}
 
 export function buildRows(items: SnapshotItem[], liveItems: LiveItem[]): Row[] {
   const rows: Row[] = [];
@@ -51,21 +57,36 @@ export function buildRows(items: SnapshotItem[], liveItems: LiveItem[]): Row[] {
     else rows.push({ kind: 'tools', key: card.itemId, cards: [card] });
   };
 
+  // Visited URLs accumulate per turn; the turn's closing assistant message
+  // wears them as a citations pill (reset at each user message).
+  let turnUrls: string[] = [];
+
   for (const item of items) {
     switch (item.kind) {
       case 'user_message':
+        turnUrls = [];
         rows.push({ kind: 'user', key: item.nodeId, payload: item.payload as UserMessagePayload, nodeId: item.nodeId, branch: item.branch });
         break;
       case 'assistant_message': {
         const p = item.payload as AssistantMessagePayload;
         // Skip empty assistant shells (tool-call-only responses).
         if (p.content.some((c) => c.type === 'text' && c.text.trim() !== '')) {
-          rows.push({ kind: 'assistant', key: item.nodeId, payload: p, nodeId: item.nodeId, branch: item.branch });
+          const citations = [...new Set(turnUrls)].map((url) => ({ url }));
+          rows.push({
+            kind: 'assistant',
+            key: item.nodeId,
+            payload: p,
+            nodeId: item.nodeId,
+            branch: item.branch,
+            citations: citations.length > 0 ? citations : undefined,
+          });
         }
         break;
       }
       case 'tool_call': {
         const p = item.payload as ToolCallPayload;
+        const visited = citationUrl(p.toolName, p.params);
+        if (visited) turnUrls.push(visited);
         const result = resultByItemId.get(p.itemId);
         pushCard({
           itemId: p.itemId,
@@ -84,32 +105,52 @@ export function buildRows(items: SnapshotItem[], liveItems: LiveItem[]): Row[] {
       case 'system_notice':
         rows.push({ kind: 'notice', key: item.nodeId, text: (item.payload as SystemNoticePayload).text });
         break;
-      case 'compaction':
-        rows.push({ kind: 'compaction', key: item.nodeId, payload: item.payload as CompactionPayload });
-        break;
-      case 'branch_summary':
-        rows.push({ kind: 'branch_summary', key: item.nodeId, payload: item.payload as BranchSummaryPayload });
-        break;
       // tool_result folded above; approval_decision rendered via tool flow.
       default:
         break;
     }
   }
 
-  // Live overlay: streaming assistant text / running tools.
+  // Historical-turn tool fold (LobeChat process-fold, docs/09 §4.2): tools
+  // rows BEFORE the last user message belong to completed turns — collapse
+  // them to a one-line summary. The latest turn's cards stay expanded
+  // (safety-visibility posture); approval rows never participate.
+  let lastUserIdx = -1;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (rows[i]!.kind === 'user') {
+      lastUserIdx = i;
+      break;
+    }
+  }
+  for (let i = 0; i < lastUserIdx; i++) {
+    const row = rows[i]!;
+    if (row.kind === 'tools') row.historical = true;
+  }
+
+  // Live overlay: user echo / streaming assistant text / running tools.
+  // Completed live items stay visible until the next snapshot refresh
+  // (applySnapshot clears liveItems atomically) — hiding them on completion
+  // made the streamed text vanish for the rest of a multi-step turn.
   for (const live of liveItems) {
-    if (live.kind === 'assistant_message') {
-      if (live.status === 'streaming' && (live.text || live.reasoning)) {
+    if (live.kind === 'user_message') {
+      if (live.text) {
+        rows.push({
+          kind: 'user',
+          key: live.itemId,
+          payload: { content: [{ type: 'text', text: live.text }] },
+        });
+      }
+    } else if (live.kind === 'assistant_message') {
+      if (live.text || live.reasoning) {
         rows.push({
           kind: 'assistant',
           key: live.itemId,
           payload: { content: [], model: '', connectionId: '' },
-          streaming: true,
+          streaming: live.status === 'streaming',
           liveText: live.text,
           liveReasoning: live.reasoning,
         });
       }
-      // Completed live assistant items will appear in the next snapshot refresh.
     } else if (live.kind === 'tool_call' && live.status === 'streaming') {
       pushCard({
         itemId: live.itemId,
@@ -141,12 +182,23 @@ interface Props {
   threadId?: string | null;
   /** Branch switch handler (thread.selectBranch); absent in previews. */
   onSelectBranch?: (nodeId: string) => void;
+  /** Branch-and-run: fork at the node with the given input text (turn.fork). */
+  onForkAt?: (siblingOfNodeId: string, text: string) => void;
+  /** A turn is running — regenerate/edit are disabled (fork rejects busy). */
+  turnActive?: boolean;
+  /**
+   * Row content max-width (full page: 768). The scroll container itself
+   * always spans the surface so the scrollbar sits at the far right edge
+   * (OpenWebUI layout); only row CONTENT is centered and capped.
+   */
+  contentMaxWidth?: number;
 }
 
-export function MessageStream({ items, liveItems, threadId, onSelectBranch }: Props) {
+export function MessageStream({ items, liveItems, threadId, onSelectBranch, onForkAt, turnActive, contentMaxWidth }: Props) {
   const rows = useMemo(() => buildRows(items, liveItems), [items, liveItems]);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const [atBottom, setAtBottom] = useState(true);
+  const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
 
   // Ctrl/Cmd+↑↓ operates on the last branchable message (docs/09 §6).
   const lastBranchNodeId = useMemo(() => {
@@ -158,12 +210,43 @@ export function MessageStream({ items, liveItems, threadId, onSelectBranch }: Pr
   }, [rows]);
   useBranchShortcuts(threadId ?? null, lastBranchNodeId, onSelectBranch ?? (() => {}));
 
+  // Regenerate re-runs the turn: fork at the PRECEDING USER node with its
+  // original text (turns are atomic here — the engine always appends
+  // turn_context + user_message, so assistant-level siblings don't exist;
+  // the branch switcher appears on the user message, n/m switches the turn).
+  const precedingUser = useMemo(() => {
+    const map = new Map<string, { nodeId: string; text: string }>();
+    let last: { nodeId: string; text: string } | null = null;
+    for (const r of rows) {
+      if (r.kind === 'user' && r.nodeId) last = { nodeId: r.nodeId, text: userText(r.payload) };
+      else if (r.kind === 'assistant' && r.nodeId && last) map.set(r.nodeId, last);
+    }
+    return map;
+  }, [rows]);
+
+  // Last message-like row: its action bar stays permanently visible.
+  const lastMessageKey = useMemo(() => {
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const r = rows[i]!;
+      if (r.kind === 'user' || r.kind === 'assistant') return r.key;
+    }
+    return null;
+  }, [rows]);
+
+  const ctx: RowCtx = {
+    threadId: threadId ?? null,
+    onSelectBranch,
+    onForkAt: turnActive ? undefined : onForkAt,
+    precedingUser,
+    lastMessageKey,
+    editingNodeId,
+    setEditingNodeId,
+  };
+
+  // Zero-row case is handled by ThreadView's <EmptyState> before this
+  // component renders; an empty stream can still appear transiently mid-swap.
   if (rows.length === 0) {
-    return (
-      <div className="relative flex-1 overflow-hidden px-4 py-6">
-        <EmptyState />
-      </div>
-    );
+    return <div className="relative flex-1 overflow-hidden" />;
   }
 
   return (
@@ -178,16 +261,22 @@ export function MessageStream({ items, liveItems, threadId, onSelectBranch }: Pr
         atBottomStateChange={setAtBottom}
         atBottomThreshold={40}
         increaseViewportBy={{ top: 400, bottom: 400 }}
+        components={{
+          Header: () => <div className="h-3" />,
+          Footer: () => <div className="h-2" />,
+        }}
         className="h-full"
         itemContent={(_, row) => (
-          <div className="px-4 py-3">{renderRow(row, threadId ?? null, onSelectBranch)}</div>
+          <div className="mx-auto w-full px-4 py-3" style={contentMaxWidth ? { maxWidth: contentMaxWidth } : undefined}>
+            {renderRow(row, ctx)}
+          </div>
         )}
       />
       {!atBottom && (
         <button
           type="button"
           onClick={() => virtuosoRef.current?.scrollToIndex({ index: rows.length - 1, align: 'end', behavior: 'smooth' })}
-          className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-border bg-card px-3 py-1 text-[11px] text-muted-foreground shadow-pop transition-colors hover:bg-muted"
+          className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-border-soft bg-card px-3 py-1 text-[11px] text-muted-foreground shadow-pop transition-colors hover:bg-muted"
         >
           {t('stream.backToBottom')}
         </button>
@@ -196,20 +285,23 @@ export function MessageStream({ items, liveItems, threadId, onSelectBranch }: Pr
   );
 }
 
-function EmptyState() {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/15 text-[22px] text-primary">✦</div>
-      <div className="text-[15px] font-medium">{t('empty.title')}</div>
-      <div className="max-w-xs text-[12.5px] leading-relaxed text-faint-foreground">
-        直接提问，或用 <span className="rounded bg-muted px-1 font-mono">@</span> 引用当前页面，
-        让 Panelot 帮你在浏览器里动手。
-      </div>
-    </div>
-  );
+function userText(payload: UserMessagePayload): string {
+  return payload.content.map((c) => (c.type === 'text' ? c.text : '[image]')).join('\n');
 }
 
-function renderRow(row: Row, threadId: string | null, onSelectBranch?: (nodeId: string) => void) {
+interface RowCtx {
+  threadId: string | null;
+  onSelectBranch?: (nodeId: string) => void;
+  /** undefined while a turn is active (fork rejects busy threads). */
+  onForkAt?: (siblingOfNodeId: string, text: string) => void;
+  precedingUser: Map<string, { nodeId: string; text: string }>;
+  lastMessageKey: string | null;
+  editingNodeId: string | null;
+  setEditingNodeId: (id: string | null) => void;
+}
+
+function renderRow(row: Row, ctx: RowCtx) {
+  const { threadId, onSelectBranch, onForkAt } = ctx;
   const branchSwitcher = (r: Extract<Row, { kind: 'user' | 'assistant' }>) =>
     r.branch && r.branch.count > 1 && r.nodeId && threadId && onSelectBranch ? (
       <BranchSwitcher threadId={threadId} nodeId={r.nodeId} branch={r.branch} onSelectBranch={onSelectBranch} />
@@ -217,86 +309,168 @@ function renderRow(row: Row, threadId: string | null, onSelectBranch?: (nodeId: 
 
   switch (row.kind) {
     case 'user': {
-      const text = row.payload.content.map((c) => (c.type === 'text' ? c.text : '[image]')).join('\n');
+      const text = userText(row.payload);
+      if (row.nodeId && ctx.editingNodeId === row.nodeId && onForkAt) {
+        return (
+          <EditInPlace
+            initial={text}
+            onCancel={() => ctx.setEditingNodeId(null)}
+            onResend={(edited) => {
+              ctx.setEditingNodeId(null);
+              onForkAt(row.nodeId!, edited);
+            }}
+          />
+        );
+      }
       return (
-        <div className="flex flex-col items-end">
+        <div className="group/msg flex flex-col items-end">
           <div className="max-w-[85%] rounded-2xl rounded-br-md bg-user-bubble px-4 py-2.5 text-[14.5px] leading-[1.65]">
             {row.payload.attachedContext && row.payload.attachedContext.length > 0 && (
               <div className="mb-1.5 flex flex-wrap gap-1">
-                {row.payload.attachedContext.map((ctx, i) => (
-                  <span key={i} className="inline-flex items-center gap-1 rounded-full bg-black/20 px-2 py-0.5 text-[11px] text-muted-foreground">
-                    📎 {ctx.label}
+                {row.payload.attachedContext.map((block, i) => (
+                  <span key={i} className="inline-flex items-center gap-1 rounded-full bg-foreground/10 px-2 py-0.5 text-[11px] text-muted-foreground">
+                    📎 {block.label}
                   </span>
                 ))}
               </div>
             )}
             <div className="whitespace-pre-wrap">{text}</div>
           </div>
-          {branchSwitcher(row)}
-        </div>
-      );
-    }
-    case 'assistant': {
-      const text = row.streaming
-        ? (row.liveText ?? '')
-        : row.payload.content.map((c) => (c.type === 'text' ? c.text : '')).join('');
-      const reasoning = row.streaming ? row.liveReasoning : row.payload.reasoning;
-      return (
-        <div className="flex gap-3">
-          <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-[13px] text-primary">✦</div>
-          <div className="min-w-0 flex-1 pt-0.5">
-            {reasoning && <ReasoningBlock text={reasoning} streaming={row.streaming} />}
-            <Markdown content={text} streaming={row.streaming} />
-            {row.streaming && !text && <span className="inline-block h-4 w-[3px] animate-[blink_1s_ease-in-out_infinite] rounded-full bg-primary align-middle" />}
+          <div className="flex items-center gap-1">
             {branchSwitcher(row)}
+            <MessageActions
+              role="user"
+              text={text}
+              align="end"
+              isLast={row.key === ctx.lastMessageKey}
+              onEdit={row.nodeId && onForkAt ? () => ctx.setEditingNodeId(row.nodeId!) : undefined}
+            />
           </div>
         </div>
       );
     }
-    case 'tools':
+    case 'assistant': {
+      // Live rows (streaming or completed-awaiting-snapshot) carry their text
+      // in liveText; persisted rows in payload.content.
+      // Codex-style flat turn: no per-message avatar — the user bubble on the
+      // right already marks turn boundaries; repeating an agent icon beside
+      // every reasoning/answer block is noise in multi-step turns.
+      const text = row.liveText ?? row.payload.content.map((c) => (c.type === 'text' ? c.text : '')).join('');
+      const reasoning = row.liveReasoning || row.payload.reasoning;
       return (
-        <div className="pl-10">
-          <ToolCallGroup cards={row.cards} />
+        <div className="group/msg min-w-0">
+          {reasoning && <ReasoningBlock text={reasoning} streaming={row.streaming} />}
+          <Markdown content={text} streaming={row.streaming} />
+          {row.streaming && !text && <span className="inline-block h-4 w-[3px] animate-[blink_1s_ease-in-out_infinite] rounded-full bg-primary align-middle" />}
+          {!row.streaming && row.citations && <CitationsPill citations={row.citations} />}
+          {!row.streaming && (
+            <div className="flex items-center gap-1">
+              <MessageActions
+                role="assistant"
+                text={text}
+                isLast={row.key === ctx.lastMessageKey}
+                usage={row.payload.usage}
+                model={row.payload.model || undefined}
+                onRegenerate={
+                  row.nodeId && onForkAt && ctx.precedingUser.get(row.nodeId)
+                    ? () => {
+                        const u = ctx.precedingUser.get(row.nodeId!)!;
+                        onForkAt(u.nodeId, u.text);
+                      }
+                    : undefined
+                }
+              />
+              {branchSwitcher(row)}
+            </div>
+          )}
         </div>
       );
+    }
+    case 'tools':
+      // Full-width with the flat assistant turns (avatar indent is gone).
+      return <ToolCallGroup cards={row.cards} historical={row.historical} />;
     case 'notice':
       return (
         <div className="flex justify-center">
           <div className="rounded-full border border-border-soft bg-card px-3 py-1 text-[11px] text-faint-foreground">{row.text}</div>
         </div>
       );
-    case 'compaction':
-      return (
-        <div className="flex justify-center">
-          <div className="rounded-full border border-dashed border-border px-3 py-1 text-[11px] text-faint-foreground">
-            ⧉ {t('stream.compacted', { before: row.payload.tokensBefore, after: row.payload.tokensAfter })}
-          </div>
-        </div>
-      );
-    case 'branch_summary':
-      return (
-        <div className="rounded-xl border border-dashed border-border bg-card px-3 py-2 text-[12px] text-muted-foreground">
-          <div className="mb-1 font-medium">{t('stream.branchSummary')}</div>
-          {row.payload.summary}
-        </div>
-      );
   }
 }
 
+/**
+ * Edit-in-place (OpenWebUI UserMessage): the bubble swaps for a full-width
+ * panel; Resend forks a sibling branch (history preserved, BranchSwitcher
+ * appears). Esc cancels, Ctrl+Enter resends. IME-guarded for zh-CN.
+ */
+function EditInPlace({ initial, onCancel, onResend }: { initial: string; onCancel: () => void; onResend: (text: string) => void }) {
+  const [value, setValue] = useState(initial);
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    ref.current?.focus();
+    ref.current?.setSelectionRange(value.length, value.length);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const resend = () => {
+    if (value.trim()) onResend(value.trim());
+  };
+  return (
+    <div className="w-full rounded-2xl bg-muted px-4 py-3">
+      <textarea
+        ref={ref}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+          if (e.key === 'Escape') onCancel();
+          else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            resend();
+          }
+        }}
+        rows={Math.min(10, Math.max(2, value.split('\n').length))}
+        className="w-full resize-none bg-transparent text-[14.5px] leading-[1.65] outline-none"
+      />
+      <div className="mt-2 flex items-center justify-end gap-2">
+        <span className="mr-auto text-[11px] text-faint-foreground">{t('actions.editHint')}</span>
+        <Button variant="outline" size="sm" className="h-7 text-[12px]" onClick={onCancel}>
+          {t('app.cancel')}
+        </Button>
+        <Button size="sm" className="h-7 text-[12px]" disabled={!value.trim()} onClick={resend}>
+          {t('actions.resend')}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function ReasoningBlock({ text, streaming }: { text: string; streaming?: boolean }) {
-  const [open, setOpen] = useState(false);
+  // OpenWebUI semantics: auto-open while thinking streams (a peek window that
+  // follows the tail), auto-collapse when done; manual toggle wins afterward.
+  const [manualOpen, setManualOpen] = useState<boolean | null>(null);
+  const open = manualOpen ?? Boolean(streaming);
+  const peekRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (streaming && open && peekRef.current) {
+      peekRef.current.scrollTop = peekRef.current.scrollHeight;
+    }
+  }, [text, streaming, open]);
   return (
     <div className="mb-2">
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="text-[11px] text-muted-foreground hover:text-foreground"
+        onClick={() => setManualOpen(!open)}
+        className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
         aria-expanded={open}
       >
+        {streaming && <span className="inline-block size-1.5 animate-pulse rounded-full bg-info" />}
         {open ? '▾' : '▸'} {streaming ? t('stream.reasoningLive') : t('stream.reasoning')}
       </button>
       {open && (
-        <div className="mt-1 whitespace-pre-wrap rounded-md border-l-2 border-info/40 bg-card px-3 py-2 text-[12px] text-muted-foreground">
+        <div
+          ref={peekRef}
+          className={`mt-1 overflow-y-auto whitespace-pre-wrap rounded-md border-l-2 border-info/40 bg-card px-3 py-2 text-[12px] text-muted-foreground ${streaming ? 'max-h-32' : 'max-h-72'}`}
+        >
           {text}
         </div>
       )}

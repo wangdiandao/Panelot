@@ -135,7 +135,7 @@ export function Onboarding({ onConfigured, onOpenSettings, onTryDemo }: Props) {
       </div>
 
       {step === 1 && (
-        <div className="w-full space-y-3 rounded-2xl border border-border bg-card p-5">
+        <div className="w-full space-y-3 rounded-xl border border-border bg-card p-5">
           <div className="text-[15px] font-semibold">① 连接你的模型</div>
           <div className="space-y-1.5">
             <Label className="text-[12px] text-muted-foreground">接口类型</Label>
@@ -188,13 +188,13 @@ export function Onboarding({ onConfigured, onOpenSettings, onTryDemo }: Props) {
       )}
 
       {step === 2 && (
-        <div className="w-full space-y-3 rounded-2xl border border-border bg-card p-5">
+        <div className="w-full space-y-3 rounded-xl border border-border bg-card p-5">
           <div className="flex items-center gap-2 text-[15px] font-semibold">
             <ShieldCheck className="size-4 text-primary" /> ② 选择审批档位
           </div>
           <RadioGroup value={tier} onValueChange={setTier} className="gap-2">
             {APPROVAL_TIERS.map((t) => (
-              <label key={t.id} className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3 transition-colors ${tier === t.id ? 'border-primary/60 bg-primary/5' : 'border-border hover:bg-muted/50'}`}>
+              <label key={t.id} className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3 transition-colors ${tier === t.id ? 'border-primary/60 bg-primary/5' : 'border-border hover:bg-muted/60'}`}>
                 <RadioGroupItem value={t.id} className="mt-0.5" />
                 <div>
                   <div className="text-[13px] font-medium">{t.title}</div>
@@ -211,7 +211,7 @@ export function Onboarding({ onConfigured, onOpenSettings, onTryDemo }: Props) {
       )}
 
       {step === 3 && (
-        <div className="w-full space-y-3 rounded-2xl border border-border bg-card p-5 text-center">
+        <div className="w-full space-y-3 rounded-xl border border-border bg-card p-5 text-center">
           <div className="text-[15px] font-semibold">🎉 就绪！试试第一条指令</div>
           <button
             type="button"

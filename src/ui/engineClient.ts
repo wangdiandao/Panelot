@@ -20,6 +20,7 @@ import {
   type UserInput,
 } from '../messaging/protocol';
 import { createPortTransport, type EngineTransport } from '../messaging/transport';
+import { SettingsStore } from '../settings/store';
 
 // ---------------------------------------------------------------------------
 // Live item state (streaming overlay)
@@ -34,10 +35,14 @@ export interface LiveItem {
   toolProgress?: unknown;
   status: 'streaming' | 'ok' | 'fail';
   details?: unknown;
+  /** Client-side optimistic echo (user message shown before persistence). */
+  local?: boolean;
 }
 
 export interface ThreadUiState {
   connected: boolean;
+  /** True between openThread and the snapshot's arrival (skeleton, not empty state). */
+  loading: boolean;
   threadId: string | null;
   meta: ThreadSnapshotMeta | null;
   /** Persisted items from the snapshot. */
@@ -49,27 +54,31 @@ export interface ThreadUiState {
   wasInterrupted: boolean;
   pendingApprovals: PendingApproval[];
   queuedInputs: number;
-  lastUsage: {
-    contextPct: number;
-    costUsd?: number;
-    totalTokens: number;
-    /** Session-accumulated breakdown for the cost popover. */
-    inputTokens: number;
-    outputTokens: number;
-    cacheReadTokens: number;
-  } | null;
+  /**
+   * Local echo of enqueued input texts (queue dock). The protocol only
+   * broadcasts a count, so texts survive only within this session — after a
+   * reconnect the dock degrades to "N queued" placeholders.
+   */
+  queuedTexts: string[];
   todos: { text: string; done: boolean }[];
   lastError: { message: string; retryable: boolean; kind?: string } | null;
   /** Last submitted input, kept for the error-banner retry (docs/09 §7). */
   lastInput: UserInput | null;
-  /** Controlled tabs for the task panel (docs/09 §3.1). */
-  controlledTabs: { tabId: number; title: string; url: string }[];
+  /** Tabs the agent has operated on — audit trail for the task panel (docs/09 §3.1). */
+  agentTabs: { tabId: number; title: string; url: string }[];
   /** Sticky per-session overrides (model selector / tool-level switch). */
   pendingOverrides: TurnOverrides;
 }
 
+/** Per-thread agent activity for sidebar indicators (activity.updated). */
+export interface ThreadActivity {
+  running: boolean;
+  pendingApprovals: number;
+}
+
 const initialState: ThreadUiState = {
   connected: false,
+  loading: false,
   threadId: null,
   meta: null,
   items: [],
@@ -78,11 +87,11 @@ const initialState: ThreadUiState = {
   wasInterrupted: false,
   pendingApprovals: [],
   queuedInputs: 0,
-  lastUsage: null,
+  queuedTexts: [],
   todos: [],
   lastError: null,
   lastInput: null,
-  controlledTabs: [],
+  agentTabs: [],
   pendingOverrides: {},
 };
 
@@ -98,11 +107,43 @@ export class EngineSession {
   private disposed = false;
   /** Draft-mode input waiting for thread.created before it can be submitted. */
   private pendingDraft: UserInput | null = null;
+  /** thread.updated patch that arrived before the snapshot (meta still null). */
+  private pendingMetaPatch: Partial<ThreadSnapshotMeta> | null = null;
+  /** submissionId → echo itemId: rejected ops retract their echo bubble. */
+  private echoOps = new Map<string, string>();
 
   readonly store = create<ThreadUiState>(() => ({ ...initialState }));
 
+  /**
+   * Cross-thread activity (activity.updated) — a SEPARATE store so sidebar
+   * indicator updates for background threads never re-render the message
+   * stream subscribed to ThreadUiState.
+   */
+  readonly activityStore = create<{ activity: Map<string, ThreadActivity> }>(() => ({
+    activity: new Map(),
+  }));
+
   constructor(private makeTransport: () => EngineTransport = createPortTransport) {
     this.connect();
+    void this.restoreModelOverride();
+  }
+
+  /**
+   * Seed pendingOverrides.model from last-used / global default so new chats
+   * keep the user's model choice (ChatGPT semantics). Only fills the gap —
+   * never clobbers a choice made while the async read was in flight.
+   */
+  private async restoreModelOverride(): Promise<void> {
+    const threadIdAtStart = this.store.getState().threadId;
+    try {
+      const model = (await SettingsStore.lastModel.get()) ?? (await SettingsStore.global.get()).defaultModel;
+      if (!model) return;
+      const s = this.store.getState();
+      if (s.threadId !== threadIdAtStart || s.pendingOverrides.model !== undefined) return;
+      this.store.setState({ pendingOverrides: { ...s.pendingOverrides, model } });
+    } catch {
+      // storage unavailable (tests) — overrides simply stay empty
+    }
   }
 
   // ---- connection lifecycle -----------------------------------------------
@@ -165,16 +206,59 @@ export class EngineSession {
   startDraft(): void {
     const { connected, pendingOverrides } = this.store.getState();
     this.pendingDraft = null;
+    this.pendingMetaPatch = null;
+    this.echoOps.clear();
     this.store.setState({ ...initialState, connected, pendingOverrides });
+    void this.restoreModelOverride();
   }
 
   openThread(threadId: string): void {
-    this.store.setState({ ...initialState, connected: this.store.getState().connected, threadId });
+    this.pendingMetaPatch = null;
+    this.echoOps.clear();
+    this.store.setState({ ...initialState, connected: this.store.getState().connected, threadId, loading: true });
     this.send({ type: 'thread.subscribe', threadId });
+    void this.restoreModelOverride();
   }
 
-  submit(input: UserInput): void {
+  /**
+   * Optimistic echo (ChatGPT/OpenWebUI semantics): the user's message renders
+   * the instant they hit send, regardless of transport/subscription timing.
+   * applySnapshot reconciles echoes away once the persisted node arrives; a
+   * rejected op retracts its echo via echoOps.
+   */
+  private echoUser(input: UserInput, isRetry = false): string | null {
+    // A retry re-submits lastInput — its echo bubble already exists.
+    if (isRetry && this.store.getState().liveItems.some((it) => it.local && it.text === input.text)) {
+      return null;
+    }
+    const itemId = `local-${crypto.randomUUID()}`;
+    this.store.setState((s) => ({
+      liveItems: [
+        ...s.liveItems,
+        {
+          itemId,
+          kind: 'user_message',
+          meta: {},
+          text: input.text,
+          reasoning: '',
+          status: 'ok' as const,
+          local: true,
+        },
+      ],
+    }));
+    return itemId;
+  }
+
+  private retractEcho(itemId: string): void {
+    this.store.setState((s) => ({ liveItems: s.liveItems.filter((it) => it.itemId !== itemId) }));
+  }
+
+  submit(input: UserInput, opts?: { isRetry?: boolean }): void {
     const { threadId, activeTurn, pendingOverrides } = this.store.getState();
+    const echoId = this.echoUser(input, opts?.isRetry ?? false);
+    const track = (submissionId: string) => {
+      if (echoId) this.echoOps.set(submissionId, echoId);
+    };
     if (!threadId) {
       // Draft mode: materialize the thread first, then submit on created.
       this.pendingDraft = input;
@@ -184,15 +268,15 @@ export class EngineSession {
     }
     if (activeTurn) {
       if (activeTurn.steerable) {
-        this.send({ type: 'turn.steer', threadId, expectedTurnId: activeTurn.turnId, input });
+        track(this.send({ type: 'turn.steer', threadId, expectedTurnId: activeTurn.turnId, input }));
       } else {
-        this.send({ type: 'turn.enqueue', threadId, input });
+        track(this.send({ type: 'turn.enqueue', threadId, input }));
       }
       return;
     }
     const hasOverrides = Object.values(pendingOverrides).some((v) => v !== undefined);
     this.store.setState({ lastInput: input });
-    this.send({ type: 'turn.submit', threadId, input, ...(hasOverrides ? { overrides: pendingOverrides } : {}) });
+    track(this.send({ type: 'turn.submit', threadId, input, ...(hasOverrides ? { overrides: pendingOverrides } : {}) }));
   }
 
   /** Re-submit the last input (error-banner retry). */
@@ -200,12 +284,19 @@ export class EngineSession {
     const { lastInput } = this.store.getState();
     if (!lastInput) return;
     this.store.setState({ lastError: null });
-    this.submit(lastInput);
+    this.submit(lastInput, { isRetry: true });
   }
 
   /** Merge sticky per-session overrides (model selector / tool-level switch). */
   setOverrides(patch: Partial<TurnOverrides>): void {
     this.store.setState((s) => ({ pendingOverrides: { ...s.pendingOverrides, ...patch } }));
+    // Model picks persist as "last used" so the next chat reuses them;
+    // picking the default clears the memory.
+    if ('model' in patch) {
+      try {
+        void SettingsStore.lastModel.set(patch.model ?? null);
+      } catch { /* storage unavailable (tests) */ }
+    }
   }
 
   /** Branch switch (docs/09 §2): engine moves leafId, then we re-subscribe. */
@@ -216,9 +307,38 @@ export class EngineSession {
     this.send({ type: 'thread.subscribe', threadId });
   }
 
+  /**
+   * Branch-and-run (docs/02 §3.2): regenerate = fork at the assistant node
+   * with its parent user text; edit-and-resend = fork at the user node with
+   * the edited text. The new turn becomes a sibling; BranchSwitcher shows n/m.
+   */
+  forkTurn(siblingOfNodeId: string, input: UserInput): void {
+    const { threadId, activeTurn, pendingOverrides } = this.store.getState();
+    if (!threadId || activeTurn) return;
+    // Reset local view: the fork rewrites the visible path from the anchor.
+    this.store.setState({ lastInput: input, lastError: null });
+    const echoId = this.echoUser(input);
+    const hasOverrides = Object.values(pendingOverrides).some((v) => v !== undefined);
+    const submissionId = this.send({
+      type: 'turn.fork',
+      threadId,
+      siblingOfNodeId,
+      input,
+      ...(hasOverrides ? { overrides: pendingOverrides } : {}),
+    });
+    if (echoId) this.echoOps.set(submissionId, echoId);
+    // Fetch the repositioned path (pre-fork items vanish from the old branch).
+    this.send({ type: 'thread.subscribe', threadId });
+  }
+
   enqueue(input: UserInput): void {
     const { threadId } = this.store.getState();
-    if (threadId) this.send({ type: 'turn.enqueue', threadId, input });
+    if (!threadId) return;
+    const echoId = this.echoUser(input);
+    // Local text echo for the queue dock (protocol carries only a count).
+    this.store.setState((s) => ({ queuedTexts: [...s.queuedTexts, input.text] }));
+    const submissionId = this.send({ type: 'turn.enqueue', threadId, input });
+    if (echoId) this.echoOps.set(submissionId, echoId);
   }
 
   interrupt(): void {
@@ -237,6 +357,19 @@ export class EngineSession {
 
   private apply(ev: AgentEvent): void {
     const s = this.store;
+    // Thread-scoped events for another thread must not leak into this view —
+    // the host broadcast is per-subscription, but subscribe ops race turn
+    // events during thread switches (the old thread's stream is still in
+    // flight while store.threadId already points at the new one), and a
+    // draft (threadId null) must ignore the previous thread's stream too.
+    if (
+      'threadId' in ev &&
+      ev.type !== 'thread.created' &&
+      ev.type !== 'thread.forked' &&
+      (ev as { threadId: string }).threadId !== s.getState().threadId
+    ) {
+      return;
+    }
     switch (ev.type) {
       case 'initialized': {
         this.reconnectDelay = 500;
@@ -245,12 +378,17 @@ export class EngineSession {
         break;
       }
       case 'thread.created': {
-        const { pendingOverrides } = s.getState();
-        s.setState({ ...initialState, connected: true, threadId: ev.threadId, pendingOverrides });
+        const { pendingOverrides, liveItems, lastInput } = s.getState();
+        // Keep optimistic echoes across the draft→thread transition so the
+        // just-sent message doesn't blink out and back in.
+        const echoes = liveItems.filter((it) => it.local);
+        s.setState({ ...initialState, connected: true, threadId: ev.threadId, pendingOverrides, liveItems: echoes, lastInput });
         this.send({ type: 'thread.subscribe', threadId: ev.threadId });
         const draft = this.pendingDraft;
         this.pendingDraft = null;
-        if (draft) this.submit(draft);
+        // Internal re-submit: the draft's echo bubble already exists —
+        // echoing again here rendered the message twice.
+        if (draft) this.submit(draft, { isRetry: true });
         break;
       }
       case 'turn.start':
@@ -276,18 +414,36 @@ export class EngineSession {
         }));
         break;
       case 'item.delta':
-        s.setState((st) => ({
-          liveItems: st.liveItems.map((it) =>
-            it.itemId === ev.itemId
-              ? {
-                  ...it,
-                  text: it.text + (ev.delta.text ?? ''),
-                  reasoning: it.reasoning + (ev.delta.reasoning ?? ''),
-                  toolProgress: ev.delta.toolProgress ?? it.toolProgress,
-                }
-              : it,
-          ),
-        }));
+        s.setState((st) => {
+          let found = false;
+          let liveItems = st.liveItems.map((it) => {
+            if (it.itemId !== ev.itemId) return it;
+            found = true;
+            return {
+              ...it,
+              text: it.text + (ev.delta.text ?? ''),
+              reasoning: it.reasoning + (ev.delta.reasoning ?? ''),
+              toolProgress: ev.delta.toolProgress ?? it.toolProgress,
+            };
+          });
+          if (!found) {
+            // Mid-turn subscribe: item.start predates our subscription.
+            // Upsert so the ongoing stream is visible instead of dropped.
+            liveItems = [
+              ...liveItems,
+              {
+                itemId: ev.itemId,
+                kind: ev.delta.toolProgress !== undefined ? 'tool_call' : 'assistant_message',
+                meta: {},
+                text: ev.delta.text ?? '',
+                reasoning: ev.delta.reasoning ?? '',
+                toolProgress: ev.delta.toolProgress,
+                status: 'streaming' as const,
+              },
+            ];
+          }
+          return { liveItems };
+        });
         break;
       case 'item.complete': {
         // todo_write surfaces the plan via the details channel (docs/05 §3).
@@ -302,18 +458,6 @@ export class EngineSession {
         }));
         break;
       }
-      case 'token.usage':
-        s.setState((st) => ({
-          lastUsage: {
-            contextPct: ev.contextPct,
-            costUsd: (st.lastUsage?.costUsd ?? 0) + (ev.costUsd ?? 0),
-            totalTokens: (st.lastUsage?.totalTokens ?? 0) + ev.usage.input + ev.usage.output,
-            inputTokens: (st.lastUsage?.inputTokens ?? 0) + ev.usage.input,
-            outputTokens: (st.lastUsage?.outputTokens ?? 0) + ev.usage.output,
-            cacheReadTokens: (st.lastUsage?.cacheReadTokens ?? 0) + (ev.usage.cacheRead ?? 0),
-          },
-        }));
-        break;
       case 'approval.request':
         s.setState((st) => ({
           pendingApprovals: [
@@ -323,15 +467,49 @@ export class EngineSession {
         }));
         break;
       case 'queue.updated':
-        s.setState({ queuedInputs: ev.pending });
+        // Reconcile the local text echo against the authoritative count:
+        // engine drains FIFO, so drop from the head when the count shrinks;
+        // if the count exceeds what we echoed (another surface enqueued),
+        // keep what we have — the dock shows placeholders for the rest.
+        s.setState((prev) => ({
+          queuedInputs: ev.pending,
+          queuedTexts: prev.queuedTexts.length > ev.pending
+            ? prev.queuedTexts.slice(prev.queuedTexts.length - ev.pending)
+            : prev.queuedTexts,
+        }));
         break;
       case 'tabs.updated':
-        if (ev.threadId === s.getState().threadId) s.setState({ controlledTabs: ev.tabs });
+        if (ev.threadId === s.getState().threadId) s.setState({ agentTabs: ev.tabs });
         break;
+      case 'activity.updated': {
+        // Separate store: background-thread indicators must not re-render
+        // ThreadUiState subscribers (the virtualized message stream).
+        const next = new Map(this.activityStore.getState().activity);
+        if (!ev.activity.running && ev.activity.pendingApprovals === 0) next.delete(ev.activity.threadId);
+        else next.set(ev.activity.threadId, { running: ev.activity.running, pendingApprovals: ev.activity.pendingApprovals });
+        this.activityStore.setState({ activity: next });
+        break;
+      }
       case 'thread.updated':
-        s.setState((st) => ({ meta: st.meta ? { ...st.meta, ...ev.patch } : st.meta }));
+        if (ev.threadId !== s.getState().threadId) break;
+        s.setState((st) => {
+          if (st.meta) return { meta: { ...st.meta, ...ev.patch } };
+          // Snapshot not here yet (subscribe still in flight): stash the
+          // patch so the title isn't lost, apply it over the snapshot meta.
+          this.pendingMetaPatch = { ...this.pendingMetaPatch, ...ev.patch };
+          return st;
+        });
         break;
-      case 'error':
+      case 'error': {
+        // The engine dropped the op — its optimistic echo must not linger
+        // as a phantom "sent" bubble (no_active_turn / queue_full / ...).
+        if (ev.submissionId !== undefined) {
+          const echoId = this.echoOps.get(ev.submissionId);
+          if (echoId) {
+            this.echoOps.delete(ev.submissionId);
+            this.retractEcho(echoId);
+          }
+        }
         if (ev.code === 'thread_not_found') {
           // Every op this client sends targets its current thread, so this
           // means the thread vanished underneath us (deleted from another
@@ -342,6 +520,7 @@ export class EngineSession {
         }
         s.setState({ lastError: { message: ev.message, retryable: ev.retryable, kind: ev.errorKind } });
         break;
+      }
       // pong / overloaded / escalation.request / unknown types: ignored here.
       default:
         break;
@@ -349,17 +528,78 @@ export class EngineSession {
   }
 
   private applySnapshot(snap: ThreadSnapshot): void {
-    this.store.setState({
-      threadId: snap.meta.id,
-      meta: snap.meta,
-      items: snap.items,
-      liveItems: [], // snapshot supersedes the overlay
-      activeTurn: snap.activeTurn && !snap.activeTurn.wasInterrupted
-        ? { turnId: snap.activeTurn.turnId, steerable: snap.activeTurn.steerable }
-        : null,
-      wasInterrupted: snap.activeTurn?.wasInterrupted ?? false,
-      pendingApprovals: snap.pendingApprovals,
-      queuedInputs: snap.queuedInputs,
+    const metaPatch = this.pendingMetaPatch;
+    this.pendingMetaPatch = null;
+    this.store.setState((st) => {
+      // Snapshot supersedes the overlay — except for what the snapshot can't
+      // contain yet: user messages not yet persisted (echoes / queued inputs)
+      // and items belonging to the still-running turn. Reconciliation rules:
+      //  - user items: multiset by text — N persisted copies absorb at most
+      //    N live copies, so a queued duplicate ("继续" twice) keeps its bubble.
+      //  - other live items exist only while a turn is live; with no active
+      //    turn nothing can still be feeding them (SW-crash ghosts) → drop.
+      //  - tool cards persist with the SAME itemId → exact dedup.
+      //  - assistant text has no shared id → dedup by text; keep completed
+      //    live text the snapshot hasn't caught up to (mid-turn resubscribe).
+      const userCounts = new Map<string, number>();
+      const assistantTexts = new Set<string>();
+      const toolItemIds = new Set<string>();
+      for (const item of snap.items) {
+        if (item.kind === 'user_message') {
+          const text = (item.payload as { content?: { type: string; text?: string }[] }).content
+            ?.map((c) => (c.type === 'text' ? c.text ?? '' : ''))
+            .join('\n') ?? '';
+          userCounts.set(text, (userCounts.get(text) ?? 0) + 1);
+        } else if (item.kind === 'assistant_message') {
+          const text = (item.payload as { content?: { type: string; text?: string }[] }).content
+            ?.map((c) => (c.type === 'text' ? c.text ?? '' : ''))
+            .join('') ?? '';
+          if (text) assistantTexts.add(text);
+        } else if (item.kind === 'tool_call') {
+          const id = (item.payload as { itemId?: string }).itemId;
+          if (id) toolItemIds.add(id);
+        }
+      }
+      const turnLive = snap.activeTurn !== null && !snap.activeTurn.wasInterrupted;
+      const liveItems = st.liveItems.filter((it) => {
+        if (it.kind === 'user_message') {
+          const c = userCounts.get(it.text) ?? 0;
+          if (c > 0) {
+            userCounts.set(it.text, c - 1);
+            return false;
+          }
+          return true;
+        }
+        if (it.local || !turnLive) return false;
+        if (it.kind === 'tool_call') return !toolItemIds.has(it.itemId);
+        if (it.kind === 'assistant_message') return it.status === 'streaming' || !assistantTexts.has(it.text);
+        return it.status === 'streaming';
+      });
+      return {
+        loading: false,
+        threadId: snap.meta.id,
+        meta: metaPatch ? { ...snap.meta, ...metaPatch } : snap.meta,
+        items: snap.items,
+        liveItems,
+        activeTurn: snap.activeTurn && !snap.activeTurn.wasInterrupted
+          ? { turnId: snap.activeTurn.turnId, steerable: snap.activeTurn.steerable }
+          : null,
+        wasInterrupted: snap.activeTurn?.wasInterrupted ?? false,
+        pendingApprovals: snap.pendingApprovals,
+        queuedInputs: snap.queuedInputs,
+        // Restore todos from the latest todo_write result persisted in the
+        // snapshot. The snapshot doesn't have a dedicated todos field, so we
+        // scan backward for the last tool_result whose details carry todos[].
+        todos: (() => {
+          for (let i = snap.items.length - 1; i >= 0; i--) {
+            const it = snap.items[i]!;
+            if (it.kind !== 'tool_result') continue;
+            const d = (it.payload as { details?: { todos?: { text: string; done: boolean }[] } }).details;
+            if (Array.isArray(d?.todos)) return d.todos;
+          }
+          return st.todos; // no todo_write in snapshot → keep live value
+        })(),
+      };
     });
   }
 }

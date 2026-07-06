@@ -1,9 +1,9 @@
 /**
- * Approval card (docs/09 §4.3, docs/06 §4): full-parameter display, Y/A/N
+ * Approval card (docs/09 §4.3, docs/06 §4): full-parameter display, Y/S/A/N
  * keyboard shortcuts, flag banners, queued display "1/3".
  * Rendered ONLY inside extension pages — never injected into web pages.
- * Shell uses shadcn/ui Button; the Y/A/N/Esc handler and mandatory full-param
- * <pre> are the safety contract and must not change.
+ * Shell uses shadcn/ui Button; the Y/S/A/N/Esc handler and mandatory
+ * full-param <pre> are the safety contract and must not change.
  */
 
 import { useEffect, useRef } from 'react';
@@ -35,6 +35,9 @@ export function ApprovalCard({ approval, queuePosition, onDecision }: Props) {
       case 'y':
         decide({ kind: 'accept' });
         break;
+      case 's':
+        decide({ kind: 'acceptForSession' });
+        break;
       case 'a':
         decide({ kind: 'acceptForSite' });
         break;
@@ -61,7 +64,7 @@ export function ApprovalCard({ approval, queuePosition, onDecision }: Props) {
       onKeyDown={onKeyDown}
       role="alertdialog"
       aria-label={t('approval.request', { label: request.label })}
-      className="animate-[slide-in_200ms_ease-out] overflow-hidden rounded-xl border border-warning/50 bg-card shadow-lg outline-none focus:ring-1 focus:ring-warning"
+      className="animate-[slide-in_200ms_ease-out] overflow-hidden rounded-xl border border-warning/50 bg-card shadow-pop outline-none focus:ring-1 focus:ring-warning"
     >
       {crossScope && (
         <div className="flex items-center gap-1.5 bg-warning/15 px-3 py-1 text-[11px] font-medium text-warning">
@@ -90,17 +93,20 @@ export function ApprovalCard({ approval, queuePosition, onDecision }: Props) {
           )}
         </div>
         {request.preview?.snapshotLine && (
-          <div className="rounded bg-muted px-2 py-1 font-mono text-[11px] text-muted-foreground">
+          <div className="rounded-md bg-muted px-2 py-1 font-mono text-[11px] text-muted-foreground">
             {request.preview.snapshotLine}
           </div>
         )}
         {/* Full params — mandatory display (docs/06 §4). */}
-        <pre className="max-h-48 overflow-auto rounded bg-muted p-2 font-mono text-[11px]">
+        <pre className="max-h-48 overflow-auto rounded-md bg-muted p-2 font-mono text-[11px]">
           {JSON.stringify(request.params, null, 2)}
         </pre>
         <div className="flex gap-2">
           <Button size="sm" className="h-7 px-3 text-[12px]" onClick={() => decide({ kind: 'accept' })}>
             {t('approval.allowOnce')} <kbd className="opacity-60">Y</kbd>
+          </Button>
+          <Button variant="secondary" size="sm" className="h-7 px-3 text-[12px]" onClick={() => decide({ kind: 'acceptForSession' })}>
+            {t('approval.allowSession')} <kbd className="opacity-60">S</kbd>
           </Button>
           <Button variant="secondary" size="sm" className="h-7 px-3 text-[12px]" onClick={() => decide({ kind: 'acceptForSite' })}>
             {t('approval.allowSite')} <kbd className="opacity-60">A</kbd>

@@ -12,11 +12,13 @@ import {
   Database,
   Info,
   Plug,
+  Search,
   Shield,
   Sparkles,
   Zap,
 } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Textarea } from '../components/ui/textarea';
 import {
@@ -32,7 +34,7 @@ import { SkillsPage } from './SkillsPage';
 import { McpPage } from './McpPage';
 import { DataPage } from './DataPage';
 import { SettingsStore, type GlobalSettings } from '../../settings/store';
-import { setLang } from '../i18n';
+import { setLang, t } from '../i18n';
 
 const SECTIONS = [
   { id: 'general', label: '通用', Icon: Cog },
@@ -46,6 +48,33 @@ const SECTIONS = [
 
 export type SettingsSectionId = (typeof SECTIONS)[number]['id'];
 
+/**
+ * Human-vocabulary → tab mapping (OpenWebUI's settings-search pattern:
+ * searching filters NAVIGATION, not a flat result list). Keywords are
+ * bilingual — '密钥' and 'key' both land on Providers.
+ */
+const SECTION_KEYWORDS: Record<SettingsSectionId, string[]> = {
+  general: ['通用', 'general', '语言', 'language', '主题', 'theme', '暗色', 'dark', '指令', 'prompt', '自定义'],
+  providers: ['模型', 'model', 'provider', '连接', 'connection', '密钥', 'key', 'api', 'baseurl', 'endpoint', 'openai', 'anthropic', '验证', 'verify'],
+  permissions: ['权限', 'permission', '审批', 'approval', '黑名单', 'blacklist', '敏感', 'sensitive', '规则', 'rule', '安全', 'safety', '写操作', 'write'],
+  skills: ['skill', 'skills', '技能', '命令', 'command', 'slash', '斜杠', '导入', 'import'],
+  mcp: ['mcp', '服务器', 'server', 'oauth', '工具', 'tool', '集成', 'integration'],
+  data: ['数据', 'data', '导出', 'export', '导入', 'import', '备份', 'backup', '配额', 'quota', '存储', 'storage', '清理'],
+  about: ['关于', 'about', '版本', 'version', '帮助', 'help'],
+};
+
+/** Sections whose label or keywords match the query (exported for tests). */
+export function filterSections(query: string): SettingsSectionId[] {
+  const q = query.trim().toLowerCase();
+  const all = SECTIONS.map((s) => s.id);
+  if (!q) return all;
+  return all.filter(
+    (id) =>
+      SECTIONS.find((s) => s.id === id)!.label.toLowerCase().includes(q) ||
+      SECTION_KEYWORDS[id].some((k) => k.toLowerCase().includes(q)),
+  );
+}
+
 interface Props {
   initialSection?: SettingsSectionId;
   /** Rendered in the nav footer (e.g. a close button in modal mode). */
@@ -53,22 +82,42 @@ interface Props {
 }
 
 export function SettingsPanel({ initialSection = 'providers', footer }: Props) {
+  const [query, setQuery] = useState('');
+  const [active, setActive] = useState<SettingsSectionId>(initialSection);
+  const visible = filterSections(query);
+
+  // If the active tab is filtered out, jump to the first surviving match
+  // (OpenWebUI behavior — searching '密钥' lands you inside Providers).
+  useEffect(() => {
+    if (visible.length > 0 && !visible.includes(active)) setActive(visible[0]!);
+  }, [query]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Layout classes are all EXPLICIT (flex/flex-col/w-full/h-auto) rather than
   // relying on the tabs.tsx group-data-[orientation] variant chain — the
   // vertical variants proved fragile across build targets and a collapsed
   // list is unusable (user-reported regression).
   return (
     <Tabs
-      defaultValue={initialSection}
+      value={active}
+      onValueChange={(v) => setActive(v as SettingsSectionId)}
       orientation="vertical"
       className="flex h-full min-h-0 flex-row gap-0 bg-background text-foreground"
     >
-      <nav className="flex w-52 shrink-0 flex-col border-r border-border bg-card p-3">
-        <div className="mb-4 px-2 text-[15px] font-semibold">
+      <nav className="flex w-52 shrink-0 flex-col border-r border-border-soft bg-card p-3">
+        <div className="mb-3 px-2 text-[15px] font-semibold">
           <span className="text-primary">Panelot</span> 设置
         </div>
+        <div className="relative mb-2">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-faint-foreground" />
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t('settings.search')}
+            className="h-8 border-transparent bg-muted pl-8 text-[13px] shadow-none"
+          />
+        </div>
         <TabsList variant="line" className="flex h-auto w-full flex-1 flex-col items-stretch justify-start gap-0.5 bg-transparent p-0">
-          {SECTIONS.map(({ id, label, Icon }) => (
+          {SECTIONS.filter(({ id }) => visible.includes(id)).map(({ id, label, Icon }) => (
             <TabsTrigger
               key={id}
               value={id}
@@ -79,6 +128,9 @@ export function SettingsPanel({ initialSection = 'providers', footer }: Props) {
             </TabsTrigger>
           ))}
         </TabsList>
+        {visible.length === 0 && (
+          <div className="px-2 py-3 text-[12px] text-faint-foreground">{t('settings.noMatch')}</div>
+        )}
         {footer && <div className="pt-2">{footer}</div>}
       </nav>
       <main className="min-w-0 flex-1 overflow-y-auto px-8 py-7">
@@ -110,7 +162,7 @@ function GeneralPage() {
 
   return (
     <div className="max-w-xl space-y-5">
-      <h2 className="text-[16px] font-semibold">通用</h2>
+      <h2 className="text-[15px] font-semibold">通用</h2>
       <div className="space-y-1.5">
         <Label htmlFor="global-prompt" className="text-[12px] text-muted-foreground">全局自定义指令</Label>
         <Textarea
@@ -158,7 +210,7 @@ function GeneralPage() {
 function AboutPage() {
   return (
     <div className="max-w-xl space-y-3 text-[13px] leading-relaxed text-muted-foreground">
-      <h2 className="text-[16px] font-semibold text-foreground">关于 Panelot</h2>
+      <h2 className="text-[15px] font-semibold text-foreground">关于 Panelot</h2>
       <p>浏览器原生 AI Agent — 模型自带（BYOK）、能力可扩展（Skills / MCP）、数据全本地。</p>
       <p>会话、配置与 API Key 全部存储在本机，仅发往你自己配置的模型端点。无遥测。</p>
     </div>

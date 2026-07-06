@@ -6,25 +6,43 @@
  * Keyboard arbitration (docs/09 §5): when the TriggerMenu is open it consumes
  * ArrowUp/ArrowDown/Enter/Tab/Esc FIRST; only unconsumed keys reach the
  * send/steer/enqueue/stop state machine below, which is otherwise unchanged
- * (the crown-jewel contract).
+ * (the crown-jewel contract). An IME double-guard (isComposing + keyCode 229,
+ * OpenWebUI's lesson for CJK keyboards) sits above everything: a
+ * composition-confirm Enter neither sends nor steers.
+ *
+ * Shell styling follows OpenWebUI's composer grammar: focus-within ring on
+ * the whole card, dashed indigo border while the running turn is steerable
+ * (mode signal via shape, not color alone), and a bottom toolbar of
+ * [+ attach] | divider | pill strip … [send/stop circle].
  */
 
-import { useRef, useState, type RefObject } from 'react';
-import { ArrowUp, Paperclip, Square, X } from 'lucide-react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
+import { ArrowUp, FileText, Paperclip, Plus, Sparkles, Square, X } from 'lucide-react';
 import { Button } from './ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from './ui/dropdown-menu';
 import { cn } from '../lib/utils';
 import { t } from '../i18n';
 import type { ContextBlock } from '../../messaging/protocol';
+import { attachCurrentPage, attachTab as attachTabFromMenu, listAttachableTabs } from '../pageContext';
 import { TriggerMenu, detectTrigger, type TriggerMenuHandle, type TriggerState } from './TriggerMenu';
-import { useTriggerItems, evaluateVariables, type BuiltinCommand, type SkillCommand } from './composerTriggers';
+import { useTriggerItems, evaluateVariables, listSkillCommands, type BuiltinCommand, type SkillCommand } from './composerTriggers';
 import { SkillVariableForm } from './SkillVariableForm';
 import { ModelSelector, type ModelChoice } from './ModelSelector';
-import { ToolLevelSwitch } from './ToolLevelSwitch';
+import { PermissionSwitch, type PermissionTier } from './PermissionSwitch';
+import type { ApprovalPolicy } from '../../messaging/protocol';
 
 interface Props {
   running: boolean;
   steerable: boolean;
-  queuedInputs: number;
   disabled?: boolean;
   disabledHint?: string;
   contextChips: ContextBlock[];
@@ -35,12 +53,21 @@ interface Props {
   onStop: () => void;
   /** Optional external ref so parents can restore focus (e.g. post-approval). */
   textareaRef?: RefObject<HTMLTextAreaElement | null>;
-  /** Model override control (null = follow preset). */
+  /** Controlled draft (lifted for empty-state filtering + persistence). */
+  draft?: string;
+  onDraftChange?: (text: string) => void;
+  /** Backspace pressed with an empty composer (side panel page-chip removal). */
+  onBackspaceEmpty?: () => void;
+  /** ArrowUp on an empty composer recalls the last user message (terminal idiom). */
+  onRecallLast?: () => string | undefined;
+  /** Model override control (null = follow preset); omit to hide (header hosts it). */
   modelOverride?: { connectionId: string; modelId: string } | null;
   onSelectModel?: (choice: ModelChoice | null) => void;
-  /** Tool-level restriction (undefined = all levels). */
-  toolLevels?: ('L0' | 'L1' | 'L2' | 'mcp')[] | undefined;
-  onSelectToolLevels?: (levels: ('L0' | 'L1' | 'L2' | 'mcp')[] | undefined) => void;
+  /** Permission tier (undefined = global default). */
+  approvalPolicy?: ApprovalPolicy | undefined;
+  /** Whether plan mode is currently active (controls the switch indicator). */
+  planMode?: boolean;
+  onSelectPolicy?: (tier: PermissionTier) => void;
   /** Extra slash commands supplied by the host page (e.g. /clear). */
   builtinCommands?: BuiltinCommand[];
 }
@@ -48,7 +75,6 @@ interface Props {
 export function PromptInput({
   running,
   steerable,
-  queuedInputs,
   disabled,
   disabledHint,
   contextChips,
@@ -58,16 +84,28 @@ export function PromptInput({
   onEnqueue,
   onStop,
   textareaRef,
+  draft,
+  onDraftChange,
+  onBackspaceEmpty,
+  onRecallLast,
   modelOverride,
   onSelectModel,
-  toolLevels,
-  onSelectToolLevels,
+  approvalPolicy,
+  planMode,
+  onSelectPolicy,
   builtinCommands = [],
 }: Props) {
-  const [text, setText] = useState('');
+  const [innerText, setInnerText] = useState('');
+  const controlled = draft !== undefined;
+  const text = controlled ? draft : innerText;
+  const setText = (v: string) => {
+    if (!controlled) setInnerText(v);
+    onDraftChange?.(v);
+  };
   const [steerHint, setSteerHint] = useState<string | null>(null);
   const [trigger, setTrigger] = useState<TriggerState | null>(null);
   const [variableForm, setVariableForm] = useState<SkillCommand | null>(null);
+  const [focused, setFocused] = useState(false);
   const innerRef = useRef<HTMLTextAreaElement>(null);
   const taRef = textareaRef ?? innerRef;
   const menuRef = useRef<TriggerMenuHandle>(null);
@@ -119,9 +157,26 @@ export function PromptInput({
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // IME double-guard (OpenWebUI): while composing (or on the synthetic
+    // keyCode-229 event some Chinese/Japanese keyboards emit on confirm),
+    // no key may reach the state machine — Enter must not send OR steer.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     // Menu-open arbitration: the menu consumes navigation keys first.
     if (menuRef.current?.handleKeyDown(e)) {
       e.preventDefault();
+      return;
+    }
+    if (e.key === 'Backspace' && text === '') {
+      onBackspaceEmpty?.();
+      return;
+    }
+    if (e.key === 'ArrowUp' && text === '' && onRecallLast) {
+      const recalled = onRecallLast();
+      if (recalled) {
+        e.preventDefault();
+        setText(recalled);
+        requestAnimationFrame(() => taRef.current?.setSelectionRange(recalled.length, recalled.length));
+      }
       return;
     }
     if (e.key === 'Escape' && running) {
@@ -141,15 +196,66 @@ export function PromptInput({
     }
   };
 
+  // + menu: "引用页面" is a submenu listing open tabs; Skills is another submenu.
+  const [menuSkills, setMenuSkills] = useState<SkillCommand[] | null>(null);
+  const [menuTabs, setMenuTabs] = useState<{ id: number; title: string; url: string }[] | null>(null);
+  const loadMenu = () => {
+    if (menuSkills === null) void listSkillCommands().then(setMenuSkills);
+    if (menuTabs === null) void listAttachableTabs().then(setMenuTabs);
+  };
+  const attachTab = async (tabId: number, url: string) => {
+    const block = await attachTabFromMenu(tabId, url);
+    if (block) onAttachContext?.(block);
+  };
+  const pickSkill = (cmd: SkillCommand) => {
+    if (cmd.variables && cmd.variables.length > 0) {
+      setVariableForm(cmd);
+      return;
+    }
+    // Insert the slash command into the draft; the user completes and sends.
+    const next = text ? `${cmd.command} ${text}` : `${cmd.command} `;
+    setText(next);
+    requestAnimationFrame(() => {
+      taRef.current?.focus();
+      taRef.current?.setSelectionRange(next.length, next.length);
+    });
+  };
+
+  /** Huge pastes become a context chip instead of flooding the textarea
+   *  (OpenWebUI paste-as-file, adapted); Shift+paste bypasses. */
+  const PASTE_CHIP_THRESHOLD = 2000;
+  const shiftDown = useRef(false);
+  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (!onAttachContext || shiftDown.current) return;
+    const pasted = e.clipboardData.getData('text/plain');
+    if (pasted.length <= PASTE_CHIP_THRESHOLD) return;
+    e.preventDefault();
+    onAttachContext({
+      kind: 'file',
+      label: t('input.pastedText', { n: pasted.length }),
+      content: [{ type: 'text', text: pasted }],
+      approxTokens: Math.round(pasted.length / 4),
+    });
+  };
+
+  const rows = text.split('\n').length;
+  // LibreChat collapse-mask: long unfocused drafts shrink under a gradient
+  // fade instead of eating the viewport; focus restores full height.
+  const collapsed = !focused && rows > 3;
+
   return (
     <div className="px-4 pb-4 pt-1">
       {steerHint && <div className="mb-1.5 px-1 text-[11px] text-info">{steerHint}</div>}
-      {queuedInputs > 0 && <div className="mb-1.5 px-1 text-[11px] text-muted-foreground">{t('input.queuedCount', { n: queuedInputs })}</div>}
 
       <div
         className={cn(
-          'relative flex flex-col rounded-3xl border border-border bg-muted px-2 py-1.5 shadow-soft transition-colors',
-          disabled ? 'opacity-70' : 'focus-within:border-primary/60',
+          'relative flex flex-col rounded-3xl border bg-muted px-2 py-1.5 shadow-soft transition-colors',
+          disabled && 'opacity-70',
+          // Steerable running turn: dashed indigo border — a shape-channel
+          // mode signal (Enter now steers instead of sending).
+          running && steerable
+            ? 'border-dashed border-primary/60'
+            : 'border-border focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-primary/20',
         )}
       >
         <TriggerMenu
@@ -172,22 +278,109 @@ export function PromptInput({
             ))}
           </div>
         )}
-        <div className="flex items-end gap-2">
-          <textarea
-            ref={taRef}
-            value={text}
-            onChange={(e) => {
-              setText(e.target.value);
-              refreshTrigger(e.target.value, e.target.selectionStart);
-            }}
-            onKeyDown={onKeyDown}
-            onClick={(e) => refreshTrigger(text, e.currentTarget.selectionStart)}
-            onBlur={() => setTimeout(() => setTrigger(null), 150) /* let menu clicks land first */}
-            disabled={disabled}
-            placeholder={disabled ? (disabledHint ?? t('input.noProvider')) : running ? t('input.running') : t('input.placeholder')}
-            rows={Math.min(8, Math.max(1, text.split('\n').length))}
-            className="max-h-48 min-h-[36px] flex-1 resize-none bg-transparent px-2.5 py-1.5 text-[14.5px] leading-[1.5] outline-none placeholder:text-faint-foreground disabled:cursor-not-allowed"
-          />
+        <textarea
+          ref={taRef}
+          value={text}
+          onChange={(e) => {
+            setText(e.target.value);
+            refreshTrigger(e.target.value, e.target.selectionStart);
+          }}
+          onKeyDown={(e) => {
+            shiftDown.current = e.shiftKey;
+            onKeyDown(e);
+          }}
+          onKeyUp={(e) => {
+            shiftDown.current = e.shiftKey;
+          }}
+          onPaste={onPaste}
+          onClick={(e) => refreshTrigger(text, e.currentTarget.selectionStart)}
+          onFocus={() => setFocused(true)}
+          onBlur={() => {
+            setFocused(false);
+            setTimeout(() => setTrigger(null), 150); /* let menu clicks land first */
+          }}
+          disabled={disabled}
+          placeholder={disabled ? (disabledHint ?? t('input.noProvider')) : running ? t('input.running') : t('input.placeholder')}
+          rows={collapsed ? 3 : Math.min(8, Math.max(1, rows))}
+          style={collapsed ? { maskImage: 'linear-gradient(to bottom, black 55%, transparent 95%)' } : undefined}
+          className="max-h-[45vh] min-h-[36px] w-full resize-none bg-transparent px-2.5 py-1.5 text-[14.5px] leading-[1.5] outline-none placeholder:text-faint-foreground disabled:cursor-not-allowed"
+        />
+        {/* Toolbar: [+ attach] | divider | pill strip … [primary circle] */}
+        <div className="flex items-center gap-1 px-1 pt-0.5">
+          {onAttachContext && (
+            <>
+              <DropdownMenu onOpenChange={(open) => open && loadMenu()}>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-8 shrink-0 rounded-full text-muted-foreground"
+                    aria-label={t('input.attach')}
+                    disabled={disabled}
+                  >
+                    <Plus className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" side="top" className="w-48">
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>
+                      <FileText className="mr-2 size-4 text-muted-foreground" /> {t('input.attachPage')}
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent className="max-h-64 w-64 overflow-y-auto">
+                      {menuTabs === null ? (
+                        <DropdownMenuLabel className="text-[12px] font-normal text-faint-foreground">
+                          {t('model.loading')}
+                        </DropdownMenuLabel>
+                      ) : menuTabs.length === 0 ? (
+                        <DropdownMenuLabel className="text-[12px] font-normal text-faint-foreground">
+                          {t('input.noTabs')}
+                        </DropdownMenuLabel>
+                      ) : (
+                        menuTabs.map((tab) => (
+                          <DropdownMenuItem key={tab.id} onClick={() => void attachTab(tab.id, tab.url)}>
+                            <div className="flex min-w-0 flex-col">
+                              <span className="truncate text-[12px]">{tab.title}</span>
+                              <span className="truncate text-[11px] text-faint-foreground">{new URL(tab.url).hostname}</span>
+                            </div>
+                          </DropdownMenuItem>
+                        ))
+                      )}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>
+                      <Sparkles className="mr-2 size-4 text-muted-foreground" /> Skills
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent className="max-h-64 w-56 overflow-y-auto">
+                      {menuSkills === null ? (
+                        <DropdownMenuLabel className="text-[12px] font-normal text-faint-foreground">
+                          {t('model.loading')}
+                        </DropdownMenuLabel>
+                      ) : menuSkills.length === 0 ? (
+                        <DropdownMenuLabel className="text-[12px] font-normal text-faint-foreground">
+                          {t('input.noSkills')}
+                        </DropdownMenuLabel>
+                      ) : (
+                        menuSkills.map((cmd) => (
+                          <DropdownMenuItem key={cmd.skillName} onClick={() => pickSkill(cmd)}>
+                            <div className="flex min-w-0 flex-col">
+                              <span className="truncate font-mono text-[12px]">{cmd.command}</span>
+                              <span className="truncate text-[11px] text-faint-foreground">{cmd.description}</span>
+                            </div>
+                          </DropdownMenuItem>
+                        ))
+                      )}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <div className="mx-0.5 h-4 w-px shrink-0 bg-border" />
+            </>
+          )}
+          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none]">
+            {onSelectPolicy && <PermissionSwitch value={approvalPolicy} planMode={planMode} onSelect={onSelectPolicy} />}
+            {onSelectModel && <ModelSelector variant="composer" value={modelOverride ?? null} onSelect={onSelectModel} />}
+          </div>
           {running ? (
             <Button
               size="icon"
@@ -211,14 +404,8 @@ export function PromptInput({
             </Button>
           )}
         </div>
-        {(onSelectModel || onSelectToolLevels) && (
-          <div className="flex items-center gap-1 px-1.5 pt-0.5">
-            {onSelectModel && <ModelSelector value={modelOverride ?? null} onSelect={onSelectModel} />}
-            {onSelectToolLevels && <ToolLevelSwitch value={toolLevels} onSelect={onSelectToolLevels} />}
-          </div>
-        )}
       </div>
-      <div className="mt-1.5 px-2 text-center text-[10.5px] text-faint-foreground">
+      <div className="mt-1.5 px-2 text-center text-[11px] text-faint-foreground">
         {running ? t('input.hintRunning') : t('input.hintIdle')}
       </div>
 

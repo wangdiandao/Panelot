@@ -22,7 +22,9 @@ interface Props {
 }
 
 async function siblingAt(threadId: string, nodeId: string, offset: number): Promise<string | null> {
-  const siblings = await tree.getSiblings(threadId, nodeId);
+  // Logical siblings: turn.fork branches hang under their own turn_context
+  // node, so physical-sibling queries would miss them (docs/02 §3.2).
+  const siblings = await tree.getLogicalSiblings(threadId, nodeId);
   const idx = siblings.findIndex((s) => s.id === nodeId);
   if (idx === -1) return null;
   const target = siblings[idx + offset];

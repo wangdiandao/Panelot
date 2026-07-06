@@ -31,8 +31,13 @@ function extractPageText(): PageExtract {
 }
 
 export async function getActiveTab(): Promise<chrome.tabs.Tab | null> {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  return tab ?? null;
+  // `currentWindow: true` would return the sidepanel window — query all
+  // windows and pick the most recently accessed http(s) tab instead.
+  const tabs = await chrome.tabs.query({ active: true });
+  const web = tabs
+    .filter((t): t is chrome.tabs.Tab & { url: string } => !!t.url && /^https?:/.test(t.url))
+    .sort((a, b) => (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0));
+  return web[0] ?? null;
 }
 
 /** Extract a tab's readable text as a context block (null if not scriptable). */
