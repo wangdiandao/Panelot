@@ -48,9 +48,11 @@ export default defineConfig({
       },
     },
     commands: {
-      'toggle-sidepanel': {
+      // Reserved command = "press the toolbar icon". With openPanelOnActionClick
+      // the browser opens/closes the side panel NATIVELY — no JS, no user-gesture
+      // pitfalls (sidePanel.open() silently fails after an awaited promise).
+      _execute_action: {
         suggested_key: { default: 'Alt+P' },
-        description: 'Open/close the Panelot side panel',
       },
     },
     minimum_chrome_version: '116',

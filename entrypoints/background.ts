@@ -170,13 +170,12 @@ export default defineBackground(() => {
     .setPanelBehavior({ openPanelOnActionClick: true })
     .catch(() => {/* older Chrome */});
 
-  chrome.commands.onCommand.addListener((command) => {
-    if (command === 'toggle-sidepanel') {
-      void chrome.windows.getCurrent().then((win) => {
-        if (win.id !== undefined) void chrome.sidePanel.open({ windowId: win.id });
-      });
-    }
-  });
+  // Alt+P is the reserved _execute_action command (= toolbar-icon click):
+  // with openPanelOnActionClick the browser toggles the side panel natively.
+  // Never reimplement this with chrome.sidePanel.open() in an onCommand
+  // handler — open() requires a synchronous user gesture, and any awaited
+  // promise before it (windows.getCurrent) drops the gesture token, so the
+  // call silently fails.
 
   // Keepalive for running turns with no UI connected (docs/01 §4): a 30s alarm
   // wakes the SW to keep long background tasks progressing across idle gaps.
