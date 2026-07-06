@@ -1,6 +1,6 @@
 # Panelot — Chrome Agent 插件设计文档（总览）
 
-> 版本：v0.3（2026-07-03）· 状态：详细设计完成，待开工评审
+> 版本：v0.3（2026-07-03）
 > 定位：一款「安装即用」的 Chrome Agent 扩展，提供对标 CodeX / Claude Code Desktop 的完整对话体验（全屏对话页 + 侧边栏），支持多 Provider（OpenAI / Anthropic 兼容端口）、Skills / Plugin、远端 MCP，并具备完整的浏览器操作能力。
 >
 > 本文是总览；可开工粒度的规范在 [docs/](./docs) 分章文档中，索引见下。
@@ -100,7 +100,7 @@ WXT (MV3) + React 19 + TypeScript · shadcn/ui + Tailwind v4 · Zustand · Dexie
 
 ## 10. 提示词摘要 → [docs/10](./docs/10-prompts.md)
 
-内核 system prompt + 工具定义 ≤1500 tokens（全文草案见文档）；分层拼装（内核→用户全局→站点→Skills 索引→环境）配合 cache 断点；不可信内容随机后缀定界。回归集（含注入攻击样本）从 M2 起维护。
+内核 system prompt + 工具定义 ≤1500 tokens（全文见文档）；分层拼装（内核→用户全局→站点→Skills 索引→环境）配合 cache 断点；不可信内容随机后缀定界。回归集（含注入攻击样本）从 M2 起维护。
 
 ## 11. 权限清单与商店上架
 

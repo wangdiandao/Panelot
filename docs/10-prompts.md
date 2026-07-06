@@ -19,9 +19,9 @@ system prompt 按稳定性降序拼装（稳定层在前，Anthropic prompt cach
 [6] 环境块：当前日期 / 语言 / 活跃 tab 摘要（url+title）/ 当前两轴档位
 ```
 
-## 2. 内核 System Prompt 全文草案
+## 2. 内核 System Prompt 全文
 
-以下为 v1 草案（英文书写——工具调用可靠性更高；模型对用户的回复语言跟随用户）：
+以下为内核提示词全文（英文书写——工具调用可靠性更高；模型对用户的回复语言跟随用户）：
 
 ```text
 You are Panelot, an AI agent that lives in the user's browser. You can converse,

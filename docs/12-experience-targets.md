@@ -178,29 +178,12 @@
 | M3 生态 | EC-1~5 |
 | M4 打磨上架 | RL-2/3/5 · OB-2/3 · 全量指标回归一遍出跑分表 |
 
-## 8.3 实现状态（2026-07-03，shadcn 迁移轮更新）
+## 8.3 验证状态
 
-代码层面 M1–M4 全部完成。可自动化验证的指标已有单测/e2e 覆盖（CH-8 流式围栏、OP-1/3/6 快照与自纠、AP-5 注入硬闸 100%、RL-1/5 恢复与配额）。需真实端点/浏览器/人工的指标（首答时间 OB-1、审批理解成本 AP-1、真实站点成功率 OP-2）留待人工验证轮，跑分表在那时产出。
+可自动化验证的指标已有单测/e2e 覆盖（CH-8 流式围栏、OP-1/3/6 快照与自纠、AP-5 注入硬闸、RL-1/5 恢复与配额）。待完成：
 
-UI 层已全面迁移到 shadcn/ui（Radix 原语 + Tailwind v4 语义 token），并补齐此前缺口：
-
-| 项 | 状态 |
-|---|---|
-| TriggerMenu（@ / 斜杠 / {{变量}}，docs/09 §5） | ✅ 已实现（cmdk 受控模式，焦点留在输入框） |
-| BranchSwitcher ‹n/m› + Ctrl/Cmd+↑↓（CH-6） | ✅ 已实现（thread.selectBranch 协议 Op） |
-| ModelSelector 对话中切模型（CH-1） | ✅ 已实现（TurnOverrides.model 粘性覆盖） |
-| 工具级别开关（纯聊天 / L0+L1 / 全部） | ✅ 已实现（TurnOverrides.enabledToolLevels） |
-| 命令面板 Ctrl/Cmd+K（docs/09 §6） | ✅ 已实现（CommandDialog） |
-| Onboarding 三步（OB-1） | ✅ 已实现（模板+Key 内联 Verify → 审批档 → 演示卡） |
-| 错误人话归因 + 重试（docs/03 §7） | ✅ 已实现（errorKind 上行 + i18n 文案表 + retryLast） |
-| 虚拟滚动（RL-2） | ✅ react-virtuoso followOutput |
-| CodeMirror Skill 编辑器（docs/08 §3） | ✅ 已实现（markdown 高亮 + 主题跟随） |
-| 快捷键帮助 `?`、Ctrl/Cmd+E 双形态切换 | ✅ 已实现 |
-| Agent 操作过的标签页展示（docs/09 §3.1） | ✅ 已实现（tabs.updated 广播） |
-| 消息 usage Popover、骨架屏、toast 反馈 | ✅ 已实现 |
-| A11y：焦点陷阱 / tablist / menu 语义 / 审批后焦点返回 | ✅ Radix Dialog/Tabs/DropdownMenu + 焦点返回输入框 |
-| content.ts 零 UI/Radix 依赖（docs/06 §4） | ✅ 静态依赖图单测断言 |
-| i18n 覆盖 | ◐ 对话核心组件已 key 化（~70 键）；设置页文案待下一轮收编 |
+- 需真实端点/浏览器/人工的指标（首答时间 OB-1、审批理解成本 AP-1、真实站点成功率 OP-2）待人工验证轮，跑分表随之产出；
+- i18n：对话核心组件已 key 化，设置页文案尚未收编。
 
 ## 9. 开放问题
 
