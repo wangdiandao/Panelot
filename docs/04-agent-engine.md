@@ -9,8 +9,8 @@
 
 **Pi 的极简内核 + Codex 的安全外壳。** loop 本身保持最小——循环到模型不再调工具为止；复杂度全部推到外层（Gatekeeper、能力域、UI）。不加没有用例的旋钮：
 
-- ~~maxSteps 硬中断~~ → 改为**软提醒**：单 turn 工具调用达 25 次时向 UI 发 `system_notice` + 在下一次 LLM 调用注入一条提醒（"已执行 25 步，确认方向是否正确"），不打断任务；
-- **token 预算是唯一硬闸**（可选配置）：超预算 `turn.complete{stopReason:'budget_pause'}`，用户点继续再跑。
+- ~~maxSteps 硬中断~~ → 分两级：25 步**软提醒**（向 UI 发 `system_notice` + 在下一次 LLM 调用注入"确认方向是否正确"），不打断任务；60 步**硬顶**（`HARD_STEP_LIMIT`）暂停 turn（`stopReason:'budget_pause'`，最后一次 LLM 调用不带工具、让模型写收尾总结），用户点继续再跑；
+- **token 预算**（可选配置）：超预算同样 `turn.complete{stopReason:'budget_pause'}`，可继续。
 
 ## 2. Agent Loop
 

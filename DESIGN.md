@@ -65,7 +65,7 @@ WXT (MV3) + React 19 + TypeScript · shadcn/ui + Tailwind v4 · Zustand · Dexie
 
 ## 5. Agent 引擎摘要 → [docs/04](./docs/04-agent-engine.md)
 
-- 极简 loop：循环到模型不再调用工具；步数护栏为软提醒（25 步注入自省提示），token 预算是唯一硬闸；
+- 极简 loop：循环到模型不再调用工具；步数护栏两级（25 步软提醒、60 步暂停可续跑），token 预算超限同样暂停可续；
 - AgentTool 统一接口，content（给 LLM）/ details（给 UI）双通道；工具错误 throw → 模型自纠；
 - 运行中交互三通路：steer 插话 / enqueue 排队 / interrupt 打断；标题生成等内部轮不可插话。
 
@@ -78,7 +78,7 @@ WXT (MV3) + React 19 + TypeScript · shadcn/ui + Tailwind v4 · Zustand · Dexie
 
 ## 7. 权限与安全摘要 → [docs/06](./docs/06-permissions.md)
 
-- 两轴模型：approvalPolicy（untrusted / on-request / never / granular，never=拒绝而非自动批准）× capabilityScope（read-only / same-origin-write / cross-origin / full，硬闸）；会话级配置、单轮可覆盖；
+- 两轴模型：approvalPolicy（always / untrusted / on-request / never / granular / auto，never=拒绝而非自动批准）× capabilityScope（read-only / full，硬闸；same-origin-write / cross-origin 为遗留值等同 full）；会话级配置、单轮可覆盖；
 - Gatekeeper 唯一拦截点：黑名单 → 能力域 → 跨域检测（越出任务作用域强制审批）→ 敏感 payload 出域告警 → 规则表 → 默认档；
 - 审批 = 引擎发起的双向 RPC，完整参数强制展示，决策含 accept / acceptForSession / acceptForSite / decline；审批 UI 只在扩展页面出现（防网页仿冒）；
 - Prompt injection 五层防线：定界声明（软）→ 能力域 → 跨域审批 → 出域告警 → 人眼审批（硬）。
@@ -93,7 +93,7 @@ WXT (MV3) + React 19 + TypeScript · shadcn/ui + Tailwind v4 · Zustand · Dexie
 ## 9. 界面摘要 → [docs/09](./docs/09-ui.md)
 
 - 双形态：侧边栏（伴随浏览）+ 全屏对话页（三栏：会话列表 / 消息流 / 任务面板），共享同一会话可互切；
-- 消息流：Markdown 渲染管线（代码高亮/表格/KaTeX/Mermaid）、工具卡片三态 + 折叠组、审批卡片（Y/A/N 快捷键）、分支切换器 ‹n/m›；
+- 消息流：Markdown 渲染管线（代码高亮/表格/KaTeX/Mermaid）、工具卡片三态 + 折叠组、审批卡片（Y/S/A/N 快捷键）、分支切换器 ‹n/m›；
 - 输入区：@ 引用（页面/选区/截图/tab/MCP 资源）、/ 命令（内置+Skill+MCP Prompt，变量表单）、`{{动态变量}}`；
 - 设计语言：紧凑桌面 Agent 质感，靛青品牌色 + 琥珀警示色（docs/09 §1），明暗双主题，全键盘路径，中英 i18n。
 

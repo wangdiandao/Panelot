@@ -34,7 +34,7 @@ Title: 登录 - Example
 - **ref = `s{snapshotId}_{nodeIndex}`**：snapshotId 为 tab 内单调递增的快照版本号。**执行层校验 ref 前缀必须等于该 tab 当前最新快照 id，过期直接拒绝**并返回「快照已过期，请重新 read_page」——从协议层杜绝 state divergence（nanobrowser/browser-use 的顽疾）。
 - 交互后**填值回显**：`[value="..."]`；ARIA 状态方括号表示：`[checked]` `[disabled]` `[expanded]` `[selected]` `[invalid]`。
 - 纯文本节点 `- text: "..."`，多行压平空白。
-- **selector_map**（内存态，不落库）：content script 内 `Map<ref, WeakRef<Element>>`；L2 需要时另存 `ref → backendNodeId`（经 `DOM.pushNodesByBackendIdsToFrontend` 翻译），构成 L1↔L2 的统一定位层。
+- **ref map**（内存态，不落库）：content script 内 `Map<ref, Element>`（强引用；快照更新即整体替换，元素随页面变更自然失效）；L2 需要时另存 `ref → backendNodeId`（经 `DOM.pushNodesByBackendIdsToFrontend` 翻译），构成 L1↔L2 的统一定位层。
 
 ### 1.2 可交互元素检测（优先 recall）
 

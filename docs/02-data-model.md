@@ -95,7 +95,7 @@ type NodeType =
 ```ts
 interface Attachment {
   id: string; threadId: string; createdAt: number;
-  kind: 'image' | 'file' | 'page_snapshot' | 'screenshot';
+  kind: 'image' | 'file' | 'page_snapshot' | 'screenshot' | 'page_text';
   mime: string; bytes: Blob;
   meta?: { url?: string; title?: string; w?: number; h?: number };
 }

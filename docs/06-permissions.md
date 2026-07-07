@@ -13,11 +13,14 @@
 
 ```ts
 type ApprovalPolicy =
-  | 'untrusted'    // 只自动放行只读工具（effects:'read' 且非 L2）；其余一律弹审批。默认档
+  | 'always'       // 每次工具调用都问，读也问（唯一会门控读的档位；实现为 ask，绝不 deny）
+  | 'untrusted'    // 读自动放行；写一律弹审批。默认档
   | 'on-request'   // 读类自动放行；写类首个动作弹审批，同站点同工具本 turn 内后续放行
   | 'never'        // 从不弹窗。语义 = 「需要审批的动作直接拒绝并告知模型」，
                    //   绝不是「自动批准」（Codex 桌面端语义歧义的教训，在此写死）
-  | 'granular';    // 完全按规则表裁决，规则未覆盖的按 'untrusted' 兜底
+  | 'granular'     // 完全按规则表裁决，规则未覆盖的按 'untrusted' 兜底
+  | 'auto';        // 写自动放行；安全底线（黑名单、敏感 payload 强制 ask、
+                   //   规则表 deny/ask）依然生效——auto 不是绕过
 ```
 
 ### 轴二：CapabilityScope —— 能力边界（硬闸，审批也不能越过）
@@ -44,7 +47,8 @@ type CapabilityScope =
 
 ```
 check(call, thread):
-  0. 读操作（effects:'read'，任何级别）→ ALLOW（读永不拦截）
+  0. 读操作（effects:'read'，任何级别）→ ALLOW（读永不拦截；
+     唯一例外：approvalPolicy = 'always' 时读也 ask）
   —— 以下仅写操作 ——
   1. 黑名单：目标 origin ∈ 敏感站点黑名单 → DENY（不可被任何规则覆盖）
   2. 能力域：read-only → DENY（same-origin-write / cross-origin 为遗留值，等同 full）
