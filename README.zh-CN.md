@@ -68,10 +68,9 @@ Panelot 是一款在浏览器内运行 Agent 的 Chrome（MV3）扩展：
 
 从 Release 安装：
 
-1. 在 Releases 下载最新的 `panelot-<版本>-chrome.zip`（或 `.crx`）。
-2. 打开 `chrome://extensions`，开启右上角**开发者模式**。
-3. 把 zip 直接拖进页面，或解压后用**加载已解压的扩展程序**。
-   （`.crx` 双击安装仅限 Linux 或企业策略环境——Windows/macOS 的 Chrome 只接受商店签名的 CRX，请用 zip。）
+1. 在 [Releases](https://github.com/wangdiandao/Panelot/releases) 下载最新压缩包：Chrome 用 `panelot-<版本>-chrome.zip`，Edge 用 `panelot-<版本>-edge.zip`。
+2. 解压到一个不会随手删掉的目录。
+3. 打开 `chrome://extensions`（Edge 是 `edge://extensions`），开启**开发者模式**，点**加载已解压的扩展程序**，选择解压出的目录。
 4. 点工具栏图标或按 `Alt+P` 开关侧边栏（可在 `chrome://extensions/shortcuts` 改绑）。侧边栏内按 `Ctrl/Cmd+E` 展开为全屏对话页。
 
 首次配置：
@@ -104,7 +103,8 @@ pnpm build:edge     # → dist/edge-mv3
 ## Release 打包
 
 ```bash
-pnpm zip            # → .output/*.zip（Edge 用 pnpm zip:edge）
+pnpm zip            # → .output/panelot-<版本>-chrome.zip
+pnpm zip:edge       # → .output/panelot-<版本>-edge.zip
 ```
 
-需要自分发 `.crx` 时：`chrome://extensions` → **打包扩展程序** → 指向 `dist/chrome-mv3`。生成的 `.pem` 私钥务必保密并复用，保证扩展 ID 稳定。GitHub Release 同时附上 zip 与 crx。
+两个 zip 一并附到 GitHub Release。用户在开发者模式下**加载已解压的扩展程序**安装（Windows/macOS 的 Chrome 拒绝未签名 `.crx`，所以不再分发 crx）。

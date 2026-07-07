@@ -220,6 +220,16 @@ function AboutPage() {
       </h2>
       <p>浏览器原生 AI Agent — 模型自带（BYOK）、能力可扩展（Skills / MCP）、数据全本地。</p>
       <p>会话、配置与 API Key 全部存储在本机，仅发往你自己配置的模型端点。无遥测。</p>
+      <p>
+        <a
+          href="https://github.com/wangdiandao/Panelot"
+          target="_blank"
+          rel="noreferrer"
+          className="text-primary underline-offset-2 hover:underline"
+        >
+          github.com/wangdiandao/Panelot
+        </a>
+      </p>
     </div>
   );
 }

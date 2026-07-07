@@ -68,10 +68,9 @@ Design decisions worth knowing before reading the code (full rationale in [docs/
 
 Install from a release:
 
-1. Grab the latest `panelot-<version>-chrome.zip` (or `.crx`) from Releases.
-2. Open `chrome://extensions`, enable **Developer mode**.
-3. Drag the zip onto the page, or unzip it and use **Load unpacked**.
-   (`.crx` files install directly only on Linux or via enterprise policy — on Windows/macOS Chrome requires Web-Store-signed CRX, so use the zip.)
+1. Grab the latest zip from [Releases](https://github.com/wangdiandao/Panelot/releases): `panelot-<version>-chrome.zip` for Chrome, `panelot-<version>-edge.zip` for Edge.
+2. Unzip it to a folder you'll keep around.
+3. Open `chrome://extensions` (or `edge://extensions`), enable **Developer mode**, click **Load unpacked**, and pick the unzipped folder.
 4. Click the toolbar icon or press `Alt+P` to toggle the side panel (rebind at `chrome://extensions/shortcuts`). From the side panel, `Ctrl/Cmd+E` expands the conversation into the full-page view.
 
 First run:
@@ -104,7 +103,8 @@ Note: reloading a page does **not** update the background service worker. After 
 ## Release packaging
 
 ```bash
-pnpm zip            # → .output/*.zip for Chrome (and pnpm zip:edge for Edge)
+pnpm zip            # → .output/panelot-<version>-chrome.zip
+pnpm zip:edge       # → .output/panelot-<version>-edge.zip
 ```
 
-For self-hosted `.crx` distribution: `chrome://extensions` → **Pack extension** → point at `dist/chrome-mv3`. Keep the generated `.pem` private and reuse it so the extension ID stays stable. Attach both the zip and the crx to the GitHub release.
+Attach both zips to the GitHub release. Users install them via **Load unpacked** in developer mode (unsigned `.crx` files are rejected by Chrome on Windows/macOS, so we don't ship them).
