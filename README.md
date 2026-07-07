@@ -103,8 +103,8 @@ Note: reloading a page does **not** update the background service worker. After 
 ## Release packaging
 
 ```bash
-pnpm zip            # → .output/panelot-<version>-chrome.zip
-pnpm zip:edge       # → .output/panelot-<version>-edge.zip
+pnpm zip            # → dist/panelot-<version>-chrome.zip
+pnpm zip:edge       # → dist/panelot-<version>-edge.zip
 ```
 
 Attach both zips to the GitHub release. Users install them via **Load unpacked** in developer mode (unsigned `.crx` files are rejected by Chrome on Windows/macOS, so we don't ship them).

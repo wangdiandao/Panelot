@@ -103,8 +103,8 @@ pnpm build:edge     # → dist/edge-mv3
 ## Release 打包
 
 ```bash
-pnpm zip            # → .output/panelot-<版本>-chrome.zip
-pnpm zip:edge       # → .output/panelot-<版本>-edge.zip
+pnpm zip            # → dist/panelot-<版本>-chrome.zip
+pnpm zip:edge       # → dist/panelot-<版本>-edge.zip
 ```
 
 两个 zip 一并附到 GitHub Release。用户在开发者模式下**加载已解压的扩展程序**安装（Windows/macOS 的 Chrome 拒绝未签名 `.crx`，所以不再分发 crx）。
