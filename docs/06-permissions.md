@@ -22,9 +22,9 @@ type ApprovalPolicy =
 
 ### 轴二：CapabilityScope —— 能力边界（硬闸，审批也不能越过）
 
-> **v0.4 模型简化（2026-07-04 决策）：只做黑名单，不做白名单。读操作永不拦截。**
+> **只做黑名单，不做白名单；读操作永不拦截。**
 > Agent 有权读取任何页面（含黑名单站点、含 L2 截图）；一切拦截只作用于写操作。
-> 域名白名单机制（任务作用域 scopeOrigins 门控、cross_scope 强制审批）已移除。
+> 不设域名白名单机制（任务作用域 scopeOrigins 门控、cross_scope 强制审批）。
 
 ```ts
 type CapabilityScope =
