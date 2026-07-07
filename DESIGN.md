@@ -36,12 +36,12 @@
 
 设计原则：
 
-1. **安装即用**：零后端、零本地程序，填 Key 即用。
-2. **干扰最小化**：默认无感知 DOM 通道，必要时才升级 CDP（升级前告知）。
-3. **用户在环**：副作用操作默认审批；**假设模型可被欺骗，保证被欺骗的模型也做不了坏事**。
-4. **数据本地优先**：会话、配置、Key 全本地，无遥测。
-5. **生态兼容**：SKILL.md、标准 MCP、两大 API 协议，不造私有轮子。
-6. **极简内核**（借 Pi Agent）：loop 与工具面保持最小，不加没有用例的旋钮；复杂度放在权限、UI 与扩展层。
+1. 安装即用：零后端、零本地程序，填 Key 即用。
+2. 干扰最小化：默认无感知 DOM 通道，必要时才升级 CDP（升级前告知）。
+3. 用户在环：副作用操作默认审批。安全立场：假设模型可被欺骗，保证被欺骗的模型也做不了坏事。
+4. 数据本地优先：会话、配置、Key 全本地，无遥测。
+5. 生态兼容：SKILL.md、标准 MCP、两大 API 协议，不造私有轮子。
+6. 极简内核（借 Pi Agent）：loop 与工具面保持最小，不加没有用例的旋钮；复杂度放在权限、UI 与扩展层。
 
 ## 2. 技术栈
 
@@ -51,35 +51,35 @@ WXT (MV3) + React 19 + TypeScript · shadcn/ui + Tailwind v4 · Zustand · Dexie
 
 ## 3. 架构摘要 → [docs/01](./docs/01-architecture.md)
 
-- **引擎在 Background SW，UI 是薄视图**：侧边栏/全屏页通过 Port 订阅同一引擎；UI 关闭任务照跑，重连以 snapshot 恢复。
-- **协议**：Op（客户端→引擎，带 submissionId）/ AgentEvent（引擎→客户端）可扩展联合；Thread/Turn/Item 三层原语，Item 统一 start/delta/complete 三段式；`initialize` 握手。（借鉴 Codex SQ/EQ 与 app-server）
-- **SW 生命周期**：活跃 fetch + Port 心跳续命；每个 Item complete 同步落库（checkpoint）；被杀后恢复 = 回放重建。
-- **数据**（[docs/02](./docs/02-data-model.md)）：会话是**消息树**（节点 {id, parentId} + leafId 游标，只存树不存平行数组），编辑重发/重新生成 = 追加兄弟分支；append-only + 墓碑删除。
+- 引擎在 Background SW，UI 是薄视图：侧边栏/全屏页通过 Port 订阅同一引擎；UI 关闭任务照跑，重连以 snapshot 恢复。
+- 协议：Op（客户端→引擎，带 submissionId）/ AgentEvent（引擎→客户端）可扩展联合；Thread/Turn/Item 三层原语，Item 统一 start/delta/complete 三段式；`initialize` 握手。（借鉴 Codex SQ/EQ 与 app-server）
+- SW 生命周期：活跃 fetch + Port 心跳续命；每个 Item complete 同步落库（checkpoint）；被杀后恢复 = 回放重建。
+- 数据（[docs/02](./docs/02-data-model.md)）：会话是消息树（节点 {id, parentId} + leafId 游标，只存树不存平行数组），编辑重发/重新生成 = 追加兄弟分支；append-only + 墓碑删除。
 
 ## 4. Provider 体系摘要 → [docs/03](./docs/03-providers.md)
 
-- Connection（baseUrl + kind + **多 key** + **自定义头** + quirks 兼容开关）；预置十余家模板，本地 Ollama/LM Studio 直连；
-- **ModelPreset = 命名 Agent**（base model + system prompt + 工具级别 + 参数覆盖），新会话选 preset；
-- **Task model**：标题/建议路由到廉价模型；
+- Connection（baseUrl + kind + 多 key + 自定义头 + quirks 兼容开关）；预置十余家模板，本地 Ollama/LM Studio 直连；
+- ModelPreset = 命名 Agent（base model + system prompt + 工具级别 + 参数覆盖），新会话选 preset；
+- Task model：标题/建议路由到廉价模型；
 - Verify 连接测试 + 并发短超时拉取模型；错误归一化 + key failover；Anthropic 侧启用 prompt caching。
 
 ## 5. Agent 引擎摘要 → [docs/04](./docs/04-agent-engine.md)
 
-- 极简 loop：循环到模型不再调用工具；**步数护栏为软提醒（25 步注入自省提示），token 预算是唯一硬闸**；
-- AgentTool 统一接口，**content（给 LLM）/ details（给 UI）双通道**；工具错误 throw → 模型自纠；
-- 运行中交互三通路：**steer 插话 / enqueue 排队 / interrupt 打断**；标题生成等内部轮不可插话。
+- 极简 loop：循环到模型不再调用工具；步数护栏为软提醒（25 步注入自省提示），token 预算是唯一硬闸；
+- AgentTool 统一接口，content（给 LLM）/ details（给 UI）双通道；工具错误 throw → 模型自纠；
+- 运行中交互三通路：steer 插话 / enqueue 排队 / interrupt 打断；标题生成等内部轮不可插话。
 
 ## 6. 浏览器操作摘要 → [docs/05](./docs/05-browser-tools.md)
 
 - 分级：L0 标签页 / L1 content script（无感知，覆盖 90% 操作）/ L2 chrome.debugger（截图、trusted 事件、跨 iframe；按需 attach、用完即 detach）；
-- **感知用可访问性快照**（YAML 树 + `ref=sN_M` 版本化引用，过期即拒），截图 vision 仅兜底；感知降级链：L1 → CDP AXTree → 截图；
+- 感知用可访问性快照（YAML 树 + `ref=sN_M` 版本化引用，过期即拒），截图 vision 仅兜底；感知降级链：L1 → CDP AXTree → 截图；
 - 工具面：element+ref 双参数、batch_actions「变化即中断」、分层等待（0.25s/0.5s idle/5s cap）；
-- 操作可视化：元素高亮 + 页面浮动指示器；**用户手动操作页面即自动暂停**；敏感站点黑名单硬拒绝。
+- 操作可视化：元素高亮 + 页面浮动指示器；用户手动操作页面即自动暂停；敏感站点黑名单硬拒绝。
 
 ## 7. 权限与安全摘要 → [docs/06](./docs/06-permissions.md)
 
-- **两轴模型**：approvalPolicy（untrusted / on-request / never / granular，never=拒绝而非自动批准）× capabilityScope（read-only / same-origin-write / cross-origin / full，硬闸）；会话级配置、单轮可覆盖；
-- **Gatekeeper 唯一拦截点**：黑名单 → 能力域 → 跨域检测（越出任务作用域强制审批）→ 敏感 payload 出域告警 → 规则表 → 默认档；
+- 两轴模型：approvalPolicy（untrusted / on-request / never / granular，never=拒绝而非自动批准）× capabilityScope（read-only / same-origin-write / cross-origin / full，硬闸）；会话级配置、单轮可覆盖；
+- Gatekeeper 唯一拦截点：黑名单 → 能力域 → 跨域检测（越出任务作用域强制审批）→ 敏感 payload 出域告警 → 规则表 → 默认档；
 - 审批 = 引擎发起的双向 RPC，完整参数强制展示，决策含 accept / acceptForSession / acceptForSite / decline；审批 UI 只在扩展页面出现（防网页仿冒）；
 - Prompt injection 五层防线：定界声明（软）→ 能力域 → 跨域审批 → 出域告警 → 人眼审批（硬）。
 - API Key：storage.local + AES-GCM 混淆（诚实告知边界），可选 session 级模式；导出默认剔除。
@@ -93,7 +93,7 @@ WXT (MV3) + React 19 + TypeScript · shadcn/ui + Tailwind v4 · Zustand · Dexie
 ## 9. 界面摘要 → [docs/09](./docs/09-ui.md)
 
 - 双形态：侧边栏（伴随浏览）+ 全屏对话页（三栏：会话列表 / 消息流 / 任务面板），共享同一会话可互切；
-- 消息流：Markdown 全家桶、工具卡片三态 + 折叠组、审批卡片（Y/A/N 快捷键）、分支切换器 ‹n/m›；
+- 消息流：Markdown 渲染管线（代码高亮/表格/KaTeX/Mermaid）、工具卡片三态 + 折叠组、审批卡片（Y/A/N 快捷键）、分支切换器 ‹n/m›；
 - 输入区：@ 引用（页面/选区/截图/tab/MCP 资源）、/ 命令（内置+Skill+MCP Prompt，变量表单）、`{{动态变量}}`；
 - 设计语言：紧凑桌面 Agent 质感，靛青品牌色 + 琥珀警示色（docs/09 §1），明暗双主题，全键盘路径，中英 i18n。
 
