@@ -9,8 +9,8 @@
 
 **Pi 的极简内核 + Codex 的安全外壳。** loop 本身保持最小——循环到模型不再调工具为止；复杂度全部推到外层（Gatekeeper、能力域、UI）。不加没有用例的旋钮：
 
-- ~~maxSteps 硬中断~~ → 改为**软提醒**：单 turn 工具调用达 25 次时向 UI 发 `system_notice` + 在下一次 LLM 调用注入一条提醒（"已执行 25 步，确认方向是否正确"），不打断任务；
-- **token 预算是唯一硬闸**（可选配置）：超预算 `turn.complete{stopReason:'budget_pause'}`，用户点继续再跑。
+- ~~maxSteps 硬中断~~ → 分两级：25 步**软提醒**（向 UI 发 `system_notice` + 在下一次 LLM 调用注入"确认方向是否正确"），不打断任务；60 步**硬顶**（`HARD_STEP_LIMIT`）暂停 turn（`stopReason:'budget_pause'`，最后一次 LLM 调用不带工具、让模型写收尾总结），用户点继续再跑；
+- **token 预算**（可选配置）：超预算同样 `turn.complete{stopReason:'budget_pause'}`，可继续。
 
 ## 2. Agent Loop
 
@@ -162,7 +162,7 @@ interface EngineTransport {
 
 引擎与 UI 组件对 transport 无感——这使 Agent loop 可在 Vitest 里用 mock provider + DirectTransport 完整回归，不开浏览器。
 
-## 8. 开放问题
+## 8. 已定事项
 
-- [ ] steer 注入点粒度：当前设计在「LLM 调用间隙」生效；是否需要工具执行间隙也可注入（V1 不做，复杂度高）。
-- [ ] 子代理（spawn_subagent）：Thread 已有 parentThreadId 预留，事件如何聚合到父 UI 待 V2 设计。
+- steer 注入点固定在「LLM 调用间隙」，不做工具执行间隙注入：工具执行通常在秒级完成，中途注入的收益小，而中断/恢复工具执行的复杂度高。等不及的场景用 `interrupt`。
+- 不做子代理（spawn_subagent）：单 loop + 好快照的收益先于多 Agent 编排；Thread 的 `parentThreadId` 字段由 fork 使用。

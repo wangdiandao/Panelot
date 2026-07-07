@@ -1,19 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
-  <!-- Panelot icon: browser window + side panel + agent spark.
-       Flat geometric mark; reads at 16px. Brand primary #4f46e5. -->
+  <!-- Panelot icon: a single "P" letterform on the indigo brand color
+       (--primary #4f46e5; gradient stays inside the indigo ramp).
+       Round-capped stroke, optically centered, reads at 16px. -->
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#6366f1"/>
       <stop offset="1" stop-color="#4338ca"/>
     </linearGradient>
   </defs>
-  <!-- browser body -->
   <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#bg)"/>
-  <!-- side panel: the product surface -->
-  <rect x="78" y="26" width="24" height="76" rx="8" fill="#ffffff" opacity="0.92"/>
-  <!-- chat lines inside the panel -->
-  <rect x="84" y="38" width="12" height="5" rx="2.5" fill="#4f46e5" opacity="0.55"/>
-  <rect x="84" y="50" width="12" height="5" rx="2.5" fill="#4f46e5" opacity="0.35"/>
-  <!-- agent spark over the page area -->
-  <path d="M46 34 L52.5 53.5 L72 60 L52.5 66.5 L46 86 L39.5 66.5 L20 60 L39.5 53.5 Z" fill="#ffffff"/>
+  <path d="M41 94 V34 H65 a22 22 0 0 1 0 44 H41"
+        fill="none" stroke="#ffffff" stroke-width="18"
+        stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

@@ -34,7 +34,7 @@ const SkillFrontmatter = z.object({
     command: z.string().regex(/^\/[a-z0-9:-]+$/).optional(),
     variables: z.array(VariableDef).optional(),
   }).optional(),
-}).passthrough();   // 未知字段保留（兼容 Claude Code 的 allowed-tools 等，V1 忽略但不报错）
+}).passthrough();   // 未知字段保留（兼容 Claude Code 的 allowed-tools 等，忽略但不报错）
 ```
 
 存储（Dexie `skills` 表）：
@@ -62,7 +62,7 @@ interface SkillRecord {
 
 - **编辑器**：设置页内置 SKILL.md 编辑器（CodeMirror，frontmatter 实时校验 + 模板起步）；
 - **导入**：`.md` 文件 / URL（GitHub raw 或 repo 目录下 SKILL.md）/ 粘贴文本。导入时展示解析结果（name/description/作用域）确认后入库；同名冲突提示覆盖或改名；
-- **导出**：单个 `.md` 下载 / 复制。多文件 Skill（scripts、references 目录）V1 不支持——导入时若检测到引用附属文件，警告"该 Skill 依赖附属资源，可能不完整"。
+- **导出**：单个 `.md` 下载 / 复制。多文件 Skill（scripts、references 目录）不支持——导入时若检测到引用附属文件，警告"该 Skill 依赖附属资源，可能不完整"。
 
 ## 4. 斜杠命令体系
 
@@ -95,13 +95,13 @@ my-plugin/
 
 **信任边界**：Plugin 是数据不是代码——不含可执行 JS（MV3 CSP 也不允许远程代码）。其风险面 = 提示词注入 + 引入的 MCP 服务器，故 rules.json 中的 `allow` 规则安装时默认降级为 `ask`，用户在权限页手动提升。
 
-精选列表：官方维护 `panelot-plugins/index.json`（GitHub 托管），设置页内浏览安装；社区市场 V2 再议。
+精选列表：官方维护 `panelot-plugins/index.json`（GitHub 托管），设置页内浏览安装；不做社区市场与评分体系。
 
 ## 6. 站点级指令
 
 独立于 Skill 的轻量机制（类似 per-domain CLAUDE.md）：设置页维护 `{ pattern: string, prompt: string }[]`，匹配当前操作目标 tab 时拼入 system prompt 站点层（10 §6）。Plugin 的 site-prompts 归并于此。
 
-## 7. 开放问题
+## 7. 已定事项
 
-- [ ] Claude Code frontmatter 的 `allowed-tools` 是否映射到 Panelot 权限（V1 忽略；V2 可映射为 Thread 级工具白名单）。
-- [ ] Skill 版本与更新检查（imported 记录 sourceRef，V1.5 做手动"检查更新"）。
+- Claude Code frontmatter 的 `allowed-tools` 不映射到 Panelot 权限：解析时 passthrough 保留、不生效也不报错。权限只认 Gatekeeper 一个闸口——Skill 自带的工具声明是能力提示而非安全边界，让它影响裁决反而制造第二套权限来源。
+- 不做 Skill 更新检查：imported 记录存有 `sourceRef` 供手动溯源，无自动更新通道（Skill 是用户资产，静默变更反而危险）。

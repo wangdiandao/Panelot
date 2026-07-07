@@ -1,8 +1,7 @@
 /**
- * Layout tokens — single source of truth for surface dimensions (docs/09 §2).
- * Pattern borrowed from LobeChat's packages/const/layoutTokens.ts: every
- * magic number that two components must agree on lives here, so the sidebar,
- * stream, and composer can never drift apart.
+ * Layout tokens shared across components (docs/09 §2). Only dimensions that
+ * two files must agree on live here (pattern from LobeChat's layoutTokens);
+ * single-consumer sizes stay as Tailwind classes at the point of use.
  */
 
 /** Full-page thread sidebar: user-resizable, clamped (OpenWebUI: 220–480). */
@@ -14,16 +13,6 @@ export const SIDEBAR_RAIL = 48;
 
 /** Center conversation column cap (docs/09 §3.1). */
 export const STREAM_MAX_W = 768;
-
-/** Side panel minimum width Chrome allows us to plan for (docs/09 §3.2). */
-export const SIDEPANEL_MIN = 360;
-
-/** Icon-button hit areas: side panel gets larger targets (touch-adjacent). */
-export const ICON_BTN_FULL = 32;
-export const ICON_BTN_PANEL = 36;
-
-/** Composer growth cap as viewport fraction (LibreChat: 45vh). */
-export const COMPOSER_MAX_VH = 45;
 
 /** CSS custom property carrying the live sidebar width on <html>. */
 export const SIDEBAR_WIDTH_VAR = '--sidebar-width';

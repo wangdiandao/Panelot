@@ -1,7 +1,7 @@
 /**
- * Page-context attachment for M1 (docs/09 §3.2 "当前页" chip): extract the
+ * Page-context attachment (docs/09 §3.2 "当前页" chip): extract the
  * active tab's readable text via chrome.scripting on demand (activeTab).
- * The full snapshot engine (Phase 6) supersedes this for agent operations;
+ * The full snapshot engine supersedes this for agent operations;
  * this stays as the cheap "ask about this page" path.
  */
 

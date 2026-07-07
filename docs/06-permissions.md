@@ -13,18 +13,21 @@
 
 ```ts
 type ApprovalPolicy =
-  | 'untrusted'    // 只自动放行只读工具（effects:'read' 且非 L2）；其余一律弹审批。默认档
+  | 'always'       // 每次工具调用都问，读也问（唯一会门控读的档位；实现为 ask，绝不 deny）
+  | 'untrusted'    // 读自动放行；写一律弹审批。默认档
   | 'on-request'   // 读类自动放行；写类首个动作弹审批，同站点同工具本 turn 内后续放行
   | 'never'        // 从不弹窗。语义 = 「需要审批的动作直接拒绝并告知模型」，
                    //   绝不是「自动批准」（Codex 桌面端语义歧义的教训，在此写死）
-  | 'granular';    // 完全按规则表裁决，规则未覆盖的按 'untrusted' 兜底
+  | 'granular'     // 完全按规则表裁决，规则未覆盖的按 'untrusted' 兜底
+  | 'auto';        // 写自动放行；安全底线（黑名单、敏感 payload 强制 ask、
+                   //   规则表 deny/ask）依然生效——auto 不是绕过
 ```
 
 ### 轴二：CapabilityScope —— 能力边界（硬闸，审批也不能越过）
 
-> **v0.4 模型简化（2026-07-04 决策）：只做黑名单，不做白名单。读操作永不拦截。**
+> **只做黑名单，不做白名单；读操作永不拦截。**
 > Agent 有权读取任何页面（含黑名单站点、含 L2 截图）；一切拦截只作用于写操作。
-> 域名白名单机制（任务作用域 scopeOrigins 门控、cross_scope 强制审批）已移除。
+> 不设域名白名单机制（任务作用域 scopeOrigins 门控、cross_scope 强制审批）。
 
 ```ts
 type CapabilityScope =
@@ -44,7 +47,8 @@ type CapabilityScope =
 
 ```
 check(call, thread):
-  0. 读操作（effects:'read'，任何级别）→ ALLOW（读永不拦截）
+  0. 读操作（effects:'read'，任何级别）→ ALLOW（读永不拦截；
+     唯一例外：approvalPolicy = 'always' 时读也 ask）
   —— 以下仅写操作 ——
   1. 黑名单：目标 origin ∈ 敏感站点黑名单 → DENY（不可被任何规则覆盖）
   2. 能力域：read-only → DENY（same-origin-write / cross-origin 为遗留值，等同 full）
@@ -128,7 +132,7 @@ type ApprovalDecision =
 
 ## 5. L1→L2 升级确认
 
-`escalation.request` 是一种特殊审批（flag `escalation_l2`）：文案必须说明「将出现"正在调试此浏览器"横幅」。批准后本 Thread 内对该 tab 不再重复询问；turn 结束/空闲 30s 自动 detach（见 01 §5）。
+升级确认是一种特殊审批（`approval.request` 带 flag `escalation_l2`）：文案必须说明「将出现"正在调试此浏览器"横幅」。批准后本 Thread 内对该 tab 不再重复询问；turn 结束/空闲 30s 自动 detach（见 01 §5）。
 
 ## 6. Prompt Injection 防线小结
 
@@ -150,7 +154,7 @@ type ApprovalDecision =
 - 每条 `approval_persist` 规则可回溯（哪次审批产生的，链接到会话）；
 - 「重置为默认」「导出规则」入口。
 
-## 8. 开放问题
+## 8. 已定事项
 
-- [ ] `acceptForSession` 是否应有跨 UI 提示（侧边栏批的，全屏页要能看到当前生效的临时许可清单）——V1 在任务面板显示。
-- [ ] 敏感 payload 检测的误报率（卡号 Luhn 校验、凭据模式）需要真实数据调参，V1 从严（宁多问）。
+- `acceptForSession` 授权是引擎内存态、Thread 级——所有订阅该 Thread 的 UI 看到同样的裁决结果，天然跨 UI 一致；不单独做「当前生效临时许可清单」视图，审批卡片与任务面板的痕迹已足够回溯。
+- 敏感 payload 检测（卡号 Luhn 校验、凭据模式）从严设置：宁可多问一次，不做静默放行。误报率调参需要真实使用数据，规则阈值留在 `rules.ts` 单点可调。

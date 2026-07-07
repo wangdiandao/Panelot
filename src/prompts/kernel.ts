@@ -1,5 +1,5 @@
 /**
- * Kernel system prompt — full text from docs/10 §2 (v1 draft, English).
+ * Kernel system prompt — full text from docs/10 §2 (English).
  * Philosophy (Pi Agent): kernel + tool descriptions ≤ ~1500 tokens; capability
  * comes from tools and progressive disclosure, not prompt bulk.
  */

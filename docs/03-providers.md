@@ -16,7 +16,7 @@ interface Connection {
   name: string;                          // "OpenAI"、"公司中转"、"本地 Ollama"
   kind: 'openai' | 'anthropic';          // 线协议，唯一分叉点
   baseUrl: string;                       // 规范化存储（见 §4）
-  apiKeys: string[];                     // 多 key：轮询 + 429/401 failover
+  apiKeys: string[];                     // 多 key：粘性 + 429/401 failover（见 §8）
   customHeaders?: Record<string, string>;// OpenRouter 的 HTTP-Referer、Azure 的 api-key 等
   prefixId?: string;                     // 模型显示前缀，区分多连接下的同名模型
   modelIds?: string[];                   // 手动白名单（/models 不可用时）
@@ -162,7 +162,7 @@ type ProviderError =
 
 重试只发生在「本次 LLM 调用」层；工具执行错误不在此层（那是模型自纠的领域）。
 
-## 8. 开放问题
+## 8. 已定事项
 
-- [ ] 多 key 轮换粒度：per-request round-robin（当前设计）vs 粘性 key + 失败才切换（对 prompt cache 更友好——Anthropic cache 按账号，OpenAI 按 key）。V1 先做「粘性 + failover」。
-- [ ] Gemini 原生协议是否值得第三种 kind（其 OpenAI 兼容层已够用，V1 不做）。
+- 多 key 轮换粒度：**粘性 key + 失败才切换**（非 round-robin）——对 provider 侧 prompt cache 更友好（Anthropic cache 按账号，OpenAI 按 key）。429/401 时先 failover 到下一个 key，全部失效才报错。
+- Gemini 不做第三种 kind：其 OpenAI 兼容层已覆盖需求，新增线协议的维护成本不值。

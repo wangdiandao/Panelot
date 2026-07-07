@@ -47,7 +47,7 @@
 | **Turn** | 一轮完整交换：一条用户输入 → 若干 LLM 调用与工具执行 → 停止 | `turn:start` → n 个 Item → `turn:complete`；是中断（interrupt）与插话（steer）的作用单位 |
 | **Item** | 轮内的原子产出：一条助手消息、一次工具调用、一次审批、一个推理块 | 统一三段式 `item:start` → `item:delta`* → `item:complete` |
 
-Item 类型（`ItemKind`）：`assistant_message` / `reasoning` / `tool_call` / `approval` / `system_notice`。
+Item 类型（`ItemKind`）：`user_message` / `assistant_message` / `reasoning` / `tool_call` / `approval` / `system_notice`。（协议 Item 与落库 NodeType 是两层概念：Node 还包含 `tool_result` / `approval_decision` / `turn_context` 等只落库不走事件流的类型，见 02 §2.2。）
 
 ## 3. Port 消息协议
 
@@ -124,8 +124,7 @@ type AgentEvent =
   | { type: 'approval.request'; threadId: string; turnId: string;
       approvalId: string;
       request: ApprovalRequestPayload }            // 完整参数展示，见 06
-  | { type: 'escalation.request'; threadId: string; approvalId: string;
-      reason: string }                             // L1→L2 升级确认（会出现调试横幅）
+      // L1→L2 升级确认走同一事件，flags 带 'escalation_l2'（06 §5）
 
   // —— 广播类 ——
   | { type: 'thread.updated'; threadId: string; patch: Partial<ThreadMeta> }  // 标题生成、归档等
@@ -179,7 +178,7 @@ tool_call
   → 路由：
      ├─ L0/L1 → chrome.tabs.sendMessage(tabId, {tool, params}) → content script 执行 → 结果回传
      │          content script 未注入时先 chrome.scripting.executeScript 注入（幂等）
-     ├─ L2   → 确保 debugger attached（未 attach 则走 escalation.request）→ chrome.debugger.sendCommand
+     ├─ L2   → 确保 debugger attached（未 attach 则先过带 escalation_l2 flag 的审批）→ chrome.debugger.sendCommand
      ├─ MCP  → McpManager.callTool（07）
      └─ 内置 → 引擎内直接执行（fetch_url / memory 等）
 ```
@@ -187,8 +186,8 @@ tool_call
 - content script 消息协议同样定义在 `protocol.ts`（`ContentScriptOp` / `ContentScriptResult`），带超时（默认 10s）与单次重注入重试。
 - debugger attach 以 tab 为粒度记录；turn 结束或 Thread 空闲 30s 自动 detach（最小化横幅时间）。
 
-## 6. 开放问题
+## 6. 已定事项
 
-- [ ] `initialize` 的 `protocolVersion` 不匹配时的降级策略（V1：只警告不阻断）。
-- [ ] 多窗口场景下 Side Panel 的 per-window 会话绑定（`chrome.sidePanel` 是 per-window 的，V1 各窗口独立选择 Thread）。
-- [ ] `escalation.request` 是否合并进 `approval.request`（当前分开，语义更清晰，UI 成本略高）。
+- `protocolVersion` 不匹配：只警告不阻断。UI 与引擎同包分发（扩展整体更新），版本错位只出现在 SW 已更新而旧 UI 页面未刷新的窗口期，AgentEvent 开放联合 + 未知 type 忽略已覆盖该场景。
+- 多窗口 Side Panel：各窗口独立选择 Thread（`chrome.sidePanel` 本身 per-window），同一 Thread 被多处订阅时靠事件广播保持一致，无须额外绑定机制。
+- L1→L2 升级确认合并进 `approval.request`（flag `escalation_l2`，见 06 §5），不设独立的 `escalation.request` 事件——同一张审批卡片、同一套决策语义，UI 只多渲染一条横幅提示。
