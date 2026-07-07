@@ -521,7 +521,7 @@ export class EngineSession {
         s.setState({ lastError: { message: ev.message, retryable: ev.retryable, kind: ev.errorKind } });
         break;
       }
-      // pong / overloaded / escalation.request / unknown types: ignored here.
+      // pong / overloaded / unknown types: ignored here.
       default:
         break;
     }

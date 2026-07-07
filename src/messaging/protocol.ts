@@ -327,8 +327,6 @@ export type AgentEvent =
       approvalId: string;
       request: ApprovalRequestPayload;
     }
-  | { type: 'escalation.request'; threadId: string; approvalId: string; reason: string }
-
   // —— broadcasts ——
   | { type: 'thread.updated'; threadId: string; patch: Partial<ThreadSnapshotMeta> }
   | { type: 'queue.updated'; threadId: string; pending: number }

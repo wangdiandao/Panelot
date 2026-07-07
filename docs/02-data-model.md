@@ -146,7 +146,7 @@ function buildSessionContext(leafId: string): UnifiedMessage[] {
 - 会话保留策略（可配）：归档 N 天后物理删除 nodes 但保留 ThreadMeta + 导出的 Markdown 摘要。
 - 一切物理删除前，threads 表先行标记 `deleting`，防半删状态被回放。
 
-## 7. 开放问题
+## 7. 已定事项
 
-- [ ] nodes 表是否需要 `[threadId+parentId]` 复合索引加速 siblings 查询（等 M1 实测再加）。
-- [ ] 附件是否用 OPFS 替代 IndexedDB Blob（大截图场景性能更好，但 API 兼容成本高，V1 不做）。
+- nodes 表不加 `[threadId+parentId]` 复合索引：siblings 查询走单列 `parentId` 索引后内存过滤，兄弟分支数量级是个位数，复合索引没有可测收益。
+- 附件存 IndexedDB Blob，不用 OPFS：大截图场景的性能差距抵不过 API 兼容成本；若未来成为瓶颈属 V2 议题。

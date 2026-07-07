@@ -80,7 +80,7 @@ sequenceDiagram
 - 每服务器保留最近 50 条请求/响应日志（内存态 + 可导出），排查中转/鉴权问题；
 - initialize 失败的错误归因：网络不可达 / 401 需授权 / 协议版本不符 / CORS（提示检查 host permission）。
 
-## 6. 开放问题
+## 6. 非目标（V2 议题）
 
-- [ ] Elicitation（MCP 服务器主动向用户提问）：协议已支持，V1 映射到 `ask_user` 同款审批卡片，待验证兼容性。
-- [ ] resources subscribe 的推送更新（V2）。
+- Elicitation（MCP 服务器主动向用户提问）：当前不支持——工具结果里的提问文本会正常回给模型，模型可转述后用 `ask_user` 向用户提问，不阻塞主流程。原生映射到审批卡片留待有真实服务器可测时再做。
+- resources subscribe 的推送更新。

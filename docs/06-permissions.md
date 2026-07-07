@@ -128,7 +128,7 @@ type ApprovalDecision =
 
 ## 5. L1→L2 升级确认
 
-`escalation.request` 是一种特殊审批（flag `escalation_l2`）：文案必须说明「将出现"正在调试此浏览器"横幅」。批准后本 Thread 内对该 tab 不再重复询问；turn 结束/空闲 30s 自动 detach（见 01 §5）。
+升级确认是一种特殊审批（`approval.request` 带 flag `escalation_l2`）：文案必须说明「将出现"正在调试此浏览器"横幅」。批准后本 Thread 内对该 tab 不再重复询问；turn 结束/空闲 30s 自动 detach（见 01 §5）。
 
 ## 6. Prompt Injection 防线小结
 
@@ -150,7 +150,7 @@ type ApprovalDecision =
 - 每条 `approval_persist` 规则可回溯（哪次审批产生的，链接到会话）；
 - 「重置为默认」「导出规则」入口。
 
-## 8. 开放问题
+## 8. 已定事项
 
-- [ ] `acceptForSession` 是否应有跨 UI 提示（侧边栏批的，全屏页要能看到当前生效的临时许可清单）——V1 在任务面板显示。
-- [ ] 敏感 payload 检测的误报率（卡号 Luhn 校验、凭据模式）需要真实数据调参，V1 从严（宁多问）。
+- `acceptForSession` 授权是引擎内存态、Thread 级——所有订阅该 Thread 的 UI 看到同样的裁决结果，天然跨 UI 一致；不单独做「当前生效临时许可清单」视图，审批卡片与任务面板的痕迹已足够回溯。
+- 敏感 payload 检测（卡号 Luhn 校验、凭据模式）从严设置：宁可多问一次，不做静默放行。误报率调参需要真实使用数据，规则阈值留在 `rules.ts` 单点可调。

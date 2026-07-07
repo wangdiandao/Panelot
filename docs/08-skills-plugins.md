@@ -101,7 +101,7 @@ my-plugin/
 
 独立于 Skill 的轻量机制（类似 per-domain CLAUDE.md）：设置页维护 `{ pattern: string, prompt: string }[]`，匹配当前操作目标 tab 时拼入 system prompt 站点层（10 §6）。Plugin 的 site-prompts 归并于此。
 
-## 7. 开放问题
+## 7. 已定事项与 V2 议题
 
-- [ ] Claude Code frontmatter 的 `allowed-tools` 是否映射到 Panelot 权限（V1 忽略；V2 可映射为 Thread 级工具白名单）。
-- [ ] Skill 版本与更新检查（imported 记录 sourceRef，V1.5 做手动"检查更新"）。
+- Claude Code frontmatter 的 `allowed-tools` 不映射到 Panelot 权限：解析时 passthrough 保留、不生效也不报错。权限只认 Gatekeeper 一个闸口——Skill 自带的工具声明是能力提示而非安全边界，让它影响裁决反而制造第二套权限来源。
+- Skill 版本与更新检查：imported 记录已存 `sourceRef`，手动「检查更新」属 V2 议题。
