@@ -134,11 +134,11 @@ export function buildRows(items: SnapshotItem[], liveItems: LiveItem[]): Row[] {
   // made the streamed text vanish for the rest of a multi-step turn.
   for (const live of liveItems) {
     if (live.kind === 'user_message') {
-      if (live.text) {
+      if (live.text || live.attachedContext?.length) {
         rows.push({
           kind: 'user',
           key: live.itemId,
-          payload: { content: [{ type: 'text', text: live.text }] },
+          payload: { content: [{ type: 'text', text: live.text }], attachedContext: live.attachedContext },
         });
       }
     } else if (live.kind === 'assistant_message') {

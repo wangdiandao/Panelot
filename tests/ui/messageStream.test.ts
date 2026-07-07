@@ -24,6 +24,18 @@ describe('buildRows live overlay', () => {
     expect(rows[0]!.kind).toBe('user');
   });
 
+  it('carries attached context chips onto the echoed user row', () => {
+    const attachedContext = [
+      { kind: 'page' as const, label: '淘宝-XX耳机', content: [{ type: 'text' as const, text: '…' }] },
+    ];
+    const rows = buildRows([], [live({ kind: 'user_message', text: 'compare these', status: 'ok', attachedContext })]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      kind: 'user',
+      payload: { attachedContext: [{ label: '淘宝-XX耳机' }] },
+    });
+  });
+
   it('keeps a completed live assistant item visible (no flicker mid-turn)', () => {
     const rows = buildRows([], [live({ text: 'partial answer', status: 'ok' })]);
     expect(rows).toHaveLength(1);

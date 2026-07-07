@@ -11,6 +11,7 @@ import {
   PROTOCOL_VERSION,
   type AgentEvent,
   type ApprovalDecision,
+  type ContextBlock,
   type Op,
   type PendingApproval,
   type SnapshotItem,
@@ -37,6 +38,8 @@ export interface LiveItem {
   details?: unknown;
   /** Client-side optimistic echo (user message shown before persistence). */
   local?: boolean;
+  /** Context chips (@page etc.) on an echoed user message, mirrored from the input. */
+  attachedContext?: ContextBlock[];
 }
 
 export interface ThreadUiState {
@@ -243,6 +246,7 @@ export class EngineSession {
           reasoning: '',
           status: 'ok' as const,
           local: true,
+          attachedContext: input.attachedContext,
         },
       ],
     }));
