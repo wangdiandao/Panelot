@@ -6,12 +6,12 @@
 
 ## 1. 范围与架构
 
-V1 仅支持远端 MCP（Streamable HTTP，兼容旧 SSE 回退），扩展内直连、零安装。transport 做抽象层，未来本地 stdio（Native Host）只需新增一个 transport 实现：
+仅支持远端 MCP（Streamable HTTP，兼容旧 SSE 回退），扩展内直连、零安装。本地 stdio 服务器需要 Native Host，超出「零本地程序」原则，不做；transport 已是抽象层，留有扩展缝：
 
 ```
 McpManager (background)
  ├─ McpClient (per server) —— @modelcontextprotocol/sdk Client
- │    └─ transport: StreamableHttpTransport（V1 唯一实现；接口预留 NativeHostTransport）
+ │    └─ transport: StreamableHttpTransport（唯一实现）
  ├─ AuthManager —— Bearer / OAuth 2.1（token 刷新、过期重授权）
  └─ Registry 桥接 —— tools → AgentTool 注册表；prompts → 斜杠命令；resources → @ 引用
 ```
@@ -69,7 +69,7 @@ sequenceDiagram
 |---|---|---|
 | Tools | `AgentTool`，name = `mcp__{serverId}__{tool}` | schema 直转 zod（经 json-schema-to-zod）；`annotations.readOnlyHint` → effects:'read'，未声明一律 'write'（从严）→ Gatekeeper 默认 ask |
 | Prompts | 斜杠命令 `/{serverName}:{prompt}` | 带参数的 prompt 弹变量表单（09 §5） |
-| Resources | `@` 引用菜单条目 | 选中后 `resources/read` 注入为上下文块；subscribe 更新 V2 |
+| Resources | `@` 引用菜单条目 | 选中后 `resources/read` 注入为上下文块；不支持 subscribe 推送 |
 | notifications/tools/list_changed | 刷新注册表 | 增量更新工具面板 |
 
 工具调用超时 60s；结果按 05 §7 同样的体积规范截断。
@@ -80,7 +80,8 @@ sequenceDiagram
 - 每服务器保留最近 50 条请求/响应日志（内存态 + 可导出），排查中转/鉴权问题；
 - initialize 失败的错误归因：网络不可达 / 401 需授权 / 协议版本不符 / CORS（提示检查 host permission）。
 
-## 6. 非目标（V2 议题）
+## 6. 非目标
 
-- Elicitation（MCP 服务器主动向用户提问）：当前不支持——工具结果里的提问文本会正常回给模型，模型可转述后用 `ask_user` 向用户提问，不阻塞主流程。原生映射到审批卡片留待有真实服务器可测时再做。
+- Elicitation（MCP 服务器主动向用户提问）：不支持——工具结果里的提问文本会正常回给模型，模型可转述后用 `ask_user` 向用户提问，不阻塞主流程。
 - resources subscribe 的推送更新。
+- 本地 stdio 服务器（需 Native Host，违反零本地程序原则）。

@@ -81,11 +81,11 @@
 | L1 合成事件可能被反自动化框架忽略（非 trusted） | 自动升级 L2 trusted 事件（05 §2 触发器） |
 | 跨域 iframe / closed shadow root L1 不可达 | L2 `pierce` 兜底 |
 | 无网络层拦截/mock（Playwright 强项） | 非目标场景，不追 |
-| 无多浏览器（Firefox/WebKit） | V1 Chrome/Edge，明确非目标 |
+| 无多浏览器（Firefox/WebKit） | Chrome/Edge only，明确非目标 |
 
 ### 2.4 反目标
 
-不做无头批量自动化与爬虫场景（Playwright 的主场）；不做录制回放（「录制 → 生成 Skill」是 V2 独立议题）；不为提高成功率而默认全程 attach debugger（nanobrowser 式体验倒退）。
+不做无头批量自动化与爬虫场景（Playwright 的主场）；不做录制回放；不为提高成功率而默认全程 attach debugger（nanobrowser 式体验倒退）。
 
 ---
 
@@ -132,7 +132,7 @@
 | EC-4 | 渐进披露开销 | Skills 索引常驻 prompt 开销 ≤ 30 tokens/skill；load_skill 后行为遵循率以回归集验证 | 埋点 + 回归 |
 | EC-5 | Plugin 安装透明 | 安装清单页 100% 列出将写入的 Skills/MCP/规则/站点指令；plugin 建议的 allow 一律降级 ask（08 §5） | 单测 |
 
-反目标：V1 不做社区市场与评分体系（精选列表静态托管）；不支持含可执行代码的插件（MV3 CSP 红线）。
+反目标：不做社区市场与评分体系（精选列表静态托管）；不支持含可执行代码的插件（MV3 CSP 红线）。
 
 ---
 

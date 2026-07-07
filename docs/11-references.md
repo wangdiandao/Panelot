@@ -18,7 +18,7 @@
 | Task model（副任务路由廉价模型） | 标题/建议不该烧主模型的钱 | 03 §1.5 |
 | 流式未闭合代码块暂缓高亮渲染 | 防闪烁与渲染报错 | [09 §4.1](./09-ui.md) |
 | 触发符统一框架（@ / 斜杠 / 变量表单）、动态变量 | 浏览器场景天然映射（{{PAGE_URL}} 等） | 09 §5、[08 §4](./08-skills-plugins.md) |
-| 文件夹 = 上下文容器（绑 prompt/preset 继承） | 比纯收纳高一档 | 02 §2.1（V1.5） |
+| 文件夹归组会话 | 长列表可管理 | 02 §2.1 |
 | 参数「未设不发」+ UI 控制字段发送前剥离 | 多 Provider 兼容的关键工程细节 | 03 §1.4 |
 
 未采纳：多用户/admin 三层参数体系（Panelot 单用户，两层够）；其随机负载均衡（改为粘性 key + failover）。
@@ -75,7 +75,7 @@
 | batch_actions ≤4 + 「变化即中断」 | 减少 LLM 往返且防过期引用误操作 | 05 §3 |
 | ⚠ 每步喂全量 DOM 的 token 成本（其 roadmap 头号痛点） | 促成增量快照 + 体积上限设计 | 05 §1.3 |
 | debugger 按需 attach/detach 最小化横幅（对比其全程 attach） | Panelot 混合分级的核心体验优势 | 05 §2、[01 §5](./01-architecture.md) |
-| 多 Agent（Planner/Navigator/Validator）暂不采纳 | token 放大明显；单 loop + 好快照先行，子代理留 V2 | 04 §8 |
+| 多 Agent（Planner/Navigator/Validator）不采纳 | token 放大明显；单 loop + 好快照 | 04 §8 |
 
 ## 2. 踩坑警示清单（实现期对照）
 

@@ -162,7 +162,7 @@ interface EngineTransport {
 
 引擎与 UI 组件对 transport 无感——这使 Agent loop 可在 Vitest 里用 mock provider + DirectTransport 完整回归，不开浏览器。
 
-## 8. 已定事项与 V2 议题
+## 8. 已定事项
 
 - steer 注入点固定在「LLM 调用间隙」，不做工具执行间隙注入：工具执行通常在秒级完成，中途注入的收益小，而中断/恢复工具执行的复杂度高。等不及的场景用 `interrupt`。
-- 子代理（spawn_subagent）：Thread 的 `parentThreadId` 字段已预留（fork 复用同一机制），事件如何聚合到父 UI 属 V2 设计议题。
+- 不做子代理（spawn_subagent）：单 loop + 好快照的收益先于多 Agent 编排；Thread 的 `parentThreadId` 字段由 fork 使用。

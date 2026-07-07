@@ -49,7 +49,7 @@ interface ThreadMeta {
   title: string;              // task model 自动生成，可手改
   createdAt: number; updatedAt: number;
   leafId: string | null;      // 当前活跃分支的叶子节点 —— 树的游标
-  folderId?: string;          // 文件夹（V1.5：文件夹可绑默认 preset/system prompt）
+  folderId?: string;          // 文件夹归组
   tags: string[];
   pinned: boolean; archived: boolean;
   preset?: string;            // 默认 ModelPreset id
@@ -149,4 +149,4 @@ function buildSessionContext(leafId: string): UnifiedMessage[] {
 ## 7. 已定事项
 
 - nodes 表不加 `[threadId+parentId]` 复合索引：siblings 查询走单列 `parentId` 索引后内存过滤，兄弟分支数量级是个位数，复合索引没有可测收益。
-- 附件存 IndexedDB Blob，不用 OPFS：大截图场景的性能差距抵不过 API 兼容成本；若未来成为瓶颈属 V2 议题。
+- 附件存 IndexedDB Blob，不用 OPFS：大截图场景的性能差距抵不过 API 兼容成本。

@@ -119,7 +119,7 @@ WXT (MV3) + React 19 + TypeScript · shadcn/ui + Tailwind v4 · Zustand · Dexie
 
 ## 12. 数据与同步
 
-会话/节点/附件在 IndexedDB（[02](./docs/02-data-model.md)）；配置/规则在 chrome.storage。全量 JSON 导出导入（默认剔除 Key）、单会话导出 Markdown。V1 无云同步（无后端原则）；V2 可选用户自有 WebDAV/Gist。附件配额 LRU 清理。
+会话/节点/附件在 IndexedDB（[02](./docs/02-data-model.md)）；配置/规则在 chrome.storage。全量 JSON 导出导入（默认剔除 Key）、单会话导出 Markdown。无云同步（零后端原则）。附件配额 LRU 清理。
 
 ## 13. 风险登记
 
@@ -130,6 +130,4 @@ WXT (MV3) + React 19 + TypeScript · shadcn/ui + Tailwind v4 · Zustand · Dexie
 | 「OpenAI 兼容」端点差异 | QuirkFlags 表 + Verify 探测（03 §5-6） |
 | 快照撑爆上下文 | 增量快照 + 体积上限（05 §1.3） |
 | Prompt injection 实战对抗 | 五层防线，硬闸兜底；发布前红队回归集（06 §6、10 §8） |
-| 人机争抢 tab | 手动操作即暂停；V2 后台窗口模式 |
-
-V2 议题：后台小窗执行模式；云同步方案；子代理并行 UI；「录制操作 → 生成 Skill」反向能力（差异化强，V2 候选中优先级最高）。
+| 人机争抢 tab | 手动操作即暂停 |
