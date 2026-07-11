@@ -352,7 +352,7 @@ describe('gatekeeper integration', () => {
     );
   });
 
-  it('ask → approval accepted → tool executes; decision persisted', async () => {
+  it('executes an approved tool after the approval callback persists its decision', async () => {
     const executed = vi.fn();
     let decisionWasPersistedBeforeExecution = false;
     tools.register(
