@@ -154,10 +154,10 @@ export function runTurn(
   >();
   const pendingSteerNodes = new Map<string, AppendNodeInput>();
 
-  function takeSteerOverlay(): { nodeId: string; sequence: number }[] {
+  function snapshotSteerOverlay(): { nodeId: string; sequence: number }[] {
     return [
       ...new Map(
-        steerOverlay.splice(0).map((steer) => [steer.nodeId, steer] as const),
+        steerOverlay.map((steer) => [steer.nodeId, steer] as const),
       ).values(),
     ].sort(
       (left, right) =>
@@ -165,23 +165,26 @@ export function runTurn(
     );
   }
 
+  function commitSteerMaterialization(nodeIds: readonly string[]): void {
+    const committed = new Set(nodeIds);
+    const remaining = steerOverlay.filter((steer) => !committed.has(steer.nodeId));
+    steerOverlay.splice(0, steerOverlay.length, ...remaining);
+    for (const nodeId of committed) pendingSteerNodes.delete(nodeId);
+  }
+
   async function takeSteerCutoff(): Promise<string[]> {
-    const cutoff = new Map(takeSteerOverlay().map((steer) => [steer.nodeId, steer.sequence]));
+    const cutoff = new Map(
+      snapshotSteerOverlay().map((steer) => [steer.nodeId, steer.sequence]),
+    );
     const admissions = [...pendingAdmissions.entries()];
     const results = await Promise.allSettled(
       admissions.map(([, admission]) => admission.persistence),
     );
-    const admittedAtCutoff = new Set<string>();
     for (let index = 0; index < admissions.length; index++) {
       if (results[index]?.status === 'fulfilled') {
         const [nodeId, admission] = admissions[index]!;
         cutoff.set(nodeId, admission.sequence);
-        admittedAtCutoff.add(nodeId);
       }
-    }
-    if (admittedAtCutoff.size > 0) {
-      const afterCutoff = steerOverlay.filter((steer) => !admittedAtCutoff.has(steer.nodeId));
-      steerOverlay.splice(0, steerOverlay.length, ...afterCutoff);
     }
     return [...cutoff.entries()]
       .sort((left, right) => left[1] - right[1] || left[0].localeCompare(right[0]))
@@ -227,6 +230,7 @@ export function runTurn(
       void persist
         .finally(() => pendingAdmissions.delete(nodeId))
         .catch(() => undefined);
+      void persist.catch(() => pendingSteerNodes.delete(nodeId));
       return persist;
     },
     interrupt: () => {
@@ -238,6 +242,7 @@ export function runTurn(
 
   async function execute(): Promise<StopReason> {
     let stopReason: StopReason = 'done';
+    let steerMaterializationFailed = false;
     try {
       if (!options.resumeExisting) {
         const userNodeId = crypto.randomUUID();
@@ -305,13 +310,23 @@ export function runTurn(
 
         const steerCutoff = await takeSteerCutoff();
         if (steerCutoff.length > 0) {
-          if (env.materializeSteers) await env.materializeSteers(steerCutoff);
-          else {
-            for (const nodeId of steerCutoff) {
-              const node = pendingSteerNodes.get(nodeId);
-              if (node) await env.tree.appendNode(threadId, node);
+          try {
+            if (env.materializeSteers) await env.materializeSteers(steerCutoff);
+            else {
+              for (const nodeId of steerCutoff) {
+                const node = pendingSteerNodes.get(nodeId);
+                if (node) await env.tree.appendNode(threadId, node);
+              }
             }
+            commitSteerMaterialization(steerCutoff);
+          } catch (error) {
+            steerMaterializationFailed = true;
+            throw error;
           }
+        }
+        if (abort.signal.aborted) {
+          stopReason = 'interrupted';
+          break;
         }
         const thread = await env.tree.getThread(threadId);
         const ctx = await buildSessionContext(env.tree, threadId, thread!.leafId!);
@@ -327,6 +342,10 @@ export function runTurn(
         if (stuckReminderPending) {
           messages.push({ role: 'user', content: [{ type: 'text', text: STUCK_REMINDER }] });
           stuckReminderPending = false;
+        }
+        if (abort.signal.aborted) {
+          stopReason = 'interrupted';
+          break;
         }
 
         // ---- one LLM call ----------------------------------------------------
@@ -647,13 +666,14 @@ export function runTurn(
         type: 'error',
         code: e instanceof ProviderError ? 'provider_error' : 'internal',
         message: e instanceof Error ? e.message : String(e),
-        retryable: e instanceof ProviderError,
+        retryable: e instanceof ProviderError || steerMaterializationFailed,
         ...(e instanceof ProviderError ? { errorKind: e.kind } : {}),
       });
     }
     // turn.complete fires only after all writes above have resolved — every
     // appendNode is awaited, so reaching this line IS the ack (docs/04 §2).
-    const terminalState: RunState =
+    if (steerMaterializationFailed) stopReason = 'interrupted';
+    let terminalState: RunState =
       stopReason === 'done'
         ? 'completed'
         : stopReason === 'interrupted'
@@ -665,14 +685,27 @@ export function runTurn(
     await Promise.allSettled(
       [...pendingAdmissions.values()].map((admission) => admission.persistence),
     );
-    const undeliveredSteers = takeSteerOverlay().map((steer) => steer.nodeId);
-    if (undeliveredSteers.length > 0) {
-      if (env.materializeSteers) await env.materializeSteers(undeliveredSteers);
-      else {
-        for (const nodeId of undeliveredSteers) {
-          const node = pendingSteerNodes.get(nodeId);
-          if (node) await env.tree.appendNode(threadId, node);
+    const undeliveredSteers = snapshotSteerOverlay().map((steer) => steer.nodeId);
+    if (undeliveredSteers.length > 0 && !steerMaterializationFailed) {
+      try {
+        if (env.materializeSteers) await env.materializeSteers(undeliveredSteers);
+        else {
+          for (const nodeId of undeliveredSteers) {
+            const node = pendingSteerNodes.get(nodeId);
+            if (node) await env.tree.appendNode(threadId, node);
+          }
         }
+        commitSteerMaterialization(undeliveredSteers);
+      } catch (error) {
+        steerMaterializationFailed = true;
+        stopReason = 'interrupted';
+        terminalState = 'interrupted';
+        env.emit({
+          type: 'error',
+          code: 'internal',
+          message: error instanceof Error ? error.message : String(error),
+          retryable: true,
+        });
       }
     }
     await env.setRunState?.(terminalState, { stopReason });

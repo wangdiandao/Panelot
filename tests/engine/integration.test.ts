@@ -1099,6 +1099,111 @@ describe('engine integration (Op → events → DB)', () => {
     },
   );
 
+  it('keeps a durable steer recoverable when cutoff materialization fails', async () => {
+    const { core, host } = buildEngine();
+    const blocker = registerBlockingTool('materialization_failure_gate');
+    const runs = (core as unknown as { runs: RunRepository }).runs;
+    const materializeSteers = runs.materializeSteers.bind(runs);
+    let materializationAttempts = 0;
+    runs.materializeSteers = async (...args) => {
+      materializationAttempts++;
+      if (materializationAttempts === 1) throw new Error('transient materialization failure');
+      return materializeSteers(...args);
+    };
+    provider.queue(
+      { toolCalls: [{ id: 'c1', name: 'materialization_failure_gate', params: {} }] },
+      { streamText: ['resumed after materialization failure'] },
+    );
+    const client = connect(host);
+    const threadId = await initThread(client);
+    client.post({ type: 'turn.submit', threadId, input: { text: 'start' } });
+    const turnStart = await client.waitFor('turn.start');
+    await blocker.entered;
+    const steerSubmissionId = client.post({
+      type: 'turn.steer',
+      threadId,
+      expectedTurnId: turnStart.turnId,
+      input: { text: 'recover this steer' },
+    });
+    await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
+        event.type === 'command.ack' && event.submissionId === steerSubmissionId,
+    );
+    blocker.release();
+    const firstComplete = await client.waitFor('turn.complete');
+    const interruptedRun = await db.runs.where('threadId').equals(threadId).first();
+
+    expect(firstComplete.stopReason).toBe('interrupted');
+    expect(interruptedRun).toMatchObject({
+      state: 'interrupted',
+      pendingSteers: [expect.objectContaining({ payload: expect.objectContaining({ steered: true }) })],
+    });
+    expect(provider.requests).toHaveLength(1);
+
+    client.post({ type: 'run.resume', threadId, runId: interruptedRun!.id });
+    await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'turn.complete' }> =>
+        event.type === 'turn.complete' && event !== firstComplete,
+    );
+
+    expect(provider.requests).toHaveLength(2);
+    expect(JSON.stringify(provider.requests[1]!.messages).match(/recover this steer/g)).toHaveLength(
+      1,
+    );
+    expect(await runs.get(interruptedRun!.id)).toMatchObject({
+      state: 'completed',
+      pendingSteers: [],
+    });
+  });
+
+  it('does not call the provider after interrupt during steer materialization', async () => {
+    const { core, host } = buildEngine();
+    const blocker = registerBlockingTool('materialization_interrupt_gate');
+    const runs = (core as unknown as { runs: RunRepository }).runs;
+    const materializeSteers = runs.materializeSteers.bind(runs);
+    let materializationStarted: () => void;
+    let releaseMaterialization: () => void;
+    const materializationEntered = new Promise<void>((resolve) => (materializationStarted = resolve));
+    const materializationGate = new Promise<void>((resolve) => (releaseMaterialization = resolve));
+    runs.materializeSteers = async (...args) => {
+      materializationStarted!();
+      await materializationGate;
+      return materializeSteers(...args);
+    };
+    provider.queue(
+      { toolCalls: [{ id: 'c1', name: 'materialization_interrupt_gate', params: {} }] },
+      { streamText: ['must not run'] },
+    );
+    const client = connect(host);
+    const threadId = await initThread(client);
+    client.post({ type: 'turn.submit', threadId, input: { text: 'start' } });
+    const turnStart = await client.waitFor('turn.start');
+    await blocker.entered;
+    const steerSubmissionId = client.post({
+      type: 'turn.steer',
+      threadId,
+      expectedTurnId: turnStart.turnId,
+      input: { text: 'materialize before interrupt' },
+    });
+    await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
+        event.type === 'command.ack' && event.submissionId === steerSubmissionId,
+    );
+    blocker.release();
+    await materializationEntered;
+
+    const interruptSubmissionId = client.post({ type: 'turn.interrupt', threadId });
+    await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
+        event.type === 'command.ack' && event.submissionId === interruptSubmissionId,
+    );
+    releaseMaterialization!();
+    const complete = await client.waitFor('turn.complete');
+
+    expect(complete.stopReason).toBe('interrupted');
+    expect(provider.requests).toHaveLength(1);
+  });
+
   it('turn.steer rejects after loop termination while terminal persistence is pending', async () => {
     const { core, host } = buildEngine();
     let releaseTerminalState: () => void;
