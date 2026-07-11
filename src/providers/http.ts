@@ -35,7 +35,10 @@ function readUpstreamDetails(bodyText: string): ProviderErrorDetails {
     raw,
     upstreamMessage:
       typeof message === 'string' ? sanitizeUpstreamText(message) || undefined : undefined,
-    upstreamCode: typeof code === 'string' || typeof code === 'number' ? String(code) : undefined,
+    upstreamCode:
+      typeof code === 'string' || typeof code === 'number'
+        ? sanitizeUpstreamText(String(code)) || undefined
+        : undefined,
   };
 }
 
@@ -44,6 +47,7 @@ function classifyReason(status: number, searchableText: string): ProviderErrorRe
   if (status === 403) return 'permission_denied';
   if (isQuotaError(status, searchableText)) return 'quota_exceeded';
   if (status === 404) return 'endpoint_not_found';
+  if (status === 503 || status === 529) return 'upstream_error';
   if (
     /\bmodel[_\s-]*(?:not[_\s-]*(?:found|exist)|unknown)\b|\b(?:unknown|missing)[_\s-]+model\b|\bmodel\b.{0,24}\b(?:does not exist|not found)\b/i.test(
       searchableText,
@@ -116,7 +120,8 @@ export function normalizeHttpError(
   const details = readUpstreamDetails(bodyText);
   const searchableText = [details.upstreamCode, details.upstreamMessage, details.raw]
     .filter(Boolean)
-    .join(' ');
+    .join(' ')
+    .replace(/[_-]+/g, ' ');
 
   if (!isQuotaError(status, searchableText) && isContextLengthError(status, searchableText)) {
     return new ProviderError('context_too_long', 'context window exceeded', undefined, {

@@ -79,6 +79,48 @@ describe('normalizeHttpError (docs/03 §7)', () => {
       upstreamCode: 'invalid_request',
       upstreamMessage: 'badmessage',
     });
+
+    const longCode = normalizeHttpError(
+      400,
+      JSON.stringify({ error: { code: `bad\u0000${'x'.repeat(2500)}` } }),
+    ).details.upstreamCode;
+    expect(longCode).not.toContain('\u0000');
+    expect(longCode).toHaveLength(2000);
+  });
+
+  it.each([
+    ['insufficient_quota', 'quota_exceeded'],
+    ['insufficient_balance', 'quota_exceeded'],
+  ] as const)('normalizes delimited quota code %s', (code, reason) => {
+    expect(normalizeHttpError(400, JSON.stringify({ error: { code } })).details.reason).toBe(
+      reason,
+    );
+  });
+
+  it('normalizes delimited context-length codes', () => {
+    expect(
+      normalizeHttpError(400, JSON.stringify({ error: { code: 'context_length_exceeded' } })),
+    ).toMatchObject({
+      kind: 'context_too_long',
+      details: { status: 400 },
+    });
+  });
+
+  it.each([503, 529] as const)(
+    'keeps HTTP %i overloaded even when the body mentions a missing model',
+    (status) => {
+      expect(normalizeHttpError(status, '{"error":{"code":"model_not_found"}}')).toMatchObject({
+        kind: 'overloaded',
+        details: { status, reason: 'upstream_error' },
+      });
+    },
+  );
+
+  it('keeps quota attribution ahead of overload attribution', () => {
+    expect(normalizeHttpError(503, '{"error":{"code":"insufficient_quota"}}')).toMatchObject({
+      kind: 'overloaded',
+      details: { reason: 'quota_exceeded' },
+    });
   });
 
   it('does not promote unrelated JSON fields into structured details', () => {
