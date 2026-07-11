@@ -216,6 +216,7 @@ export class RunRepository {
     id: string,
     node: AppendNodeInput,
     attachmentLink?: AttachmentLink,
+    admissionSequence?: number,
   ): Promise<RunRecord> {
     return this.db.transaction(
       'rw',
@@ -246,6 +247,12 @@ export class RunRepository {
                 ? [...attachmentLink.attachmentIds]
                 : undefined,
               acceptedAt: this.now(),
+              admissionSequence:
+                admissionSequence ??
+                (current.pendingSteers ?? []).reduce(
+                  (maximum, steer) => Math.max(maximum, steer.admissionSequence ?? -1),
+                  -1,
+                ) + 1,
             },
           ],
           revision: current.revision + 1,

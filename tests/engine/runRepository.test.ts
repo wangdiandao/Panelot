@@ -410,6 +410,57 @@ describe('RunRepository', () => {
     });
   });
 
+  it('persists admission sequence across restart despite inverse transaction completion', async () => {
+    const threadId = await createThread();
+    const run = await runs.enqueue({
+      threadId,
+      clientId: 'client-a',
+      submissionId: 'submission-restart-order',
+      input: { text: 'start' },
+    });
+    await runs.transition(run.id, 'preparing');
+    await runs.transition(run.id, 'streaming_model');
+    await runs.acceptSteer(
+      run.id,
+      {
+        id: 'restart-order-b',
+        type: 'user_message',
+        payload: { content: [{ type: 'text', text: 'restart order B' }], steered: true },
+      },
+      undefined,
+      1,
+    );
+    await runs.acceptSteer(
+      run.id,
+      {
+        id: 'restart-order-a',
+        type: 'user_message',
+        payload: { content: [{ type: 'text', text: 'restart order A' }], steered: true },
+      },
+      undefined,
+      0,
+    );
+
+    const restarted = new RunRepository(db, { now: () => now });
+    const pending = (await restarted.get(run.id))!.pendingSteers!;
+    const orderedIds = [...pending]
+      .sort(
+        (left, right) =>
+          (left.admissionSequence ?? 0) - (right.admissionSequence ?? 0) ||
+          left.nodeId.localeCompare(right.nodeId),
+      )
+      .map((steer) => steer.nodeId);
+    await restarted.materializeSteers(run.id, orderedIds);
+
+    const path = await new ThreadTree(db).getPath(
+      threadId,
+      (await db.threads.get(threadId))!.leafId!,
+    );
+    expect(
+      path.map((node) => node.id).filter((nodeId) => nodeId.startsWith('restart-order-')),
+    ).toEqual(['restart-order-a', 'restart-order-b']);
+  });
+
   it('edits and removes only queued runs', async () => {
     const threadId = await createThread();
     const run = await runs.enqueue({

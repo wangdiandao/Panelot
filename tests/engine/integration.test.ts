@@ -1022,6 +1022,83 @@ describe('engine integration (Op → events → DB)', () => {
     expect(orderedTexts).toEqual(['ordered A', 'ordered B']);
   });
 
+  it.each(['error', 'abort', 'interrupt'] as const)(
+    'terminal drain preserves admission order after inverse persistence on %s',
+    async (mode) => {
+      const { core, host } = buildEngine();
+      const runs = (core as unknown as { runs: RunRepository }).runs;
+      const acceptSteer = runs.acceptSteer.bind(runs);
+      let admissionAStarted: () => void;
+      let releaseAdmissionA: () => void;
+      let streamStarted: () => void;
+      let releaseStream: () => void;
+      const admissionAEntered = new Promise<void>((resolve) => (admissionAStarted = resolve));
+      const admissionAGate = new Promise<void>((resolve) => (releaseAdmissionA = resolve));
+      const streamEntered = new Promise<void>((resolve) => (streamStarted = resolve));
+      const streamGate = new Promise<void>((resolve) => (releaseStream = resolve));
+      runs.acceptSteer = async (...args) => {
+        if (JSON.stringify(args[1].payload).includes('terminal A')) {
+          admissionAStarted!();
+          await admissionAGate;
+        }
+        return acceptSteer(...args);
+      };
+
+      provider.queue({
+        onStreamStart: () => streamStarted!(),
+        ...(mode === 'interrupt' ? {} : { release: streamGate }),
+        ...(mode === 'error'
+          ? { streamError: new ProviderError('network', 'terminal drain error') }
+          : mode === 'abort'
+            ? { streamError: new DOMException('provider aborted', 'AbortError') }
+            : { waitForAbort: true }),
+      });
+      const client = connect(host);
+      const threadId = await initThread(client);
+      client.post({ type: 'turn.submit', threadId, input: { text: 'start' } });
+      const turnStart = await client.waitFor('turn.start');
+      await streamEntered;
+
+      const submissionA = client.post({
+        type: 'turn.steer',
+        threadId,
+        expectedTurnId: turnStart.turnId,
+        input: { text: 'terminal A' },
+      });
+      await admissionAEntered;
+      const active = (
+        core as unknown as {
+          activeTurns: Map<string, { handle: { steer(input: { text: string }): Promise<void> } }>;
+        }
+      ).activeTurns.get(threadId)!;
+      await active.handle.steer({ text: 'terminal B' });
+      releaseAdmissionA!();
+      await client.waitForMatching(
+        (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
+          event.type === 'command.ack' && event.submissionId === submissionA,
+      );
+
+      if (mode === 'interrupt') client.post({ type: 'turn.interrupt', threadId });
+      else releaseStream!();
+      await client.waitFor('turn.complete');
+
+      const path = await new ThreadTree(db).getPath(
+        threadId,
+        (await db.threads.get(threadId))!.leafId!,
+      );
+      const terminalTexts = path
+        .filter(
+          (node) =>
+            node.type === 'user_message' &&
+            (node.payload as { steered?: boolean }).steered === true,
+        )
+        .map((node) => JSON.stringify(node.payload));
+      expect(terminalTexts).toHaveLength(2);
+      expect(terminalTexts[0]).toContain('terminal A');
+      expect(terminalTexts[1]).toContain('terminal B');
+    },
+  );
+
   it('turn.steer rejects after loop termination while terminal persistence is pending', async () => {
     const { core, host } = buildEngine();
     let releaseTerminalState: () => void;

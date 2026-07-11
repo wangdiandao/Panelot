@@ -258,6 +258,7 @@ export interface PendingSteer {
   payload: UserMessagePayload;
   attachmentIds?: string[];
   acceptedAt: number;
+  admissionSequence?: number;
 }
 
 export type CommandReceiptResponse =

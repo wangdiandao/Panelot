@@ -107,9 +107,10 @@ export interface TurnEnv {
   persistSteer?: (
     node: AppendNodeInput,
     attachmentLink?: { attachmentIds: readonly string[]; nodeId: string },
+    admissionSequence?: number,
   ) => Promise<void>;
   materializeSteers?: (nodeIds: readonly string[]) => Promise<void>;
-  initialPendingSteerIds?: readonly string[];
+  initialPendingSteers?: readonly { nodeId: string; admissionSequence: number }[];
   /** Optional hard token budget for the turn (docs/04 §1). */
   tokenBudget?: number;
 }
@@ -138,10 +139,15 @@ export function runTurn(
   const turnId = env.turnId ?? crypto.randomUUID();
   let acceptingSteer = turnKind === 'user';
   const abort = new AbortController();
-  let nextSteerSequence = 0;
-  const steerOverlay: { nodeId: string; sequence: number }[] = (
-    env.initialPendingSteerIds ?? []
-  ).map((nodeId) => ({ nodeId, sequence: nextSteerSequence++ }));
+  const initialPendingSteers = env.initialPendingSteers ?? [];
+  let nextSteerSequence =
+    initialPendingSteers.reduce(
+      (maximum, steer) => Math.max(maximum, steer.admissionSequence),
+      -1,
+    ) + 1;
+  const steerOverlay: { nodeId: string; sequence: number }[] = initialPendingSteers.map(
+    (steer) => ({ nodeId: steer.nodeId, sequence: steer.admissionSequence }),
+  );
   const pendingAdmissions = new Map<
     string,
     { sequence: number; persistence: Promise<void> }
@@ -153,7 +159,10 @@ export function runTurn(
       ...new Map(
         steerOverlay.splice(0).map((steer) => [steer.nodeId, steer] as const),
       ).values(),
-    ];
+    ].sort(
+      (left, right) =>
+        left.sequence - right.sequence || left.nodeId.localeCompare(right.nodeId),
+    );
   }
 
   async function takeSteerCutoff(): Promise<string[]> {
@@ -175,7 +184,7 @@ export function runTurn(
       steerOverlay.splice(0, steerOverlay.length, ...afterCutoff);
     }
     return [...cutoff.entries()]
-      .sort((left, right) => left[1] - right[1])
+      .sort((left, right) => left[1] - right[1] || left[0].localeCompare(right[0]))
       .map(([nodeId]) => nodeId);
   }
 
@@ -209,6 +218,7 @@ export function runTurn(
             steerInput.attachmentIds?.length
               ? { attachmentIds: steerInput.attachmentIds, nodeId }
               : undefined,
+            sequence,
           )
         : Promise.resolve()).then(() => {
         steerOverlay.push({ nodeId, sequence });

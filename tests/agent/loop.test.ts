@@ -517,7 +517,7 @@ describe('steering & interrupt (docs/04 §3)', () => {
 
     await runTurn(
       makeEnv({
-        initialPendingSteerIds: ['durable-steer'],
+        initialPendingSteers: [{ nodeId: 'durable-steer', admissionSequence: 0 }],
         materializeSteers: async (nodeIds) => {
           expect(nodeIds).toEqual(['durable-steer']);
           await tree.appendNode(thread.id, {
@@ -543,6 +543,48 @@ describe('steering & interrupt (docs/04 §3)', () => {
       'user_message',
       'assistant_message',
     ]);
+  });
+
+  it('restores durable pending steers by admission sequence after inverse persistence', async () => {
+    const thread = await tree.createThread({});
+    await tree.appendNode(thread.id, {
+      type: 'user_message',
+      payload: { content: [{ type: 'text', text: 'original request' }] },
+    });
+    provider.queue({ streamText: ['resumed'] });
+
+    await runTurn(
+      makeEnv({
+        initialPendingSteers: [
+          { nodeId: 'restart-b', admissionSequence: 1 },
+          { nodeId: 'restart-a', admissionSequence: 0 },
+        ],
+        materializeSteers: async (nodeIds) => {
+          for (const nodeId of nodeIds) {
+            await tree.appendNode(thread.id, {
+              id: nodeId,
+              type: 'user_message',
+              payload: {
+                content: [{ type: 'text', text: nodeId === 'restart-a' ? 'restart A' : 'restart B' }],
+                steered: true,
+              },
+            });
+          }
+        },
+      }),
+      thread.id,
+      { text: 'unused resumed input' },
+      'user',
+      { resumeExisting: true },
+    ).done;
+
+    const restoredTexts = provider.requests[0]!.messages
+      .filter((message) => message.role === 'user')
+      .flatMap((message) =>
+        message.content.map((block) => (block.type === 'text' ? block.text : '')),
+      )
+      .filter((text) => text.startsWith('restart '));
+    expect(restoredTexts).toEqual(['restart A', 'restart B']);
   });
 
   it('interrupt aborts promptly with stopReason interrupted', async () => {

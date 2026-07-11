@@ -820,13 +820,16 @@ export class RealEngineCore {
       activateSkill: async (skillId) => {
         await this.runs.activateSkill(run.id, skillId);
       },
-      persistSteer: async (node, attachmentLink) => {
-        await this.runs.acceptSteer(run.id, node, attachmentLink);
+      persistSteer: async (node, attachmentLink, admissionSequence) => {
+        await this.runs.acceptSteer(run.id, node, attachmentLink, admissionSequence);
       },
       materializeSteers: async (nodeIds) => {
         await this.runs.materializeSteers(run.id, nodeIds);
       },
-      initialPendingSteerIds: run.pendingSteers?.map((steer) => steer.nodeId),
+      initialPendingSteers: run.pendingSteers?.map((steer, index) => ({
+        nodeId: steer.nodeId,
+        admissionSequence: steer.admissionSequence ?? index,
+      })),
     };
 
     const handle = runTurn(env, threadId, input, 'user', {

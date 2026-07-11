@@ -72,7 +72,7 @@ async function runTurn(thread: Thread, input: UserInput, overrides?: TurnOverrid
 
 UI 交互映射（见 09）：Agent 运行中输入框可继续打字，`Enter` = steer（不可插话时自动降级为 enqueue 并提示），`Shift+Alt+Enter` = 显式排队，`Esc` = interrupt。
 
-Steer 的 ACK 是持久化边界，不是内存入队边界：`RunRepository` 在同一 Dexie 事务中写入 Run 的 pending steer 记录并链接用户附件的 `nodeIds/runIds`，但不移动 Thread leaf；事务失败则整笔回滚。下一次 provider 请求开始时，loop 同步截取已发起的 admission，等待这些事务完成，再按接收顺序把 cutoff 内的 pending steer 物化到当前 leaf。这样不会把 user message 插进 `tool_call` 与 `tool_result` 之间，也不会把它放到未读取该 steer 的 assistant response 之前。
+Steer 的 ACK 是持久化边界，不是内存入队边界：`RunRepository` 在同一 Dexie 事务中写入带 admission sequence 的 Run pending steer 记录并链接用户附件的 `nodeIds/runIds`，但不移动 Thread leaf；事务失败则整笔回滚。下一次 provider 请求开始时，loop 同步截取已发起的 admission，等待这些事务完成，再按持久化的接收顺序把 cutoff 内的 pending steer 物化到当前 leaf。这样不会因事务完成顺序或 SW 重启改变消息顺序，也不会把 user message 插进 `tool_call` 与 `tool_result` 之间，或放到未读取该 steer 的 assistant response 之前。
 
 每次 provider 请求只截取一次 cutoff 并构建一次 session context；cutoff 之后到达的 steer 属于再下一次请求，不循环重建 context，也不会因持续输入饿死 provider。最终回复返回时，loop 会先关闭新的 admission，再等待已经发起的持久化：成功的 steer 会触发下一次请求，失败的 steer 不会 ACK。若 provider error/abort/interrupt 使 turn 在下一次请求前终止，已 ACK 的 pending steer 会先在安全 leaf 物化后再写终态。SW 重启时 Run 中的 pending 集合会随恢复路径重新进入首个请求，因而不依赖内存 overlay。
 
