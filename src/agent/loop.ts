@@ -125,7 +125,7 @@ export function runTurn(
   options: { resumeExisting?: boolean; initialStepCursor?: number } = {},
 ): TurnHandle {
   const turnId = env.turnId ?? crypto.randomUUID();
-  const steerable = turnKind === 'user';
+  let acceptingSteer = turnKind === 'user';
   const abort = new AbortController();
   const steerQueue: UserInput[] = [];
 
@@ -147,9 +147,11 @@ export function runTurn(
   const handle: TurnHandle = {
     turnId,
     turnKind,
-    steerable,
+    get steerable() {
+      return acceptingSteer;
+    },
     steer: (steerInput) => {
-      if (!steerable) throw new Error('turn is not steerable');
+      if (!acceptingSteer) throw new Error('turn is not steerable');
       steerQueue.push(steerInput);
     },
     interrupt: () => abort.abort(),
@@ -201,7 +203,7 @@ export function runTurn(
       } else {
         await env.setRunState?.('streaming_model');
       }
-      env.emit({ type: 'turn.start', threadId, turnId, turnKind, steerable });
+      env.emit({ type: 'turn.start', threadId, turnId, turnKind, steerable: acceptingSteer });
 
       let toolCallCount = 0;
       let stepReminderPending = false;
@@ -574,6 +576,7 @@ export function runTurn(
           : stopReason === 'budget_pause'
             ? 'paused_budget'
             : 'failed';
+    acceptingSteer = false;
     await env.setRunState?.(terminalState, { stopReason });
     env.emit({ type: 'turn.complete', threadId, turnId, stopReason });
     return stopReason;

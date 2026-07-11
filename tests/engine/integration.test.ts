@@ -527,6 +527,63 @@ describe('engine integration (Op → events → DB)', () => {
     );
   });
 
+  it('turn.steer rejects after loop termination while terminal persistence is pending', async () => {
+    const { core, host } = buildEngine();
+    let releaseTerminalState: () => void;
+    let terminalStateStarted: () => void;
+    const terminalStateGate = new Promise<void>((resolve) => (releaseTerminalState = resolve));
+    const terminalStateEntered = new Promise<void>((resolve) => (terminalStateStarted = resolve));
+    const runs = (core as unknown as { runs: RunRepository }).runs;
+    const transition = runs.transition.bind(runs);
+    runs.transition = async (runId, state, patch) => {
+      if (state === 'completed') {
+        terminalStateStarted!();
+        await terminalStateGate;
+      }
+      return transition(runId, state, patch);
+    };
+
+    const client = connect(host);
+    const threadId = await initThread(client);
+    provider.queue({ streamText: ['done'] });
+    client.post({ type: 'turn.submit', threadId, input: { text: 'start' } });
+    const turnStart = await client.waitFor('turn.start');
+    await terminalStateEntered;
+
+    const steerSubmissionId = client.post({
+      type: 'turn.steer',
+      threadId,
+      expectedTurnId: turnStart.turnId,
+      input: { text: 'too late' },
+    });
+    const response = await client.waitForMatching(
+      (
+        event,
+      ): event is
+        | Extract<AgentEvent, { type: 'command.ack' }>
+        | Extract<AgentEvent, { type: 'error' }> =>
+        'submissionId' in event &&
+        event.submissionId === steerSubmissionId &&
+        (event.type === 'command.ack' || event.type === 'error'),
+    );
+    releaseTerminalState!();
+    await client.waitFor('turn.complete');
+
+    expect(response).toMatchObject({ type: 'error', code: 'turn_not_steerable' });
+    expect(provider.requests).toHaveLength(1);
+    const path = await new ThreadTree(db).getPath(
+      threadId,
+      (await db.threads.get(threadId))!.leafId!,
+    );
+    expect(
+      path.some(
+        (node) =>
+          node.type === 'user_message' &&
+          JSON.stringify((node.payload as { content: unknown }).content).includes('too late'),
+      ),
+    ).toBe(false);
+  });
+
   it('turn.interrupt stops the turn with stopReason interrupted', async () => {
     const { host } = buildEngine();
     tools.register({
