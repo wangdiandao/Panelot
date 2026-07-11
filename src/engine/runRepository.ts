@@ -269,12 +269,14 @@ export class RunRepository {
         }
         const requested = new Set(nodeIds);
         const pending = current.pendingSteers ?? [];
-        const selected = pending.filter((steer) => requested.has(steer.nodeId));
-        if (selected.length !== requested.size) {
+        const pendingById = new Map(pending.map((steer) => [steer.nodeId, steer]));
+        const selected = nodeIds.map((nodeId) => pendingById.get(nodeId));
+        if (selected.some((steer) => !steer) || selected.length !== requested.size) {
           throw new Error(`Run ${id} has missing pending steer nodes`);
         }
         const tree = new ThreadTree(this.db);
         for (const steer of selected) {
+          if (!steer) continue;
           await tree.appendNode(current.threadId, {
             id: steer.nodeId,
             type: 'user_message',

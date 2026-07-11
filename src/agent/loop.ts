@@ -138,31 +138,45 @@ export function runTurn(
   const turnId = env.turnId ?? crypto.randomUUID();
   let acceptingSteer = turnKind === 'user';
   const abort = new AbortController();
-  const steerOverlay: string[] = [...(env.initialPendingSteerIds ?? [])];
-  const pendingAdmissions = new Map<string, Promise<void>>();
+  let nextSteerSequence = 0;
+  const steerOverlay: { nodeId: string; sequence: number }[] = (
+    env.initialPendingSteerIds ?? []
+  ).map((nodeId) => ({ nodeId, sequence: nextSteerSequence++ }));
+  const pendingAdmissions = new Map<
+    string,
+    { sequence: number; persistence: Promise<void> }
+  >();
   const pendingSteerNodes = new Map<string, AppendNodeInput>();
 
-  function takeSteerOverlay(): string[] {
-    return [...new Set(steerOverlay.splice(0))];
+  function takeSteerOverlay(): { nodeId: string; sequence: number }[] {
+    return [
+      ...new Map(
+        steerOverlay.splice(0).map((steer) => [steer.nodeId, steer] as const),
+      ).values(),
+    ];
   }
 
   async function takeSteerCutoff(): Promise<string[]> {
-    const cutoff = new Set(takeSteerOverlay());
+    const cutoff = new Map(takeSteerOverlay().map((steer) => [steer.nodeId, steer.sequence]));
     const admissions = [...pendingAdmissions.entries()];
-    const results = await Promise.allSettled(admissions.map(([, admission]) => admission));
+    const results = await Promise.allSettled(
+      admissions.map(([, admission]) => admission.persistence),
+    );
     const admittedAtCutoff = new Set<string>();
     for (let index = 0; index < admissions.length; index++) {
       if (results[index]?.status === 'fulfilled') {
-        const nodeId = admissions[index]![0];
-        cutoff.add(nodeId);
+        const [nodeId, admission] = admissions[index]!;
+        cutoff.set(nodeId, admission.sequence);
         admittedAtCutoff.add(nodeId);
       }
     }
     if (admittedAtCutoff.size > 0) {
-      const afterCutoff = steerOverlay.filter((nodeId) => !admittedAtCutoff.has(nodeId));
+      const afterCutoff = steerOverlay.filter((steer) => !admittedAtCutoff.has(steer.nodeId));
       steerOverlay.splice(0, steerOverlay.length, ...afterCutoff);
     }
-    return [...cutoff];
+    return [...cutoff.entries()]
+      .sort((left, right) => left[1] - right[1])
+      .map(([nodeId]) => nodeId);
   }
 
   function steerPayload(steerInput: UserInput): UserMessagePayload {
@@ -182,6 +196,7 @@ export function runTurn(
     steer: (steerInput) => {
       if (!acceptingSteer) throw new Error('turn is not steerable');
       const nodeId = crypto.randomUUID();
+      const sequence = nextSteerSequence++;
       const node: AppendNodeInput = {
         id: nodeId,
         type: 'user_message',
@@ -196,9 +211,9 @@ export function runTurn(
               : undefined,
           )
         : Promise.resolve()).then(() => {
-        steerOverlay.push(nodeId);
+        steerOverlay.push({ nodeId, sequence });
       });
-      pendingAdmissions.set(nodeId, persist);
+      pendingAdmissions.set(nodeId, { sequence, persistence: persist });
       void persist
         .finally(() => pendingAdmissions.delete(nodeId))
         .catch(() => undefined);
@@ -369,7 +384,9 @@ export function runTurn(
 
         if (final.toolCalls.length === 0) {
           acceptingSteer = false;
-          await Promise.allSettled([...pendingAdmissions.values()]);
+          await Promise.allSettled(
+            [...pendingAdmissions.values()].map((admission) => admission.persistence),
+          );
           if (steerOverlay.length > 0) {
             acceptingSteer = turnKind === 'user';
             continue;
@@ -635,8 +652,10 @@ export function runTurn(
             ? 'paused_budget'
             : 'failed';
     acceptingSteer = false;
-    await Promise.allSettled([...pendingAdmissions.values()]);
-    const undeliveredSteers = takeSteerOverlay();
+    await Promise.allSettled(
+      [...pendingAdmissions.values()].map((admission) => admission.persistence),
+    );
+    const undeliveredSteers = takeSteerOverlay().map((steer) => steer.nodeId);
     if (undeliveredSteers.length > 0) {
       if (env.materializeSteers) await env.materializeSteers(undeliveredSteers);
       else {

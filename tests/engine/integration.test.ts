@@ -960,6 +960,68 @@ describe('engine integration (Op → events → DB)', () => {
     expect(thirdMessages.match(/cutoff B/g)).toHaveLength(1);
   });
 
+  it('materializes a frozen cutoff in admission order despite out-of-order persistence', async () => {
+    const { core, host } = buildEngine();
+    const blocker = registerBlockingTool('ordered_cutoff_gate');
+    const runs = (core as unknown as { runs: RunRepository }).runs;
+    const acceptSteer = runs.acceptSteer.bind(runs);
+    let admissionAStarted: () => void;
+    let releaseAdmissionA: () => void;
+    const admissionAEntered = new Promise<void>((resolve) => (admissionAStarted = resolve));
+    const admissionAGate = new Promise<void>((resolve) => (releaseAdmissionA = resolve));
+    runs.acceptSteer = async (...args) => {
+      if (JSON.stringify(args[1].payload).includes('ordered A')) {
+        admissionAStarted!();
+        await admissionAGate;
+      }
+      return acceptSteer(...args);
+    };
+
+    provider.queue(
+      { toolCalls: [{ id: 'c1', name: 'ordered_cutoff_gate', params: {} }] },
+      { streamText: ['done'] },
+    );
+    const client = connect(host);
+    const threadId = await initThread(client);
+    client.post({ type: 'turn.submit', threadId, input: { text: 'start' } });
+    const turnStart = await client.waitFor('turn.start');
+    await blocker.entered;
+
+    const submissionA = client.post({
+      type: 'turn.steer',
+      threadId,
+      expectedTurnId: turnStart.turnId,
+      input: { text: 'ordered A' },
+    });
+    await admissionAEntered;
+    const active = (
+      core as unknown as {
+        activeTurns: Map<string, { handle: { steer(input: { text: string }): Promise<void> } }>;
+      }
+    ).activeTurns.get(threadId)!;
+    await active.handle.steer({ text: 'ordered B' });
+    blocker.release();
+    await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'item.complete' }> =>
+        event.type === 'item.complete' && event.itemId === 'c1',
+    );
+    releaseAdmissionA!();
+    await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
+        event.type === 'command.ack' && event.submissionId === submissionA,
+    );
+    await client.waitFor('turn.complete');
+
+    expect(provider.requests).toHaveLength(2);
+    const orderedTexts = provider.requests[1]!.messages
+      .filter((message) => message.role === 'user')
+      .flatMap((message) =>
+        message.content.map((block) => (block.type === 'text' ? block.text : '')),
+      )
+      .filter((text) => text.startsWith('ordered '));
+    expect(orderedTexts).toEqual(['ordered A', 'ordered B']);
+  });
+
   it('turn.steer rejects after loop termination while terminal persistence is pending', async () => {
     const { core, host } = buildEngine();
     let releaseTerminalState: () => void;
