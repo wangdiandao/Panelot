@@ -1,6 +1,11 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it } from 'vitest';
-import { buildSnapshot, computeName, computeRole, isInteractive } from '../../src/tools/snapshot/engine';
+import {
+  buildSnapshot,
+  computeName,
+  computeRole,
+  isInteractive,
+} from '../../src/tools/snapshot/engine';
 
 function setBody(html: string): Window {
   document.body.innerHTML = html;
@@ -114,7 +119,10 @@ describe('ref versioning (docs/05 §1.1 — expiry at the protocol level)', () =
 
 describe('volume control (docs/05 §1.3 — never silently truncate)', () => {
   it('drops non-interactive text under budget pressure and reports the count', () => {
-    const longText = Array.from({ length: 200 }, (_, i) => `<p>这是很长的段落文本内容 ${i}，用来撑爆预算。重复的填充文字。</p>`).join('');
+    const longText = Array.from(
+      { length: 200 },
+      (_, i) => `<p>这是很长的段落文本内容 ${i}，用来撑爆预算。重复的填充文字。</p>`,
+    ).join('');
     const result = buildSnapshot(setBody(`${longText}<button>重要按钮</button>`), {
       snapshotId: 1,
       maxTokens: 200,

@@ -41,7 +41,8 @@ describe('extract windowing + oversized-result offload', () => {
     expect(text).toMatch(/完整正文已存为附件/);
     expect(text).toMatch(/fromChar=8000/); // paging hint
     expect(text.length).toBeLessThan(big.length); // model sees only one window
-    const attachmentId = (result.details as { extractionAttachmentId?: string } | undefined)?.extractionAttachmentId;
+    const attachmentId = (result.details as { extractionAttachmentId?: string } | undefined)
+      ?.extractionAttachmentId;
     expect(attachmentId).toBeTruthy();
 
     const stored = await db.attachments.get(attachmentId!);
@@ -49,7 +50,7 @@ describe('extract windowing + oversized-result offload', () => {
     expect(stored?.mime).toBe('text/markdown');
     // The attachment holds the WHOLE body, not the truncated window (honesty).
     expect(await stored!.bytes.text()).toBe(big);
-    expect(text).toMatch(/^<<<web_content_/); // fenced as untrusted
+    expect(text).not.toMatch(/^<<<web_content_/); // the context assembler fences exactly once
   });
 
   it('fromChar pages to the next window and marks end of content', async () => {

@@ -30,8 +30,24 @@ import { t } from '../i18n';
 // ---------------------------------------------------------------------------
 
 type Row =
-  | { kind: 'user'; key: string; payload: UserMessagePayload; nodeId?: string; branch?: { index: number; count: number } }
-  | { kind: 'assistant'; key: string; payload: AssistantMessagePayload; streaming?: boolean; liveText?: string; liveReasoning?: string; nodeId?: string; branch?: { index: number; count: number }; citations?: { url: string }[] }
+  | {
+      kind: 'user';
+      key: string;
+      payload: UserMessagePayload;
+      nodeId?: string;
+      branch?: { index: number; count: number };
+    }
+  | {
+      kind: 'assistant';
+      key: string;
+      payload: AssistantMessagePayload;
+      streaming?: boolean;
+      liveText?: string;
+      liveReasoning?: string;
+      nodeId?: string;
+      branch?: { index: number; count: number };
+      citations?: { url: string }[];
+    }
   | { kind: 'tools'; key: string; cards: ToolCardData[]; historical?: boolean }
   | { kind: 'notice'; key: string; text: string };
 
@@ -66,7 +82,13 @@ export function buildRows(items: SnapshotItem[], liveItems: LiveItem[]): Row[] {
     switch (item.kind) {
       case 'user_message':
         turnUrls = [];
-        rows.push({ kind: 'user', key: item.nodeId, payload: item.payload as UserMessagePayload, nodeId: item.nodeId, branch: item.branch });
+        rows.push({
+          kind: 'user',
+          key: item.nodeId,
+          payload: item.payload as UserMessagePayload,
+          nodeId: item.nodeId,
+          branch: item.branch,
+        });
         break;
       case 'assistant_message': {
         const p = item.payload as AssistantMessagePayload;
@@ -104,7 +126,11 @@ export function buildRows(items: SnapshotItem[], liveItems: LiveItem[]): Row[] {
         break;
       }
       case 'system_notice':
-        rows.push({ kind: 'notice', key: item.nodeId, text: (item.payload as SystemNoticePayload).text });
+        rows.push({
+          kind: 'notice',
+          key: item.nodeId,
+          text: (item.payload as SystemNoticePayload).text,
+        });
         break;
       // tool_result folded above; approval_decision rendered via tool flow.
       default:
@@ -138,7 +164,10 @@ export function buildRows(items: SnapshotItem[], liveItems: LiveItem[]): Row[] {
         rows.push({
           kind: 'user',
           key: live.itemId,
-          payload: { content: [{ type: 'text', text: live.text }], attachedContext: live.attachedContext },
+          payload: {
+            content: [{ type: 'text', text: live.text }],
+            attachedContext: live.attachedContext,
+          },
         });
       }
     } else if (live.kind === 'assistant_message') {
@@ -195,7 +224,15 @@ interface Props {
   contentMaxWidth?: number;
 }
 
-export function MessageStream({ items, liveItems, threadId, onSelectBranch, onForkAt, turnActive, contentMaxWidth }: Props) {
+export function MessageStream({
+  items,
+  liveItems,
+  threadId,
+  onSelectBranch,
+  onForkAt,
+  turnActive,
+  contentMaxWidth,
+}: Props) {
   const rows = useMemo(() => buildRows(items, liveItems), [items, liveItems]);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const [atBottom, setAtBottom] = useState(true);
@@ -205,7 +242,13 @@ export function MessageStream({ items, liveItems, threadId, onSelectBranch, onFo
   const lastBranchNodeId = useMemo(() => {
     for (let i = rows.length - 1; i >= 0; i--) {
       const r = rows[i]!;
-      if ((r.kind === 'user' || r.kind === 'assistant') && r.branch && r.branch.count > 1 && r.nodeId) return r.nodeId;
+      if (
+        (r.kind === 'user' || r.kind === 'assistant') &&
+        r.branch &&
+        r.branch.count > 1 &&
+        r.nodeId
+      )
+        return r.nodeId;
     }
     return null;
   }, [rows]);
@@ -268,7 +311,10 @@ export function MessageStream({ items, liveItems, threadId, onSelectBranch, onFo
         }}
         className="h-full"
         itemContent={(_, row) => (
-          <div className="mx-auto w-full px-4 py-3" style={contentMaxWidth ? { maxWidth: contentMaxWidth } : undefined}>
+          <div
+            className="mx-auto w-full px-4 py-3"
+            style={contentMaxWidth ? { maxWidth: contentMaxWidth } : undefined}
+          >
             {renderRow(row, ctx)}
           </div>
         )}
@@ -276,7 +322,13 @@ export function MessageStream({ items, liveItems, threadId, onSelectBranch, onFo
       {!atBottom && (
         <button
           type="button"
-          onClick={() => virtuosoRef.current?.scrollToIndex({ index: rows.length - 1, align: 'end', behavior: 'smooth' })}
+          onClick={() =>
+            virtuosoRef.current?.scrollToIndex({
+              index: rows.length - 1,
+              align: 'end',
+              behavior: 'smooth',
+            })
+          }
           className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-border-soft bg-card px-3 py-1 text-[11px] text-muted-foreground shadow-pop transition-colors hover:bg-muted"
         >
           {t('stream.backToBottom')}
@@ -305,7 +357,12 @@ function renderRow(row: Row, ctx: RowCtx) {
   const { threadId, onSelectBranch, onForkAt } = ctx;
   const branchSwitcher = (r: Extract<Row, { kind: 'user' | 'assistant' }>) =>
     r.branch && r.branch.count > 1 && r.nodeId && threadId && onSelectBranch ? (
-      <BranchSwitcher threadId={threadId} nodeId={r.nodeId} branch={r.branch} onSelectBranch={onSelectBranch} />
+      <BranchSwitcher
+        threadId={threadId}
+        nodeId={r.nodeId}
+        branch={r.branch}
+        onSelectBranch={onSelectBranch}
+      />
     ) : null;
 
   switch (row.kind) {
@@ -329,7 +386,10 @@ function renderRow(row: Row, ctx: RowCtx) {
             {row.payload.attachedContext && row.payload.attachedContext.length > 0 && (
               <div className="mb-1.5 flex flex-wrap gap-1">
                 {row.payload.attachedContext.map((block, i) => (
-                  <span key={i} className="inline-flex items-center gap-1 rounded-full bg-foreground/10 px-2 py-0.5 text-[11px] text-muted-foreground">
+                  <span
+                    key={i}
+                    className="inline-flex items-center gap-1 rounded-full bg-foreground/10 px-2 py-0.5 text-[11px] text-muted-foreground"
+                  >
                     📎 {block.label}
                   </span>
                 ))}
@@ -356,7 +416,8 @@ function renderRow(row: Row, ctx: RowCtx) {
       // Codex-style flat turn: no per-message avatar — the user bubble on the
       // right already marks turn boundaries; repeating an agent icon beside
       // every reasoning/answer block is noise in multi-step turns.
-      const text = row.liveText ?? row.payload.content.map((c) => (c.type === 'text' ? c.text : '')).join('');
+      const text =
+        row.liveText ?? row.payload.content.map((c) => (c.type === 'text' ? c.text : '')).join('');
       const reasoning = row.liveReasoning || row.payload.reasoning;
       // Reasoning precedes text in the stream: once answer text arrives the
       // thinking phase is OVER — collapse it even though the row still streams.
@@ -365,7 +426,9 @@ function renderRow(row: Row, ctx: RowCtx) {
         <div className="group/msg min-w-0">
           {reasoning && <ReasoningBlock text={reasoning} streaming={reasoningLive} />}
           <Markdown content={text} streaming={row.streaming} />
-          {row.streaming && !text && <span className="inline-block h-4 w-[3px] animate-[blink_1s_ease-in-out_infinite] rounded-full bg-primary align-middle" />}
+          {row.streaming && !text && (
+            <span className="inline-block h-4 w-[3px] animate-[blink_1s_ease-in-out_infinite] rounded-full bg-primary align-middle" />
+          )}
           {!row.streaming && row.citations && <CitationsPill citations={row.citations} />}
           {!row.streaming && (
             <div className="flex items-center gap-1">
@@ -396,7 +459,9 @@ function renderRow(row: Row, ctx: RowCtx) {
     case 'notice':
       return (
         <div className="flex justify-center">
-          <div className="rounded-full border border-border-soft bg-card px-3 py-1 text-[11px] text-faint-foreground">{row.text}</div>
+          <div className="rounded-full border border-border-soft bg-card px-3 py-1 text-[11px] text-faint-foreground">
+            {row.text}
+          </div>
         </div>
       );
   }
@@ -407,7 +472,15 @@ function renderRow(row: Row, ctx: RowCtx) {
  * panel; Resend forks a sibling branch (history preserved, BranchSwitcher
  * appears). Esc cancels, Ctrl+Enter resends. IME-guarded for zh-CN.
  */
-function EditInPlace({ initial, onCancel, onResend }: { initial: string; onCancel: () => void; onResend: (text: string) => void }) {
+function EditInPlace({
+  initial,
+  onCancel,
+  onResend,
+}: {
+  initial: string;
+  onCancel: () => void;
+  onResend: (text: string) => void;
+}) {
   const [value, setValue] = useState(initial);
   const ref = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
@@ -447,4 +520,3 @@ function EditInPlace({ initial, onCancel, onResend }: { initial: string; onCance
     </div>
   );
 }
-

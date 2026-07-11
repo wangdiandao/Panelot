@@ -11,11 +11,7 @@
 
 import { useState, type ReactNode } from 'react';
 import { Check, ChevronRight, CircleAlert, Clock, Loader2, X } from 'lucide-react';
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from './ui/collapsible';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible';
 import { Badge } from './ui/badge';
 import { cn } from '../lib/utils';
 import { t } from '../i18n';
@@ -63,17 +59,28 @@ export function ToolCallCard({ card }: { card: ToolCardData }) {
         {STATUS_ICON[card.status]}
         <span className="font-medium text-foreground">{card.label}</span>
         {card.toolName && card.toolName !== card.label && (
-          <Badge variant="outline" className="h-4 rounded px-1 font-mono text-[10px] font-normal text-faint-foreground">
+          <Badge
+            variant="outline"
+            className="h-4 rounded px-1 font-mono text-[10px] font-normal text-faint-foreground"
+          >
             {card.toolName}
           </Badge>
         )}
         {card.paramsSummary && (
-          <span className="truncate font-mono text-[11px] text-faint-foreground">{card.paramsSummary}</span>
+          <span className="truncate font-mono text-[11px] text-faint-foreground">
+            {card.paramsSummary}
+          </span>
         )}
         <span className="ml-auto flex shrink-0 items-center gap-2 text-[11px] text-faint-foreground">
-          {card.status === 'running' && card.progressText && <span className="max-w-40 truncate">{card.progressText}</span>}
-          {card.durationMs !== undefined && card.status === 'ok' && <span>{(card.durationMs / 1000).toFixed(1)}s</span>}
-          <ChevronRight className={cn('size-3 opacity-50 transition-transform', expanded && 'rotate-90')} />
+          {card.status === 'running' && card.progressText && (
+            <span className="max-w-40 truncate">{card.progressText}</span>
+          )}
+          {card.durationMs !== undefined && card.status === 'ok' && (
+            <span>{(card.durationMs / 1000).toFixed(1)}s</span>
+          )}
+          <ChevronRight
+            className={cn('size-3 opacity-50 transition-transform', expanded && 'rotate-90')}
+          />
         </span>
       </CollapsibleTrigger>
       <CollapsibleContent>
@@ -90,17 +97,21 @@ export function ToolCallCard({ card }: { card: ToolCardData }) {
           )}
           {card.resultText && (
             <section>
-              <div className={cn(
-                'mb-1 flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide',
-                card.status === 'fail' ? 'text-destructive' : 'text-faint-foreground',
-              )}>
+              <div
+                className={cn(
+                  'mb-1 flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide',
+                  card.status === 'fail' ? 'text-destructive' : 'text-faint-foreground',
+                )}
+              >
                 {card.status === 'fail' && <CircleAlert className="size-3" />}
                 {card.status === 'fail' ? t('tool.error') : t('tool.result')}
               </div>
-              <pre className={cn(
-                'max-h-60 overflow-auto whitespace-pre-wrap rounded-md p-2 font-mono text-[11px]',
-                card.status === 'fail' ? 'bg-destructive/5 text-destructive' : 'bg-muted',
-              )}>
+              <pre
+                className={cn(
+                  'max-h-60 overflow-auto whitespace-pre-wrap rounded-md p-2 font-mono text-[11px]',
+                  card.status === 'fail' ? 'bg-destructive/5 text-destructive' : 'bg-muted',
+                )}
+              >
                 {card.resultText}
               </pre>
             </section>
@@ -111,7 +122,13 @@ export function ToolCallCard({ card }: { card: ToolCardData }) {
   );
 }
 
-export function ToolCallGroup({ cards, historical }: { cards: ToolCardData[]; historical?: boolean }) {
+export function ToolCallGroup({
+  cards,
+  historical,
+}: {
+  cards: ToolCardData[];
+  historical?: boolean;
+}) {
   const [expanded, setExpanded] = useState(false);
   if (cards.length === 0) return null;
   // Historical turns fold at ANY size (completed work reads as one line);
@@ -143,14 +160,26 @@ export function ToolCallGroup({ cards, historical }: { cards: ToolCardData[]; hi
         )}
         aria-expanded={expanded}
       >
-        <ChevronRight className={cn('size-3 opacity-60 transition-transform', expanded && 'rotate-90')} />
+        <ChevronRight
+          className={cn('size-3 opacity-60 transition-transform', expanded && 'rotate-90')}
+        />
         <span className="flex items-center gap-1.5">
           {t('stream.steps', { n: cards.length })}
-          <span className="flex items-center gap-0.5 text-success"><Check className="size-3" />{okCount}</span>
-          {failCount > 0 && <span className="flex items-center gap-0.5 text-destructive"><X className="size-3" />{failCount}</span>}
+          <span className="flex items-center gap-0.5 text-success">
+            <Check className="size-3" />
+            {okCount}
+          </span>
+          {failCount > 0 && (
+            <span className="flex items-center gap-0.5 text-destructive">
+              <X className="size-3" />
+              {failCount}
+            </span>
+          )}
           {running && <Loader2 className="size-3 animate-spin text-info" />}
           {historical && totalMs > 0 && (
-            <span className="text-[11px] text-faint-foreground">· {(totalMs / 1000).toFixed(1)}s</span>
+            <span className="text-[11px] text-faint-foreground">
+              · {(totalMs / 1000).toFixed(1)}s
+            </span>
           )}
         </span>
       </button>

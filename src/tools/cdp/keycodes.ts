@@ -49,17 +49,41 @@ const MODIFIER_BITS: Record<string, number> = {
 };
 
 const SHIFTED_SYMBOLS: Record<string, string> = {
-  '!': '1', '@': '2', '#': '3', '$': '4', '%': '5', '^': '6', '&': '7', '*': '8', '(': '9', ')': '0',
-  '_': '-', '+': '=', '{': '[', '}': ']', '|': '\\', ':': ';', '"': "'", '<': ',', '>': '.', '?': '/', '~': '`',
+  '!': '1',
+  '@': '2',
+  '#': '3',
+  $: '4',
+  '%': '5',
+  '^': '6',
+  '&': '7',
+  '*': '8',
+  '(': '9',
+  ')': '0',
+  _: '-',
+  '+': '=',
+  '{': '[',
+  '}': ']',
+  '|': '\\',
+  ':': ';',
+  '"': "'",
+  '<': ',',
+  '>': '.',
+  '?': '/',
+  '~': '`',
 };
 
 /** Punctuation → physical code + US-layout virtual key code (VK_OEM_*). */
 const SYMBOL_KEY: Record<string, { code: string; vk: number }> = {
-  '-': { code: 'Minus', vk: 189 }, '=': { code: 'Equal', vk: 187 },
-  '[': { code: 'BracketLeft', vk: 219 }, ']': { code: 'BracketRight', vk: 221 },
-  '\\': { code: 'Backslash', vk: 220 }, ';': { code: 'Semicolon', vk: 186 },
-  "'": { code: 'Quote', vk: 222 }, ',': { code: 'Comma', vk: 188 },
-  '.': { code: 'Period', vk: 190 }, '/': { code: 'Slash', vk: 191 },
+  '-': { code: 'Minus', vk: 189 },
+  '=': { code: 'Equal', vk: 187 },
+  '[': { code: 'BracketLeft', vk: 219 },
+  ']': { code: 'BracketRight', vk: 221 },
+  '\\': { code: 'Backslash', vk: 220 },
+  ';': { code: 'Semicolon', vk: 186 },
+  "'": { code: 'Quote', vk: 222 },
+  ',': { code: 'Comma', vk: 188 },
+  '.': { code: 'Period', vk: 190 },
+  '/': { code: 'Slash', vk: 191 },
   '`': { code: 'Backquote', vk: 192 },
 };
 
@@ -69,7 +93,10 @@ const SYMBOL_KEY: Record<string, { code: string; vk: number }> = {
  * key that silently does nothing.
  */
 export function parseKeyCombo(combo: string): KeyPayload {
-  const parts = combo.split('+').map((p) => p.trim()).filter(Boolean);
+  const parts = combo
+    .split('+')
+    .map((p) => p.trim())
+    .filter(Boolean);
   if (parts.length === 0) throw new Error(`无效按键: "${combo}"`);
 
   let modifiers = 0;
@@ -89,7 +116,13 @@ export function parseKeyCombo(combo: string): KeyPayload {
 
   const named = NAMED_KEYS[last];
   if (named) {
-    return { key: last === 'Space' ? ' ' : last, code: named.code, windowsVirtualKeyCode: named.vk, text: modifiers & ~8 ? '' : (named.text ?? ''), modifiers };
+    return {
+      key: last === 'Space' ? ' ' : last,
+      code: named.code,
+      windowsVirtualKeyCode: named.vk,
+      text: modifiers & ~8 ? '' : (named.text ?? ''),
+      modifiers,
+    };
   }
 
   if (last.length === 1) {
@@ -104,30 +137,65 @@ export function parseKeyCombo(combo: string): KeyPayload {
       // An uppercase letter is physically Shift+letter — set the Shift bit so
       // event.shiftKey matches the produced character.
       const mods = /[A-Z]/.test(ch) ? modifiers | 8 : modifiers;
-      return { key: ch, code: `Key${upper}`, windowsVirtualKeyCode: vk, text: nonShiftMod ? '' : ch, modifiers: mods };
+      return {
+        key: ch,
+        code: `Key${upper}`,
+        windowsVirtualKeyCode: vk,
+        text: nonShiftMod ? '' : ch,
+        modifiers: mods,
+      };
     }
     if (isDigit) {
-      return { key: ch, code: `Digit${ch}`, windowsVirtualKeyCode: ch.charCodeAt(0), text: nonShiftMod ? '' : ch, modifiers };
+      return {
+        key: ch,
+        code: `Digit${ch}`,
+        windowsVirtualKeyCode: ch.charCodeAt(0),
+        text: nonShiftMod ? '' : ch,
+        modifiers,
+      };
     }
     if (shiftedBase) {
       // Shifted symbol (e.g. '?'): Shift + the physical base key's code/VK.
-      const phys = SYMBOL_KEY[shiftedBase] ?? { code: /[0-9]/.test(shiftedBase) ? `Digit${shiftedBase}` : `Key${shiftedBase.toUpperCase()}`, vk: shiftedBase.toUpperCase().charCodeAt(0) };
-      return { key: ch, code: phys.code, windowsVirtualKeyCode: phys.vk, text: nonShiftMod ? '' : ch, modifiers: modifiers | 8 };
+      const phys = SYMBOL_KEY[shiftedBase] ?? {
+        code: /[0-9]/.test(shiftedBase) ? `Digit${shiftedBase}` : `Key${shiftedBase.toUpperCase()}`,
+        vk: shiftedBase.toUpperCase().charCodeAt(0),
+      };
+      return {
+        key: ch,
+        code: phys.code,
+        windowsVirtualKeyCode: phys.vk,
+        text: nonShiftMod ? '' : ch,
+        modifiers: modifiers | 8,
+      };
     }
     // Unshifted punctuation: , . / ; ' [ ] \ - = `
     const phys = SYMBOL_KEY[ch];
     if (phys) {
-      return { key: ch, code: phys.code, windowsVirtualKeyCode: phys.vk, text: nonShiftMod ? '' : ch, modifiers };
+      return {
+        key: ch,
+        code: phys.code,
+        windowsVirtualKeyCode: phys.vk,
+        text: nonShiftMod ? '' : ch,
+        modifiers,
+      };
     }
     // Anything else printable: best-effort, char code as VK.
-    return { key: ch, code: '', windowsVirtualKeyCode: ch.toUpperCase().charCodeAt(0), text: nonShiftMod ? '' : ch, modifiers };
+    return {
+      key: ch,
+      code: '',
+      windowsVirtualKeyCode: ch.toUpperCase().charCodeAt(0),
+      text: nonShiftMod ? '' : ch,
+      modifiers,
+    };
   }
 
   throw new Error(`未知按键: "${last}"（支持单字符、Enter/Tab/Escape/方向键/F1-F12 等）`);
 }
 
 /** CDP event sequence for one key press (Playwright's ordering). */
-export function keyEventSequence(p: KeyPayload): { type: string; params: Record<string, unknown> }[] {
+export function keyEventSequence(
+  p: KeyPayload,
+): { type: string; params: Record<string, unknown> }[] {
   const base = {
     key: p.key,
     code: p.code,
@@ -138,7 +206,15 @@ export function keyEventSequence(p: KeyPayload): { type: string; params: Record<
   const events: { type: string; params: Record<string, unknown> }[] = [
     // keyDown WITH text = the browser performs the key's default action
     // (Enter submits, Tab moves focus); rawKeyDown would skip text insertion.
-    { type: 'Input.dispatchKeyEvent', params: { type: p.text ? 'keyDown' : 'rawKeyDown', ...base, text: p.text || undefined, unmodifiedText: p.text || undefined } },
+    {
+      type: 'Input.dispatchKeyEvent',
+      params: {
+        type: p.text ? 'keyDown' : 'rawKeyDown',
+        ...base,
+        text: p.text || undefined,
+        unmodifiedText: p.text || undefined,
+      },
+    },
     { type: 'Input.dispatchKeyEvent', params: { type: 'keyUp', ...base } },
   ];
   return events;

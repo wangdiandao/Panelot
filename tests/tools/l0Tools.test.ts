@@ -32,12 +32,14 @@ beforeEach(() => {
   windowsUpdated = [];
   (globalThis as unknown as { chrome: unknown }).chrome = {
     tabs: {
-      query: vi.fn(async (q: { active?: boolean; lastFocusedWindow?: boolean; currentWindow?: boolean }) =>
-        tabs.filter((t) => {
-          if (q.active !== undefined && t.active !== q.active) return false;
-          if (q.lastFocusedWindow && !t.lastFocused) return false;
-          return true;
-        })),
+      query: vi.fn(
+        async (q: { active?: boolean; lastFocusedWindow?: boolean; currentWindow?: boolean }) =>
+          tabs.filter((t) => {
+            if (q.active !== undefined && t.active !== q.active) return false;
+            if (q.lastFocusedWindow && !t.lastFocused) return false;
+            return true;
+          }),
+      ),
       get: vi.fn(async (id: number) => {
         const t = tabs.find((x) => x.id === id);
         if (!t) throw new Error('no tab');
@@ -61,7 +63,11 @@ beforeEach(() => {
       update: vi.fn(async (id: number, props: Record<string, unknown>) => {
         updated.push({ tabId: id, props });
       }),
-      sendMessage: vi.fn(async () => ({ requestId: 'x', ok: true, result: { resultText: 'snap' } })),
+      sendMessage: vi.fn(async () => ({
+        requestId: 'x',
+        ok: true,
+        result: { resultText: 'snap' },
+      })),
     },
     windows: {
       update: vi.fn(async (id: number) => {
@@ -111,8 +117,9 @@ describe('tab_close view-state honesty', () => {
   it('closing a non-existent tab reports a clean error', async () => {
     tabs = [{ id: 1, url: 'https://a.com/', active: true, lastFocused: true }];
     const { tool } = toolset();
-    await expect(tool('tab_close').execute('c1', { tabId: 99 } as never, abort(), undefined))
-      .rejects.toThrow(/不存在/);
+    await expect(
+      tool('tab_close').execute('c1', { tabId: 99 } as never, abort(), undefined),
+    ).rejects.toThrow(/不存在/);
   });
 
   it('can close any tab, not just ones the agent touched (user asked for it)', async () => {
@@ -128,13 +135,34 @@ describe('tab_close view-state honesty', () => {
 });
 
 describe('tab_activate background vs foreground', () => {
+  it('prepares the selected tab and URL destination before permission checks', async () => {
+    tabs = [
+      { id: 1, url: 'https://a.com/', active: true, lastFocused: true },
+      { id: 2, url: 'https://b.com/path', active: false },
+    ];
+    const { tool } = toolset();
+
+    await expect(tool('tab_activate').resolveTarget!({ tabId: 2 } as never)).resolves.toEqual({
+      tabId: 2,
+      origin: 'https://b.com',
+    });
+    await expect(
+      tool('tab_open').resolveTarget!({ url: 'https://new.example/path' } as never),
+    ).resolves.toEqual({ origin: 'https://new.example' });
+  });
+
   it('default retarget is background-only and says the user view is unchanged', async () => {
     tabs = [
       { id: 1, url: 'https://a.com/', title: 'A', active: true, lastFocused: true },
       { id: 2, url: 'https://b.com/', title: 'B', active: false },
     ];
     const { gw, tool } = toolset();
-    const result = await tool('tab_activate').execute('c1', { tabId: 2 } as never, abort(), undefined);
+    const result = await tool('tab_activate').execute(
+      'c1',
+      { tabId: 2 } as never,
+      abort(),
+      undefined,
+    );
     expect(gw.currentTarget('t1')).toBe(2);
     expect(updated).toEqual([]); // no chrome.tabs.update — nothing focused
     expect(text(result)).toContain('用户看到的页面没有变化');
@@ -146,7 +174,12 @@ describe('tab_activate background vs foreground', () => {
       { id: 2, url: 'https://b.com/', title: 'B', active: false, windowId: 10 },
     ];
     const { tool } = toolset();
-    const result = await tool('tab_activate').execute('c1', { tabId: 2, focus: true } as never, abort(), undefined);
+    const result = await tool('tab_activate').execute(
+      'c1',
+      { tabId: 2, focus: true } as never,
+      abort(),
+      undefined,
+    );
     expect(updated).toEqual([{ tabId: 2, props: { active: true } }]);
     expect(windowsUpdated).toEqual([10]);
     expect(text(result)).toContain('前台');
@@ -185,7 +218,12 @@ describe('tab_open stays in the background', () => {
   it('opening a new tab reports background + user view unchanged', async () => {
     tabs = [{ id: 1, url: 'https://a.com/', title: 'A', active: true, lastFocused: true }];
     const { tool } = toolset();
-    const result = await tool('tab_open').execute('c1', { url: 'https://new.example.com/x' } as never, abort(), undefined);
+    const result = await tool('tab_open').execute(
+      'c1',
+      { url: 'https://new.example.com/x' } as never,
+      abort(),
+      undefined,
+    );
     expect(text(result)).toContain('后台');
     expect(text(result)).toContain('用户看到的页面没有变化');
   });
@@ -196,7 +234,12 @@ describe('tab_open stays in the background', () => {
       { id: 3, url: 'https://shop.com/cart', title: '购物车', active: false },
     ];
     const { tool } = toolset();
-    const result = await tool('tab_open').execute('c1', { url: 'https://shop.com/cart' } as never, abort(), undefined);
+    const result = await tool('tab_open').execute(
+      'c1',
+      { url: 'https://shop.com/cart' } as never,
+      abort(),
+      undefined,
+    );
     expect(updated).toEqual([]); // never touches active state
     expect(text(result)).toContain('复用');
     expect(text(result)).toContain('没有变化');

@@ -49,7 +49,9 @@ export function BranchSwitcher({ threadId, nodeId, branch, onSelectBranch }: Pro
       >
         <ChevronLeft className="size-3" />
       </Button>
-      <span className="tabular-nums">{branch.index}/{branch.count}</span>
+      <span className="tabular-nums">
+        {branch.index}/{branch.count}
+      </span>
       <Button
         variant="ghost"
         size="icon"

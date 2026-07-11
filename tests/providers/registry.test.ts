@@ -48,7 +48,13 @@ describe('templates & capabilities', () => {
 
 describe('fetchAllModels (docs/03 §6 — concurrent, isolated failures)', () => {
   const conn = (id: string, overrides?: Partial<Connection>): Connection => ({
-    id, name: id, kind: 'openai', baseUrl: `https://${id}.test/v1`, apiKeys: ['k'], enabled: true, ...overrides,
+    id,
+    name: id,
+    kind: 'openai',
+    baseUrl: `https://${id}.test/v1`,
+    apiKeys: ['k'],
+    enabled: true,
+    ...overrides,
   });
 
   it('one failing connection does not block others', async () => {

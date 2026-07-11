@@ -7,10 +7,16 @@
 import type { ApprovalDecision, ApprovalPolicy, CapabilityScope } from '../messaging/protocol';
 import type { PanelotDB } from '../db/schema';
 import { storageGet, storageSet } from '../settings/store';
-import { checkGate, sessionGrantKey, type GatekeeperCall, type GatekeeperVerdict } from './gatekeeper';
-import { DEFAULT_SENSITIVE_PATTERNS, type PermissionRule } from './rules';
+import {
+  checkGate,
+  sessionGrantKey,
+  type GatekeeperCall,
+  type GatekeeperVerdict,
+} from './gatekeeper';
+import { DEFAULT_SENSITIVE_PATTERNS, destinationOrigin, type PermissionRule } from './rules';
 import type { GlobalSettings } from '../settings/store';
 import { storageGet as globalStorageGet } from '../settings/store';
+import { HostPermissionBroker } from '../permissions/hostPermissionBroker';
 
 const RULES_KEY = 'permission_rules';
 const SENSITIVE_KEY = 'sensitive_origins';
@@ -25,6 +31,14 @@ const DEFAULT_CONFIG: ThreadPermissionConfig = {
   capabilityScope: 'full', // blacklist-only model: reads free, writes gated by policy
 };
 
+const ORIGINLESS_TOOLS = new Set([
+  'tabs_list',
+  'todo_write',
+  'memory_read',
+  'memory_write',
+  'load_skill',
+]);
+
 export class GatekeeperService {
   /** threadId → session grants (acceptForSession; memory only, docs/06 §4). */
   private sessionGrants = new Map<string, Set<string>>();
@@ -34,6 +48,7 @@ export class GatekeeperService {
   constructor(
     private db: PanelotDB,
     private getOrigin: (threadId: string) => Promise<string>,
+    private hostPermissions: HostPermissionBroker = new HostPermissionBroker(),
   ) {}
 
   setThreadConfig(threadId: string, config: Partial<ThreadPermissionConfig>): void {
@@ -45,7 +60,13 @@ export class GatekeeperService {
     return this.threadConfig.get(threadId) ?? { ...DEFAULT_CONFIG };
   }
 
-  async check(call: GatekeeperCall & { level?: string }, threadId: string): Promise<GatekeeperVerdict> {
+  async check(
+    call: GatekeeperCall & {
+      level?: string;
+      target?: { origin?: string; serverId?: string };
+    },
+    threadId: string,
+  ): Promise<GatekeeperVerdict> {
     const [rules, sensitiveUser, thread, origin] = await Promise.all([
       storageGet<PermissionRule[]>(RULES_KEY, []),
       storageGet<string[]>(SENSITIVE_KEY, []),
@@ -57,15 +78,23 @@ export class GatekeeperService {
     if (!config) {
       const global = await globalStorageGet<GlobalSettings>('global_settings', {});
       config = {
-        approvalPolicy: (global.defaultApprovalPolicy as ThreadPermissionConfig['approvalPolicy']) ?? DEFAULT_CONFIG.approvalPolicy,
-        capabilityScope: (global.defaultCapabilityScope as ThreadPermissionConfig['capabilityScope']) ?? DEFAULT_CONFIG.capabilityScope,
+        approvalPolicy:
+          (global.defaultApprovalPolicy as ThreadPermissionConfig['approvalPolicy']) ??
+          DEFAULT_CONFIG.approvalPolicy,
+        capabilityScope:
+          (global.defaultCapabilityScope as ThreadPermissionConfig['capabilityScope']) ??
+          DEFAULT_CONFIG.capabilityScope,
       };
     }
-    const originless = call.level === 'builtin' && call.toolName !== 'download';
+    const destination = destinationOrigin(call.toolName, call.params);
+    const originless =
+      ORIGINLESS_TOOLS.has(call.toolName) ||
+      (call.level === 'builtin' && !call.target?.origin && !destination);
+    const targetOrigin = call.target?.origin ?? destination ?? (originless ? '' : origin);
 
     const verdict = checkGate(call, {
       threadId,
-      targetOrigin: origin,
+      targetOrigin,
       approvalPolicy: config.approvalPolicy,
       capabilityScope: config.capabilityScope,
       scopeOrigins: thread?.scopeOrigins ?? [],
@@ -74,7 +103,32 @@ export class GatekeeperService {
       sessionGrants: this.sessionGrants.get(threadId) ?? new Set(),
       originless,
     });
-    return verdict;
+    if (verdict.verdict === 'deny' || originless || !/^https?:\/\//i.test(targetOrigin)) {
+      return verdict;
+    }
+    if (typeof chrome === 'undefined' || !chrome.permissions) return verdict;
+    const permission = await this.hostPermissions.inspect(targetOrigin);
+    if (permission.granted) return verdict;
+    if (verdict.verdict === 'ask') {
+      return {
+        ...verdict,
+        request: {
+          ...verdict.request,
+          targetOrigin: permission.origin,
+          flags: [...new Set([...verdict.request.flags, 'host_permission' as const])],
+        },
+      };
+    }
+    return {
+      verdict: 'ask',
+      request: {
+        tool: call.toolName,
+        label: `Allow access to ${permission.origin}`,
+        params: call.params,
+        targetOrigin: permission.origin,
+        flags: ['host_permission'],
+      },
+    };
   }
 
   /**
@@ -97,6 +151,8 @@ export class GatekeeperService {
       if (thread && !thread.scopeOrigins.includes(targetOrigin)) {
         await this.db.threads.update(threadId, {
           scopeOrigins: [...thread.scopeOrigins, targetOrigin],
+          revision: thread.revision + 1,
+          updatedAt: Date.now(),
         });
       }
     }
@@ -135,7 +191,10 @@ export class GatekeeperService {
 
   static async removeRule(id: string): Promise<void> {
     const rules = await storageGet<PermissionRule[]>(RULES_KEY, []);
-    await storageSet(RULES_KEY, rules.filter((r) => r.id !== id));
+    await storageSet(
+      RULES_KEY,
+      rules.filter((r) => r.id !== id),
+    );
   }
 
   static async addRule(rule: Omit<PermissionRule, 'id' | 'createdAt'>): Promise<void> {

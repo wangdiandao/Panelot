@@ -27,7 +27,9 @@ export function TaskPanel({ state }: { state: ThreadUiState }) {
               key={i}
               className={`flex items-start gap-2 ${todo.done ? 'text-faint-foreground' : ''}`}
             >
-              <span className={`mt-0.5 shrink-0 text-[11px] ${todo.done ? 'text-success' : 'text-faint-foreground'}`}>
+              <span
+                className={`mt-0.5 shrink-0 text-[11px] ${todo.done ? 'text-success' : 'text-faint-foreground'}`}
+              >
                 {todo.done ? '✓' : '○'}
               </span>
               <span className={todo.done ? 'line-through' : ''}>{todo.text}</span>

@@ -20,12 +20,11 @@ interface PageExtract {
 /** Runs inside the page. Must be self-contained (serialized by chrome). */
 function extractPageText(): PageExtract {
   // Prefer <article>/<main>; fall back to body text with scripts stripped.
-  const root =
-    document.querySelector('article') ??
-    document.querySelector('main') ??
-    document.body;
+  const root = document.querySelector('article') ?? document.querySelector('main') ?? document.body;
   const clone = root.cloneNode(true) as HTMLElement;
-  clone.querySelectorAll('script,style,noscript,nav,footer,iframe,svg').forEach((el) => el.remove());
+  clone
+    .querySelectorAll('script,style,noscript,nav,footer,iframe,svg')
+    .forEach((el) => el.remove());
   const text = (clone.innerText ?? '').replace(/\n{3,}/g, '\n\n').trim();
   return { url: location.href, title: document.title, text };
 }
@@ -41,7 +40,11 @@ export async function getActiveTab(): Promise<chrome.tabs.Tab | null> {
 }
 
 /** Extract a tab's readable text as a context block (null if not scriptable). */
-async function attachTabById(tabId: number, url: string, kind: 'page' | 'tab'): Promise<ContextBlock | null> {
+async function attachTabById(
+  tabId: number,
+  url: string,
+  kind: 'page' | 'tab',
+): Promise<ContextBlock | null> {
   if (!/^https?:/.test(url)) return null;
   try {
     const [result] = await chrome.scripting.executeScript({
@@ -50,7 +53,8 @@ async function attachTabById(tabId: number, url: string, kind: 'page' | 'tab'): 
     });
     const page = result?.result as PageExtract | undefined;
     if (!page?.text) return null;
-    const clipped = page.text.length > MAX_CHARS ? `${page.text.slice(0, MAX_CHARS)}\n[内容已截断]` : page.text;
+    const clipped =
+      page.text.length > MAX_CHARS ? `${page.text.slice(0, MAX_CHARS)}\n[内容已截断]` : page.text;
     return {
       kind,
       label: page.title || new URL(page.url).hostname,
@@ -80,7 +84,10 @@ export async function listAttachableTabs(): Promise<{ id: number; title: string;
   try {
     const tabs = await chrome.tabs.query({});
     return tabs
-      .filter((t): t is chrome.tabs.Tab & { id: number; url: string } => t.id !== undefined && !!t.url && /^https?:/.test(t.url))
+      .filter(
+        (t): t is chrome.tabs.Tab & { id: number; url: string } =>
+          t.id !== undefined && !!t.url && /^https?:/.test(t.url),
+      )
       .map((t) => ({ id: t.id, title: t.title ?? t.url, url: t.url }));
   } catch {
     return [];
@@ -114,7 +121,11 @@ export async function attachSelection(): Promise<ContextBlock | null> {
   try {
     const [result] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      func: () => ({ text: window.getSelection()?.toString() ?? '', title: document.title, url: location.href }),
+      func: () => ({
+        text: window.getSelection()?.toString() ?? '',
+        title: document.title,
+        url: location.href,
+      }),
     });
     const sel = result?.result as { text: string; title: string; url: string } | undefined;
     if (!sel?.text.trim()) return null;

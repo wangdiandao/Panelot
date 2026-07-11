@@ -31,7 +31,9 @@ export type McpConnectionState =
  * Parse a pasted JSON snippet (Claude Code `mcpServers` or Cursor config).
  * Recognizes url / type: http|sse / headers.Authorization (docs/07 §2).
  */
-export function parseMcpJson(json: string): Omit<McpServerConfig, 'id' | 'enabled' | 'disabledTools' | 'connectOnStartup'>[] {
+export function parseMcpJson(
+  json: string,
+): Omit<McpServerConfig, 'id' | 'enabled' | 'disabledTools' | 'connectOnStartup'>[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
@@ -40,13 +42,21 @@ export function parseMcpJson(json: string): Omit<McpServerConfig, 'id' | 'enable
   }
 
   // Accept either { mcpServers: {...} } or a bare { name: {...} } map.
-  const servers = (parsed as { mcpServers?: Record<string, unknown> }).mcpServers ?? (parsed as Record<string, unknown>);
+  const servers =
+    (parsed as { mcpServers?: Record<string, unknown> }).mcpServers ??
+    (parsed as Record<string, unknown>);
   if (typeof servers !== 'object' || servers === null) throw new Error('未找到 mcpServers 配置');
 
-  const results: Omit<McpServerConfig, 'id' | 'enabled' | 'disabledTools' | 'connectOnStartup'>[] = [];
+  const results: Omit<McpServerConfig, 'id' | 'enabled' | 'disabledTools' | 'connectOnStartup'>[] =
+    [];
   for (const [name, raw] of Object.entries(servers)) {
-    const entry = raw as { url?: string; type?: string; headers?: Record<string, string>; command?: string };
-    if (!entry.url) continue; // skip stdio (command-based) servers — V1 is remote-only
+    const entry = raw as {
+      url?: string;
+      type?: string;
+      headers?: Record<string, string>;
+      command?: string;
+    };
+    if (!entry.url) continue; // Local command transports are outside the extension security boundary.
     const authHeader = entry.headers?.Authorization ?? entry.headers?.authorization;
     const bearer = authHeader?.match(/^Bearer\s+(.+)$/i)?.[1];
     results.push({
@@ -55,6 +65,7 @@ export function parseMcpJson(json: string): Omit<McpServerConfig, 'id' | 'enable
       auth: bearer ? { kind: 'bearer', token: bearer } : { kind: 'none' },
     });
   }
-  if (results.length === 0) throw new Error('未找到含 url 的远端 MCP 服务器（V1 不支持本地 stdio 服务器）');
+  if (results.length === 0)
+    throw new Error('未找到含 url 的远端 MCP 服务器（不支持本地 stdio 服务器）');
   return results;
 }

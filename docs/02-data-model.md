@@ -8,7 +8,7 @@
 ## 1. 设计决策
 
 1. **会话是一棵树，且只存树**。节点 `{id, parentId}`，编辑重发/重新生成/分叉全部表达为「追加兄弟节点 + 移动游标」。不维护任何平行的扁平消息数组（OpenWebUI 因双份存储产生孤儿节点与渲染死锁，引以为戒）。
-2. **Append-only**。节点一经写入不修改（唯一例外：流式中的 assistant 节点在 `item.complete` 时写入终稿；删除操作见 §5.3）。恢复 = 回放，不是快照反序列化。
+2. **Append-only**。流式 delta 不建节点；Provider stream 完成后一次写入 assistant 终稿。节点写入后不修改，墓碑删除只更新 `deleted` 标记（见 §3.3）。恢复 = 回放，不是快照反序列化。
 3. **给 LLM 的历史是派生视图**：`buildSessionContext(leafId)` 从叶子回溯到根产出线性消息序列。
 
 ## 2. Dexie Schema
@@ -23,15 +23,25 @@ class PanelotDB extends Dexie {
   attachments!: Table<Attachment, string>;
   skills!: Table<SkillRecord, string>;       // 见 08
   memories!: Table<MemoryRecord, string>;    // memory_write 工具
+  runs!: Table<RunRecord, string>;
+  commandReceipts!: Table<CommandReceipt, string>;
+  approvals!: Table<ApprovalRecord, string>;
+  plugins!: Table<PluginRecord, string>;
+  pluginAssets!: Table<PluginAssetRecord, string>;
 
   constructor() {
-    super('panelot');
+    super('panelot_v1');
     this.version(1).stores({
       threads:     'id, updatedAt, folderId, archived, pinned',
       nodes:       'id, threadId, [threadId+seq], parentId',
       attachments: 'id, threadId, createdAt',
-      skills:      'id, name, enabled',
+      skills:      'id, name, enabled, sourceRef',
       memories:    'id, key, updatedAt',
+      runs:         'id, threadId, [threadId+state], submissionId, updatedAt',
+      commandReceipts: 'id, [clientId+submissionId], status, createdAt, expiresAt',
+      approvals:    'id, threadId, runId, [threadId+status], requestedAt',
+      plugins:      'id, name, enabled, updatedAt',
+      pluginAssets: 'id, pluginId, [pluginId+path], kind, createdAt',
     });
   }
 }
@@ -55,7 +65,7 @@ interface ThreadMeta {
   preset?: string;            // 默认 ModelPreset id
   parentThreadId?: string;    // fork 来源（预留子代理）
   stats: { turns: number; totalTokens: number; costUsd: number };
-  scopeOrigins: string[];     // 本任务触达过的域名集合（跨域检测用，见 06）
+  scopeOrigins: string[];     // 已触达/批准过的 origin；用于敏感 payload 的第三方出域判断与审计（见 06）
 }
 ```
 
@@ -97,6 +107,11 @@ interface Attachment {
   id: string; threadId: string; createdAt: number;
   kind: 'image' | 'file' | 'page_snapshot' | 'screenshot' | 'page_text';
   mime: string; bytes: Blob;
+  trust?: 'trusted' | 'untrusted';
+  provenance?: 'user' | 'page' | 'mcp' | 'tool' | 'import' | 'plugin';
+  sourceRef?: string;
+  refs?: { nodeIds?: string[]; runIds?: string[]; pluginId?: string };
+  deleting?: boolean;
   meta?: { url?: string; title?: string; w?: number; h?: number };
 }
 ```
@@ -127,26 +142,31 @@ appendNode(threadId, parentId = thread.leafId, node)
 
 写入前校验：`parentId` 必须存在于同 thread（或为 null 根）；加载时校验 `leafId` 可回溯到根，失败则回退到 seq 最大的可达叶子并记 `system_notice`。**任何情况下渲染层不因坏数据死循环**——回溯步数上限 = 节点总数。
 
-## 5. buildSessionContext —— 恢复与渲染的同一算法
+## 4. buildSessionContext —— LLM 上下文派生
 
 ```ts
-function buildSessionContext(leafId: string): UnifiedMessage[] {
+async function buildSessionContext(
+  tree: ThreadTree,
+  threadId: string,
+  leafId: string,
+): Promise<SessionContext> {
   // 1. 从 leaf 沿 parentId 回溯到根，reverse 得到线性节点序列（跳过墓碑与 system_notice）
-  // 2. 输出 = [ systemPrompt 层（由最后一个 turn_context 复原）,
-  //             序列节点转换为 UnifiedMessage ]
-  // 3. tool_result 的大体积 contentForLlm 按 05 §7 的截断规则二次裁剪
+  // 2. 输出 provider-neutral messages + 最新 turn_context + 完整可见 path
+  // 3. system prompt 由 src/prompts/assemble.ts 另行拼装，不在本函数返回值中
 }
 ```
 
-同一函数服务三个消费者：LLM 请求组装（引擎）、`ThreadSnapshot`（UI 重连）、会话导出。**三方永不各写一套遍历逻辑。**
+`buildSessionContext` 服务 LLM 请求组装，从当前 `leafId` 派生统一消息序列。UI snapshot 和会话导出复用同一棵 `parentId` 树及相同的回溯约束，但分别生成适合 UI/Markdown 的载荷，不共享这一函数的返回类型。
 
-## 6. 存储配额与清理
+`runTurn` 从持久化的 `ResolvedRunEnvironment` 写入实际 connection/model、approvalPolicy、capabilityScope、activeSkills 与 promptVersion；Run 另行固化模型参数、Preset prompt、工具级别和价格/能力元数据。恢复时以 Run 环境为事实源，不重新解析可能已经变化的设置。
 
-- `navigator.storage.estimate()` 监控；总量超 80% 时设置页与侧边栏出提示。
-- 会话保留策略（可配）：归档 N 天后物理删除 nodes 但保留 ThreadMeta + 导出的 Markdown 摘要。
-- 一切物理删除前，threads 表先行标记 `deleting`，防半删状态被回放。
+## 5. 存储配额与清理
 
-## 7. 已定事项
+- 设置页通过 `navigator.storage.estimate()` 展示用量；总量超 80% 时只在“数据”设置页提示，侧边栏当前没有配额告警。
+- 附件总量超过 200MB 后按 `createdAt` 删除最旧附件并跳过活跃 Thread；删除事务先把引用节点标记为 `evicted`，再物理删除附件。启动时清理遗留的半删除记录。
+- “归档 N 天后删除 nodes、保留 ThreadMeta/Markdown 摘要”与删除前 `deleting` 两阶段流程尚未接入设置页或定时任务，属于目标策略。
+
+## 6. 已定事项
 
 - nodes 表不加 `[threadId+parentId]` 复合索引：siblings 查询走单列 `parentId` 索引后内存过滤，兄弟分支数量级是个位数，复合索引没有可测收益。
 - 附件存 IndexedDB Blob，不用 OPFS：大截图场景的性能差距抵不过 API 兼容成本。

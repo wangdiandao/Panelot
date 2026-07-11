@@ -22,6 +22,7 @@ const thread = (over: Partial<ThreadMeta>): ThreadMeta => ({
   stats: { turns: 1, totalTokens: 0, costUsd: 0 },
   scopeOrigins: [],
   ...over,
+  revision: over.revision ?? 0,
 });
 
 describe('groupThreads', () => {

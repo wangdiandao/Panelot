@@ -1,0 +1,381 @@
+import type { PanelotDB } from '../db/schema';
+import type {
+  PendingToolExecution,
+  ResolvedRunEnvironment,
+  RunRecord,
+  RunState,
+} from '../db/types';
+import type { TurnOverrides, Usage, UserInput } from '../messaging/protocol';
+import { ThreadTree, type AppendNodeInput } from '../db/tree';
+import { assertRunTransition, recoverInterruptedRun } from './runState';
+
+interface RunRepositoryOptions {
+  now?: () => number;
+}
+
+export interface EnqueueRunInput {
+  threadId: string;
+  clientId: string;
+  submissionId: string;
+  input: UserInput;
+  overrides?: TurnOverrides;
+}
+
+export interface RunTransitionPatch {
+  environment?: ResolvedRunEnvironment;
+  stepCursor?: number;
+  pendingTool?: PendingToolExecution;
+  stopReason?: string;
+  error?: { code: string; message: string };
+}
+
+export interface UpdateQueuedRunInput {
+  input: UserInput;
+  overrides?: TurnOverrides;
+}
+
+export interface AttachmentLink {
+  attachmentIds: readonly string[];
+  nodeId: string;
+}
+
+export type RecoveredRun = RunRecord & {
+  recoveryAction:
+    | 'resume_run'
+    | 'restore_approval'
+    | 'replay_tool'
+    | 'request_resolution'
+    | 'request_resume'
+    | 'none';
+};
+
+const terminalStates: readonly RunState[] = ['failed', 'completed'];
+
+export class RunRepository {
+  private readonly now: () => number;
+
+  constructor(
+    private readonly db: PanelotDB,
+    options: RunRepositoryOptions = {},
+  ) {
+    this.now = options.now ?? Date.now;
+  }
+
+  async enqueue(input: EnqueueRunInput): Promise<RunRecord> {
+    const now = this.now();
+    const run: RunRecord = {
+      id: crypto.randomUUID(),
+      threadId: input.threadId,
+      turnId: crypto.randomUUID(),
+      clientId: input.clientId,
+      submissionId: input.submissionId,
+      input: structuredClone(input.input),
+      overrides: input.overrides ? structuredClone(input.overrides) : undefined,
+      state: 'queued',
+      revision: 0,
+      stepCursor: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.db.runs.add(run);
+    return run;
+  }
+
+  async nextQueued(threadId: string): Promise<RunRecord | undefined> {
+    return this.db.runs
+      .where('[threadId+state]')
+      .equals([threadId, 'queued'])
+      .sortBy('createdAt')
+      .then((records) => records[0]);
+  }
+
+  async countQueued(threadId: string): Promise<number> {
+    return this.db.runs.where('[threadId+state]').equals([threadId, 'queued']).count();
+  }
+
+  async queuedForThread(threadId: string): Promise<RunRecord[]> {
+    return this.db.runs.where('[threadId+state]').equals([threadId, 'queued']).sortBy('createdAt');
+  }
+
+  async recoverableForThread(threadId: string): Promise<RunRecord[]> {
+    const states: readonly RunState[] = [
+      'waiting_approval',
+      'paused_budget',
+      'paused_uncertain',
+      'interrupted',
+    ];
+    return this.db.runs
+      .where('threadId')
+      .equals(threadId)
+      .filter((run) => states.includes(run.state))
+      .sortBy('createdAt');
+  }
+
+  async updateQueued(id: string, patch: UpdateQueuedRunInput): Promise<RunRecord> {
+    return this.db.transaction('rw', this.db.runs, async () => {
+      const current = await this.db.runs.get(id);
+      if (!current) throw new Error(`Run not found: ${id}`);
+      if (current.state !== 'queued') throw new Error(`Run ${id} is not queued`);
+      const updated: RunRecord = {
+        ...current,
+        input: structuredClone(patch.input),
+        overrides: patch.overrides ? structuredClone(patch.overrides) : undefined,
+        revision: current.revision + 1,
+        updatedAt: this.now(),
+      };
+      await this.db.runs.put(updated);
+      return updated;
+    });
+  }
+
+  async removeQueued(id: string): Promise<RunRecord> {
+    return this.db.transaction('rw', this.db.runs, async () => {
+      const current = await this.db.runs.get(id);
+      if (!current) throw new Error(`Run not found: ${id}`);
+      if (current.state !== 'queued') throw new Error(`Run ${id} is not queued`);
+      const updated: RunRecord = {
+        ...current,
+        state: 'interrupted',
+        stopReason: 'removed_from_queue',
+        revision: current.revision + 1,
+        updatedAt: this.now(),
+      };
+      await this.db.runs.put(updated);
+      return updated;
+    });
+  }
+
+  async get(id: string): Promise<RunRecord | undefined> {
+    return this.db.runs.get(id);
+  }
+
+  async prepare(id: string, environment: ResolvedRunEnvironment): Promise<RunRecord> {
+    return this.db.transaction('rw', [this.db.runs, this.db.threads], async () => {
+      const current = await this.db.runs.get(id);
+      if (!current) throw new Error(`Run not found: ${id}`);
+      assertRunTransition(current.state, 'preparing');
+      const thread = await this.db.threads.get(current.threadId);
+      if (!thread) throw new Error(`Thread not found: ${current.threadId}`);
+      const updated: RunRecord = {
+        ...current,
+        environment,
+        state: 'preparing',
+        revision: current.revision + 1,
+        updatedAt: this.now(),
+      };
+      await this.db.runs.put(updated);
+      await this.db.threads.update(current.threadId, {
+        stats: { ...thread.stats, turns: thread.stats.turns + 1 },
+        revision: thread.revision + 1,
+        updatedAt: this.now(),
+      });
+      return updated;
+    });
+  }
+
+  async transition(
+    id: string,
+    state: RunState,
+    patch: RunTransitionPatch = {},
+  ): Promise<RunRecord> {
+    return this.db.transaction('rw', this.db.runs, async () => {
+      const current = await this.db.runs.get(id);
+      if (!current) throw new Error(`Run not found: ${id}`);
+      assertRunTransition(current.state, state);
+      const updated: RunRecord = {
+        ...current,
+        ...patch,
+        state,
+        revision: current.revision + 1,
+        updatedAt: this.now(),
+      };
+      await this.db.runs.put(updated);
+      return updated;
+    });
+  }
+
+  async appendNodeAndTransition(
+    id: string,
+    node: AppendNodeInput,
+    state: RunState,
+    patch: RunTransitionPatch = {},
+    attachmentLink?: AttachmentLink,
+  ): Promise<RunRecord> {
+    return this.appendNodesAndTransition(id, [node], state, patch, attachmentLink);
+  }
+
+  async appendNodesAndTransition(
+    id: string,
+    nodes: readonly AppendNodeInput[],
+    state: RunState,
+    patch: RunTransitionPatch = {},
+    attachmentLink?: AttachmentLink,
+  ): Promise<RunRecord> {
+    return this.db.transaction(
+      'rw',
+      [this.db.runs, this.db.threads, this.db.nodes, this.db.attachments],
+      async () => {
+        const current = await this.db.runs.get(id);
+        if (!current) throw new Error(`Run not found: ${id}`);
+        assertRunTransition(current.state, state);
+
+        const tree = new ThreadTree(this.db);
+        for (const node of nodes) await tree.appendNode(current.threadId, node);
+
+        for (const attachmentId of attachmentLink?.attachmentIds ?? []) {
+          const attachment = await this.db.attachments.get(attachmentId);
+          if (!attachment || attachment.threadId !== current.threadId) {
+            throw new Error(`Attachment not found in run thread: ${attachmentId}`);
+          }
+          if (attachment.provenance !== 'user') {
+            throw new Error(`Attachment is not a user upload: ${attachmentId}`);
+          }
+          await this.db.attachments.update(attachmentId, {
+            refs: {
+              ...attachment.refs,
+              nodeIds: [...new Set([...(attachment.refs?.nodeIds ?? []), attachmentLink!.nodeId])],
+              runIds: [...new Set([...(attachment.refs?.runIds ?? []), current.id])],
+            },
+          });
+        }
+
+        const updated: RunRecord = {
+          ...current,
+          ...patch,
+          state,
+          revision: current.revision + 1,
+          updatedAt: this.now(),
+        };
+        await this.db.runs.put(updated);
+        return updated;
+      },
+    );
+  }
+
+  async appendAssistantAndCommitUsage(
+    id: string,
+    node: AppendNodeInput,
+    usage: Usage,
+    costUsd: number,
+    state: RunState,
+    patch: RunTransitionPatch = {},
+  ): Promise<RunRecord> {
+    if (node.type !== 'assistant_message') {
+      throw new Error('Usage can only be committed with an assistant message');
+    }
+    return this.db.transaction('rw', [this.db.runs, this.db.threads, this.db.nodes], async () => {
+      const current = await this.db.runs.get(id);
+      if (!current) throw new Error(`Run not found: ${id}`);
+      assertRunTransition(current.state, state);
+      await new ThreadTree(this.db).appendNode(current.threadId, node);
+      const thread = await this.db.threads.get(current.threadId);
+      if (!thread) throw new Error(`Thread not found: ${current.threadId}`);
+
+      const cumulative: Usage = {
+        input: (current.usage?.input ?? 0) + usage.input,
+        output: (current.usage?.output ?? 0) + usage.output,
+        ...(current.usage?.cacheRead !== undefined || usage.cacheRead !== undefined
+          ? { cacheRead: (current.usage?.cacheRead ?? 0) + (usage.cacheRead ?? 0) }
+          : {}),
+      };
+      const updated: RunRecord = {
+        ...current,
+        ...patch,
+        state,
+        usage: cumulative,
+        costUsd: (current.costUsd ?? 0) + costUsd,
+        revision: current.revision + 1,
+        updatedAt: this.now(),
+      };
+      await this.db.runs.put(updated);
+      await this.db.threads.update(current.threadId, {
+        stats: {
+          ...thread.stats,
+          totalTokens: thread.stats.totalTokens + usage.input + usage.output,
+          costUsd: thread.stats.costUsd + costUsd,
+        },
+        revision: thread.revision + 1,
+        updatedAt: this.now(),
+      });
+      return updated;
+    });
+  }
+
+  async recoverOpenRuns(): Promise<RecoveredRun[]> {
+    return this.db.transaction('rw', this.db.runs, async () => {
+      const open = (await this.db.runs.toArray()).filter(
+        (run) => !terminalStates.includes(run.state),
+      );
+      const recovered: RecoveredRun[] = [];
+      for (const run of open) {
+        const decision = recoverInterruptedRun({
+          state: run.state,
+          pendingTool: run.pendingTool,
+        });
+        const updated: RunRecord = {
+          ...run,
+          state: decision.state,
+          revision: run.revision + (decision.state === run.state ? 0 : 1),
+          updatedAt: this.now(),
+        };
+        await this.db.runs.put(updated);
+        recovered.push({ ...updated, recoveryAction: decision.action });
+      }
+      return recovered;
+    });
+  }
+
+  async commitUsage(id: string, usage: Usage, costUsd = 0): Promise<RunRecord> {
+    return this.db.transaction('rw', [this.db.runs, this.db.threads], async () => {
+      const run = await this.db.runs.get(id);
+      if (!run) throw new Error(`Run not found: ${id}`);
+      const thread = await this.db.threads.get(run.threadId);
+      if (!thread) throw new Error(`Thread not found: ${run.threadId}`);
+
+      const cumulative: Usage = {
+        input: (run.usage?.input ?? 0) + usage.input,
+        output: (run.usage?.output ?? 0) + usage.output,
+        ...(run.usage?.cacheRead !== undefined || usage.cacheRead !== undefined
+          ? { cacheRead: (run.usage?.cacheRead ?? 0) + (usage.cacheRead ?? 0) }
+          : {}),
+      };
+      const updated: RunRecord = {
+        ...run,
+        usage: cumulative,
+        costUsd: (run.costUsd ?? 0) + costUsd,
+        revision: run.revision + 1,
+        updatedAt: this.now(),
+      };
+      await this.db.runs.put(updated);
+      await this.db.threads.update(run.threadId, {
+        stats: {
+          ...thread.stats,
+          totalTokens: thread.stats.totalTokens + usage.input + usage.output,
+          costUsd: thread.stats.costUsd + costUsd,
+        },
+        revision: thread.revision + 1,
+        updatedAt: this.now(),
+      });
+      return updated;
+    });
+  }
+
+  async activateSkill(id: string, skillId: string): Promise<RunRecord> {
+    return this.db.transaction('rw', this.db.runs, async () => {
+      const run = await this.db.runs.get(id);
+      if (!run?.environment) throw new Error(`Run environment not found: ${id}`);
+      if (run.environment.activeSkills.includes(skillId)) return run;
+      const updated: RunRecord = {
+        ...run,
+        environment: {
+          ...run.environment,
+          activeSkills: [...run.environment.activeSkills, skillId],
+        },
+        revision: run.revision + 1,
+        updatedAt: this.now(),
+      };
+      await this.db.runs.put(updated);
+      return updated;
+    });
+  }
+}

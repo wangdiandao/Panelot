@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EngineHost, StubEngineCore, type EngineCore } from '../../src/engine/host';
-import { PROTOCOL_VERSION } from '../../src/messaging/protocol';
+import { ENGINE_PROTOCOL, ENGINE_SCHEMA_HASH } from '../../src/messaging/protocol';
 import type { AgentEvent, Op, ThreadSnapshot } from '../../src/messaging/protocol';
 import { createDirectPair, type EngineTransport } from '../../src/messaging/transport';
 
@@ -22,7 +22,9 @@ function init(transport: EngineTransport, threadId?: string) {
   transport.send({
     type: 'initialize',
     submissionId: 'init-1',
-    protocolVersion: PROTOCOL_VERSION,
+    protocol: ENGINE_PROTOCOL,
+    schemaHash: ENGINE_SCHEMA_HASH,
+    clientId: 'host-test-client',
     ...(threadId ? { subscribe: { threadId } } : {}),
   });
 }
@@ -40,22 +42,56 @@ describe('EngineHost handshake', () => {
     expect(events[0]).toMatchObject({
       type: 'initialized',
       submissionId: 'init-1',
-      protocolVersion: PROTOCOL_VERSION,
+      protocol: ENGINE_PROTOCOL,
+      schemaHash: ENGINE_SCHEMA_HASH,
     });
     expect((events[0] as { snapshot?: unknown }).snapshot).toBeUndefined();
+  });
+
+  it('requires a matching protocol and schema hash, then disconnects stale clients', async () => {
+    const host = new EngineHost(new StubEngineCore());
+    const t = connect(host);
+    const events = collect(t);
+    const disconnected = vi.fn();
+    t.onDisconnect(disconnected);
+
+    t.send({
+      type: 'initialize',
+      submissionId: 'stale-init',
+      protocol: ENGINE_PROTOCOL,
+      schemaHash: 'stale-schema',
+      clientId: 'stale-client',
+    } as Op);
+    await flush();
+
+    expect(events[0]).toMatchObject({
+      type: 'fatal.reload_required',
+      submissionId: 'stale-init',
+      protocol: ENGINE_PROTOCOL,
+      schemaHash: ENGINE_SCHEMA_HASH,
+    });
+    expect(disconnected).toHaveBeenCalledOnce();
   });
 
   it('returns a snapshot when subscribing to an existing thread', async () => {
     const snapshot: ThreadSnapshot = {
       meta: {
-        id: 't1', title: 'Test', createdAt: 1, updatedAt: 2, leafId: null,
-        archived: false, pinned: false,
+        id: 't1',
+        revision: 0,
+        title: 'Test',
+        createdAt: 1,
+        updatedAt: 2,
+        leafId: null,
+        archived: false,
+        pinned: false,
         stats: { turns: 0, totalTokens: 0, costUsd: 0 },
       },
       items: [],
       activeTurn: null,
       pendingApprovals: [],
       queuedInputs: 0,
+      queuedRuns: [],
+      recoverableRuns: [],
     };
     const core: EngineCore = {
       handleOp: vi.fn(async () => {}),
@@ -108,7 +144,7 @@ describe('EngineHost handshake', () => {
 });
 
 describe('EngineHost bounded queue', () => {
-  it('emits overloaded when a thread queue exceeds capacity', async () => {
+  it('rejects a command when a thread queue exceeds capacity', async () => {
     // A core whose op handling never resolves, so the queue only fills.
     let firstStarted = false;
     const core: EngineCore = {
@@ -133,9 +169,11 @@ describe('EngineHost bounded queue', () => {
     await flush();
 
     expect(firstStarted).toBe(true);
-    const overloaded = events.filter((e) => e.type === 'overloaded');
-    expect(overloaded).toHaveLength(1);
-    expect(overloaded[0]).toMatchObject({ submissionId: 's33' });
+    const rejected = events.filter(
+      (event) => event.type === 'command.rejected' && event.code === 'overloaded',
+    );
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]).toMatchObject({ submissionId: 's33' });
   });
 
   it('serializes ops per thread but runs threads independently', async () => {
@@ -175,10 +213,22 @@ describe('EngineHost event routing', () => {
   it('broadcasts thread events only to subscribers of that thread', async () => {
     const snapshot: ThreadSnapshot = {
       meta: {
-        id: 'tA', title: '', createdAt: 0, updatedAt: 0, leafId: null,
-        archived: false, pinned: false, stats: { turns: 0, totalTokens: 0, costUsd: 0 },
+        id: 'tA',
+        revision: 0,
+        title: '',
+        createdAt: 0,
+        updatedAt: 0,
+        leafId: null,
+        archived: false,
+        pinned: false,
+        stats: { turns: 0, totalTokens: 0, costUsd: 0 },
       },
-      items: [], activeTurn: null, pendingApprovals: [], queuedInputs: 0,
+      items: [],
+      activeTurn: null,
+      pendingApprovals: [],
+      queuedInputs: 0,
+      queuedRuns: [],
+      recoverableRuns: [],
     };
     const core: EngineCore = {
       handleOp: vi.fn(async () => {}),
@@ -196,7 +246,13 @@ describe('EngineHost event routing', () => {
     init(bystander);
     await flush();
 
-    host.broadcast({ type: 'turn.start', threadId: 'tA', turnId: 'x', turnKind: 'user', steerable: true });
+    host.broadcast({
+      type: 'turn.start',
+      threadId: 'tA',
+      turnId: 'x',
+      turnKind: 'user',
+      steerable: true,
+    });
     await flush();
 
     expect(subEvents.some((e) => e.type === 'turn.start')).toBe(true);
@@ -218,12 +274,18 @@ describe('EngineHost event routing', () => {
     init(otherThreadClient);
     await flush();
 
-    host.broadcast({ type: 'activity.updated', activity: { threadId: 'tA', running: true, pendingApprovals: 0 } });
+    host.broadcast({
+      type: 'activity.updated',
+      activity: { threadId: 'tA', running: true, pendingApprovals: 0 },
+    });
     await flush();
 
     const got = events.find((e) => e.type === 'activity.updated');
     expect(got).toBeDefined();
-    expect((got as { activity: { threadId: string; running: boolean } }).activity).toMatchObject({ threadId: 'tA', running: true });
+    expect((got as { activity: { threadId: string; running: boolean } }).activity).toMatchObject({
+      threadId: 'tA',
+      running: true,
+    });
   });
 
   // item.delta/complete now carry threadId (cross-thread isolation), so the
@@ -231,14 +293,22 @@ describe('EngineHost event routing', () => {
   function subscribedHost(threadId: string) {
     const snapshot: ThreadSnapshot = {
       meta: {
-        id: threadId, title: '', createdAt: 1, updatedAt: 2, leafId: null,
-        archived: false, pinned: false,
+        id: threadId,
+        revision: 0,
+        title: '',
+        createdAt: 1,
+        updatedAt: 2,
+        leafId: null,
+        archived: false,
+        pinned: false,
         stats: { turns: 0, totalTokens: 0, costUsd: 0 },
       },
       items: [],
       activeTurn: null,
       pendingApprovals: [],
       queuedInputs: 0,
+      queuedRuns: [],
+      recoverableRuns: [],
     };
     const core: EngineCore = {
       handleOp: vi.fn(async () => {}),
@@ -272,7 +342,12 @@ describe('EngineHost event routing', () => {
     init(t, 'tC');
     await flush();
 
-    host.broadcast({ type: 'item.delta', threadId: 'tC', itemId: 'i1', delta: { text: 'partial' } });
+    host.broadcast({
+      type: 'item.delta',
+      threadId: 'tC',
+      itemId: 'i1',
+      delta: { text: 'partial' },
+    });
     host.broadcast({ type: 'item.complete', threadId: 'tC', itemId: 'i1', result: { ok: true } });
     await flush();
 

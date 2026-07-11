@@ -13,9 +13,29 @@ import { parseSkill, skillMatchesUrl, type SkillFrontmatter } from './parse';
 export class SkillManager {
   constructor(private db: PanelotDB) {}
 
-  async importFromText(raw: string, source: SkillRecord['source'] = 'imported', sourceRef?: string): Promise<SkillRecord> {
-    const parsed = parseSkill(raw);
-    const existing = await this.db.skills.where('name').equals(parsed.frontmatter.name).first();
+  async importFromText(
+    raw: string,
+    source: SkillRecord['source'] = 'imported',
+    sourceRef?: string,
+    options: {
+      conflict?: 'error' | 'overwrite' | 'rename';
+      existingId?: string;
+    } = {},
+  ): Promise<SkillRecord> {
+    let parsed = parseSkill(raw);
+    let existing = await this.db.skills.where('name').equals(parsed.frontmatter.name).first();
+    if (existing && existing.id !== options.existingId) {
+      const conflict = options.conflict ?? 'error';
+      if (conflict === 'error') throw new SkillNameConflictError(parsed.frontmatter.name);
+      if (conflict === 'rename') {
+        const name = await this.availableName(parsed.frontmatter.name);
+        raw = raw.replace(/^(name\s*:\s*).+$/m, `$1${name}`);
+        parsed = parseSkill(raw);
+        existing = undefined;
+      }
+    } else if (options.existingId) {
+      existing = await this.db.skills.get(options.existingId);
+    }
     const now = Date.now();
     const record: SkillRecord = {
       id: existing?.id ?? crypto.randomUUID(),
@@ -31,6 +51,14 @@ export class SkillManager {
     };
     await this.db.skills.put(record);
     return record;
+  }
+
+  private async availableName(base: string): Promise<string> {
+    for (let suffix = 2; suffix < 10_000; suffix++) {
+      const candidate = `${base}-${suffix}`;
+      if (!(await this.db.skills.where('name').equals(candidate).first())) return candidate;
+    }
+    throw new Error(`Unable to find an available name for ${base}`);
   }
 
   async list(): Promise<SkillRecord[]> {
@@ -75,7 +103,12 @@ export class SkillManager {
 
   async getBody(name: string): Promise<string | null> {
     const skill = await this.db.skills.where('name').equals(name).first();
-    return skill?.body ?? null;
+    return skill?.enabled ? skill.body : null;
+  }
+
+  async getEnabled(name: string): Promise<SkillRecord | null> {
+    const skill = await this.db.skills.where('name').equals(name).first();
+    return skill?.enabled ? skill : null;
   }
 
   /**
@@ -98,17 +131,28 @@ export class SkillManager {
   }
 }
 
+export class SkillNameConflictError extends Error {
+  constructor(readonly skillName: string) {
+    super(`Skill "${skillName}" already exists`);
+    this.name = 'SkillNameConflictError';
+  }
+}
+
 // ---------------------------------------------------------------------------
 // load_skill tool (docs/08 §2 step 2-3) — progressive disclosure
 // ---------------------------------------------------------------------------
 
-export function createLoadSkillTool(manager: SkillManager, getThreadId: () => string): AnyAgentTool {
+export function createLoadSkillTool(
+  manager: SkillManager,
+  getThreadId: () => string,
+): AnyAgentTool {
   // Per-thread "already loaded" guard so a skill body is only injected once.
   const loaded = new Map<string, Set<string>>();
   return {
     name: 'load_skill',
     label: '加载技能',
-    description: 'Load the full instructions of a skill by name. Call before executing any task matching a skill description.',
+    description:
+      'Load the full instructions of a skill by name. Call before executing any task matching a skill description.',
     parameters: z.object({ name: z.string() }),
     level: 'builtin',
     effects: 'read',
@@ -120,12 +164,19 @@ export function createLoadSkillTool(manager: SkillManager, getThreadId: () => st
         loaded.set(threadId, threadLoaded);
       }
       if (threadLoaded.has(params.name)) {
-        return { content: [{ type: 'text', text: `技能 "${params.name}" 已加载（本会话内无需重复加载）。` }] };
+        return {
+          content: [
+            { type: 'text', text: `技能 "${params.name}" 已加载（本会话内无需重复加载）。` },
+          ],
+        };
       }
-      const body = await manager.getBody(params.name);
-      if (!body) return { content: [{ type: 'text', text: `未找到技能 "${params.name}"。` }] };
+      const skill = await manager.getEnabled(params.name);
+      if (!skill) return { content: [{ type: 'text', text: `未找到技能 "${params.name}"。` }] };
       threadLoaded.add(params.name);
-      return { content: [{ type: 'text', text: `# Skill: ${params.name}\n\n${body}` }] };
+      return {
+        content: [{ type: 'text', text: `# Skill: ${params.name}\n\n${skill.body}` }],
+        details: { activeSkillId: skill.id },
+      };
     },
   };
 }

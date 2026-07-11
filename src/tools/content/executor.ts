@@ -9,7 +9,13 @@
  */
 
 import { buildSnapshot, type SnapshotResult } from '../snapshot/engine';
-import { BADGE_BG, BADGE_BORDER, BADGE_FG, BRAND_PRIMARY, BRAND_PRIMARY_HALO } from '../../styles/brand';
+import {
+  BADGE_BG,
+  BADGE_BORDER,
+  BADGE_FG,
+  BRAND_PRIMARY,
+  BRAND_PRIMARY_HALO,
+} from '../../styles/brand';
 
 // ---------------------------------------------------------------------------
 // State (per tab, in-memory only — docs/02 §2.2 "not persisted")
@@ -18,7 +24,12 @@ import { BADGE_BG, BADGE_BORDER, BADGE_FG, BRAND_PRIMARY, BRAND_PRIMARY_HALO } f
 let currentSnapshot: SnapshotResult | null = null;
 let snapshotCounter = 0;
 
-const WAIT_DEFAULTS = { minWaitMs: 250, networkIdleMs: 500, maxWaitMs: 5000, betweenActionsMs: 300 };
+const WAIT_DEFAULTS = {
+  minWaitMs: 250,
+  networkIdleMs: 500,
+  maxWaitMs: 5000,
+  betweenActionsMs: 300,
+};
 
 // ---------------------------------------------------------------------------
 // Ref resolution — versioned, expiry-checked (docs/05 §1.1)
@@ -55,7 +66,11 @@ async function stabilize(opts = WAIT_DEFAULTS): Promise<{ timedOut: boolean }> {
     const observer = new MutationObserver(() => {
       lastMutation = Date.now();
     });
-    observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true });
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+    });
 
     const check = () => {
       const now = Date.now();
@@ -84,7 +99,8 @@ let overlayHost: HTMLElement | null = null;
 function getOverlay(): ShadowRoot {
   if (!overlayHost || !overlayHost.isConnected) {
     overlayHost = document.createElement('panelot-overlay');
-    overlayHost.style.cssText = 'all:initial;position:fixed;z-index:2147483647;pointer-events:none;';
+    overlayHost.style.cssText =
+      'all:initial;position:fixed;z-index:2147483647;pointer-events:none;';
     document.documentElement.appendChild(overlayHost);
     overlayHost.attachShadow({ mode: 'open' });
   }
@@ -113,8 +129,7 @@ export function showIndicator(text: string): void {
   if (!badge) {
     badge = document.createElement('div');
     badge.id = 'indicator';
-    badge.style.cssText =
-      `position:fixed;right:16px;bottom:16px;background:${BADGE_BG};color:${BADGE_FG};border:1px solid ${BADGE_BORDER};border-radius:999px;padding:6px 12px;font:12px Inter,system-ui;pointer-events:none;box-shadow:0 2px 12px rgba(0,0,0,.4);`;
+    badge.style.cssText = `position:fixed;right:16px;bottom:16px;background:${BADGE_BG};color:${BADGE_FG};border:1px solid ${BADGE_BORDER};border-radius:999px;padding:6px 12px;font:12px Inter,system-ui;pointer-events:none;box-shadow:0 2px 12px rgba(0,0,0,.4);`;
     shadow.appendChild(badge);
   }
   badge.textContent = text;
@@ -143,13 +158,17 @@ if (typeof document !== 'undefined') {
     try {
       const detail = JSON.parse((e as CustomEvent<string>).detail);
       pendingDialogs.push(detail);
-    } catch { /* malformed — page interference, ignore */ }
+    } catch {
+      /* malformed — page interference, ignore */
+    }
   });
 }
 
 function drainDialogReports(): string {
   if (pendingDialogs.length === 0) return '';
-  const lines = pendingDialogs.map((d) => `- ${d.kind}("${d.message.slice(0, 200)}") → ${d.response}`);
+  const lines = pendingDialogs.map(
+    (d) => `- ${d.kind}("${d.message.slice(0, 200)}") → ${d.response}`,
+  );
   pendingDialogs.length = 0;
   return `\n[页面弹出了 ${lines.length} 个对话框，已自动处理:\n${lines.join('\n')}]`;
 }
@@ -178,14 +197,19 @@ function dispatchInputEvents(el: HTMLElement): void {
 
 /** Set a native input value in a way React/Vue notice (native setter). */
 function setNativeValue(el: HTMLInputElement | HTMLTextAreaElement, value: string): void {
-  const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  const proto =
+    el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
   const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
   if (setter) setter.call(el, value);
   else el.value = value;
   dispatchInputEvents(el);
 }
 
-async function doClick(params: { ref: string; button?: 'left' | 'right'; doubleClick?: boolean }): Promise<string> {
+async function doClick(params: {
+  ref: string;
+  button?: 'left' | 'right';
+  doubleClick?: boolean;
+}): Promise<string> {
   const el = resolveRef(params.ref) as HTMLElement;
   el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' as ScrollBehavior });
   // Occlusion check: a covered element would silently "succeed" while a real
@@ -219,7 +243,13 @@ async function doClick(params: { ref: string; button?: 'left' | 'right'; doubleC
   return `已点击`;
 }
 
-async function doType(params: { ref: string; text: string; mode?: 'replace' | 'append'; submit?: boolean; slowly?: boolean }): Promise<string> {
+async function doType(params: {
+  ref: string;
+  text: string;
+  mode?: 'replace' | 'append';
+  submit?: boolean;
+  slowly?: boolean;
+}): Promise<string> {
   const el = resolveRef(params.ref) as HTMLElement;
   el.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior });
   highlight(el);
@@ -253,7 +283,14 @@ async function doType(params: { ref: string; text: string; mode?: 'replace' | 'a
   }
 
   if (params.submit) {
-    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
+    el.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Enter',
+        code: 'Enter',
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
     el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
     (el.closest('form') as HTMLFormElement | null)?.requestSubmit?.();
   }
@@ -266,12 +303,16 @@ async function doSelect(params: { ref: string; values: string[] }): Promise<stri
   highlight(el);
   const matched: string[] = [];
   for (const option of el.options) {
-    const hit = params.values.includes(option.value) || params.values.includes(option.textContent?.trim() ?? '');
+    const hit =
+      params.values.includes(option.value) ||
+      params.values.includes(option.textContent?.trim() ?? '');
     option.selected = hit;
     if (hit) matched.push(option.value);
   }
   if (matched.length === 0) {
-    const available = [...el.options].map((o) => `"${o.textContent?.trim()}" (value=${o.value})`).join(', ');
+    const available = [...el.options]
+      .map((o) => `"${o.textContent?.trim()}" (value=${o.value})`)
+      .join(', ');
     throw new Error(`未匹配到选项。可用选项：${available}`);
   }
   dispatchInputEvents(el);
@@ -297,8 +338,14 @@ async function doPressKey(params: { key: string }): Promise<string> {
   return `已按键 ${params.key}`;
 }
 
-async function doScroll(params: { target?: string; direction: 'up' | 'down'; amount?: 'page' | 'end' | number }): Promise<string> {
-  const container: Element | null = params.target ? resolveRef(params.target) : document.scrollingElement;
+async function doScroll(params: {
+  target?: string;
+  direction: 'up' | 'down';
+  amount?: 'page' | 'end' | number;
+}): Promise<string> {
+  const container: Element | null = params.target
+    ? resolveRef(params.target)
+    : document.scrollingElement;
   const el = container ?? document.documentElement;
   const sign = params.direction === 'down' ? 1 : -1;
   if (params.amount === 'end') {
@@ -323,12 +370,21 @@ async function doHover(params: { ref: string }): Promise<string> {
   return `已悬停`;
 }
 
-async function doWaitFor(params: { text?: string; textGone?: boolean | string; timeMs?: number }): Promise<string> {
+async function doWaitFor(params: {
+  text?: string;
+  textGone?: boolean | string;
+  timeMs?: number;
+}): Promise<string> {
   if (params.timeMs !== undefined) {
     await sleep(Math.min(params.timeMs, 30_000));
     return `已等待 ${params.timeMs}ms`;
   }
-  const gone = typeof params.textGone === 'string' ? params.textGone : params.textGone ? params.text : undefined;
+  const gone =
+    typeof params.textGone === 'string'
+      ? params.textGone
+      : params.textGone
+        ? params.text
+        : undefined;
   const target = gone ?? params.text;
   if (!target) throw new Error('wait_for 需要 text / textGone / timeMs 之一');
 
@@ -343,7 +399,12 @@ async function doWaitFor(params: { text?: string; textGone?: boolean | string; t
   }
 }
 
-async function doUpload(params: { ref: string; filename: string; mime: string; base64: string }): Promise<string> {
+async function doUpload(params: {
+  ref: string;
+  filename: string;
+  mime: string;
+  base64: string;
+}): Promise<string> {
   const el = resolveRef(params.ref);
   if (!(el instanceof HTMLInputElement) || el.type !== 'file') {
     throw new Error(`ref ${params.ref} 不是文件输入框（<input type="file">）`);
@@ -378,7 +439,8 @@ function doFindInPage(params: { query: string }): string {
     .split('\n')
     .filter((line) => line.toLowerCase().includes(q))
     .slice(0, 20);
-  if (hits.length === 0) return `页面快照中未找到 "${params.query}"。可尝试滚动后重试，或用 read_page 查看完整快照。`;
+  if (hits.length === 0)
+    return `页面快照中未找到 "${params.query}"。可尝试滚动后重试，或用 read_page 查看完整快照。`;
   return `命中 ${hits.length} 行：\n${hits.join('\n')}`;
 }
 
@@ -388,7 +450,10 @@ function doFindInPage(params: { query: string }): string {
 
 function takeSnapshot(params: { maxTokens?: number }): string {
   snapshotCounter++;
-  currentSnapshot = buildSnapshot(window, { snapshotId: snapshotCounter, maxTokens: params.maxTokens ?? 3000 });
+  currentSnapshot = buildSnapshot(window, {
+    snapshotId: snapshotCounter,
+    maxTokens: params.maxTokens ?? 3000,
+  });
   if (currentSnapshot.refMap.size === 0 && (document.body?.innerText ?? '').trim() === '') {
     // Explicit failure so the gateway can trigger the L2/AXTree fallback chain
     // (docs/05 §1.4 — never return an empty tree silently).
@@ -426,13 +491,20 @@ const EXTRACT_HARD_CAP = 200_000;
 function doExtract(params: { scope?: string }): string {
   const root = params.scope
     ? (resolveRef(params.scope) as HTMLElement)
-    : (document.querySelector('article') ?? document.querySelector('main') ?? document.body) as HTMLElement;
+    : ((document.querySelector('article') ??
+        document.querySelector('main') ??
+        document.body) as HTMLElement);
   const clone = root.cloneNode(true) as HTMLElement;
   clone.querySelectorAll(CHROME_SELECTOR).forEach((el) => el.remove());
 
-  const md = domToMarkdown(clone).replace(/\n{3,}/g, '\n\n').trim();
+  const md = domToMarkdown(clone)
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
   const header = `# ${document.title}\nURL: ${location.href}\n\n`;
-  const body = md.length > EXTRACT_HARD_CAP ? `${md.slice(0, EXTRACT_HARD_CAP)}\n[正文超长，已在 ${EXTRACT_HARD_CAP} 字符截断]` : md;
+  const body =
+    md.length > EXTRACT_HARD_CAP
+      ? `${md.slice(0, EXTRACT_HARD_CAP)}\n[正文超长，已在 ${EXTRACT_HARD_CAP} 字符截断]`
+      : md;
   return header + body;
 }
 
@@ -460,7 +532,11 @@ function domToMarkdown(root: HTMLElement): string {
       const href = el.getAttribute('href');
       if (text && href && !href.startsWith('javascript:')) {
         let abs = href;
-        try { abs = new URL(href, location.href).href; } catch { /* keep raw */ }
+        try {
+          abs = new URL(href, location.href).href;
+        } catch {
+          /* keep raw */
+        }
         parts.push(`[${text}](${abs})`);
       } else if (text) {
         parts.push(text);
@@ -537,9 +613,18 @@ export interface ExecuteResult {
   /** New incremental snapshot after write actions. */
   snapshot?: string;
   pageStabilized?: boolean;
+  rect?: { x: number; y: number; width: number; height: number };
 }
 
-const WRITE_ACTIONS = new Set(['click', 'type', 'select_option', 'press_key', 'hover', 'batch_actions', 'upload']);
+const WRITE_ACTIONS = new Set([
+  'click',
+  'type',
+  'select_option',
+  'press_key',
+  'hover',
+  'batch_actions',
+  'upload',
+]);
 
 export async function executeContentTool(tool: string, params: unknown): Promise<ExecuteResult> {
   agentActing = true;
@@ -561,6 +646,19 @@ export async function executeContentTool(tool: string, params: unknown): Promise
         return { resultText: doExtract(p) };
       case 'get_selection':
         return { resultText: doGetSelection() };
+      case 'get_rect': {
+        const element = resolveRef(p.ref);
+        const rect = element.getBoundingClientRect();
+        return {
+          resultText: `Bounds for ${p.ref}`,
+          rect: {
+            x: rect.left + window.scrollX,
+            y: rect.top + window.scrollY,
+            width: rect.width,
+            height: rect.height,
+          },
+        };
+      }
       case 'click':
         resultText = await doClick(p);
         break;

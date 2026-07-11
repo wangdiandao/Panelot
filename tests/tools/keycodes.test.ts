@@ -8,7 +8,13 @@ import { keyEventSequence, parseKeyCombo } from '../../src/tools/cdp/keycodes';
 
 describe('parseKeyCombo', () => {
   it('parses named keys with correct virtual key codes', () => {
-    expect(parseKeyCombo('Enter')).toMatchObject({ key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r', modifiers: 0 });
+    expect(parseKeyCombo('Enter')).toMatchObject({
+      key: 'Enter',
+      code: 'Enter',
+      windowsVirtualKeyCode: 13,
+      text: '\r',
+      modifiers: 0,
+    });
     expect(parseKeyCombo('Tab')).toMatchObject({ windowsVirtualKeyCode: 9, text: '' });
     expect(parseKeyCombo('Escape')).toMatchObject({ windowsVirtualKeyCode: 27 });
     expect(parseKeyCombo('ArrowDown')).toMatchObject({ windowsVirtualKeyCode: 40 });
@@ -16,7 +22,13 @@ describe('parseKeyCombo', () => {
   });
 
   it('parses modifier combos into the CDP bitmask (Alt=1 Ctrl=2 Meta=4 Shift=8)', () => {
-    expect(parseKeyCombo('Control+a')).toMatchObject({ key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2, text: '' });
+    expect(parseKeyCombo('Control+a')).toMatchObject({
+      key: 'a',
+      code: 'KeyA',
+      windowsVirtualKeyCode: 65,
+      modifiers: 2,
+      text: '',
+    });
     expect(parseKeyCombo('Shift+Tab')).toMatchObject({ windowsVirtualKeyCode: 9, modifiers: 8 });
     expect(parseKeyCombo('Control+Shift+p')).toMatchObject({ modifiers: 10 });
     expect(parseKeyCombo('Ctrl+c').modifiers).toBe(2);
@@ -52,7 +64,12 @@ describe('parseKeyCombo', () => {
   });
 
   it('unshifted punctuation uses the OEM physical code + VK', () => {
-    expect(parseKeyCombo('/')).toMatchObject({ code: 'Slash', windowsVirtualKeyCode: 191, text: '/', modifiers: 0 });
+    expect(parseKeyCombo('/')).toMatchObject({
+      code: 'Slash',
+      windowsVirtualKeyCode: 191,
+      text: '/',
+      modifiers: 0,
+    });
     expect(parseKeyCombo('.')).toMatchObject({ code: 'Period', windowsVirtualKeyCode: 190 });
     expect(parseKeyCombo('-')).toMatchObject({ code: 'Minus', windowsVirtualKeyCode: 189 });
   });
@@ -62,7 +79,11 @@ describe('keyEventSequence', () => {
   it('printable keys: keyDown with text (native default action) then keyUp', () => {
     const seq = keyEventSequence(parseKeyCombo('Enter'));
     expect(seq).toHaveLength(2);
-    expect(seq[0]!.params).toMatchObject({ type: 'keyDown', text: '\r', windowsVirtualKeyCode: 13 });
+    expect(seq[0]!.params).toMatchObject({
+      type: 'keyDown',
+      text: '\r',
+      windowsVirtualKeyCode: 13,
+    });
     expect(seq[1]!.params).toMatchObject({ type: 'keyUp' });
   });
 

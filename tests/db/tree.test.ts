@@ -18,7 +18,10 @@ const msg = (text: string): UserMessagePayload => ({ content: [{ type: 'text', t
 async function seedThread() {
   const thread = await tree.createThread({ title: 'test' });
   const a = await tree.appendNode(thread.id, { type: 'user_message', payload: msg('A') });
-  const b = await tree.appendNode(thread.id, { type: 'assistant_message', payload: { content: [{ type: 'text', text: 'B' }], model: 'm', connectionId: 'c' } });
+  const b = await tree.appendNode(thread.id, {
+    type: 'assistant_message',
+    payload: { content: [{ type: 'text', text: 'B' }], model: 'm', connectionId: 'c' },
+  });
   const c = await tree.appendNode(thread.id, { type: 'user_message', payload: msg('C') });
   return { thread, a, b, c };
 }
@@ -55,7 +58,10 @@ describe('branching (docs/02 §3.2)', () => {
   it('edit-and-resend creates a sibling and moves the cursor', async () => {
     const { thread, b, c } = await seedThread();
     // Edit message C → sibling of C under parent B.
-    const c2 = await tree.forkAt(thread.id, c.id, { type: 'user_message', payload: msg('C-edited') });
+    const c2 = await tree.forkAt(thread.id, c.id, {
+      type: 'user_message',
+      payload: msg('C-edited'),
+    });
     expect(c2.parentId).toBe(b.id);
 
     const siblings = await tree.getSiblings(thread.id, c2.id);
@@ -68,9 +74,17 @@ describe('branching (docs/02 §3.2)', () => {
   it('switchToSibling descends to the deepest default (highest-seq) descendant', async () => {
     const { thread, c } = await seedThread();
     // Grow branch under original C: C → D → E.
-    await tree.appendNode(thread.id, { type: 'assistant_message', payload: { content: [{ type: 'text', text: 'D' }], model: 'm', connectionId: 'c' }, parentId: c.id });
+    await tree.appendNode(thread.id, {
+      type: 'assistant_message',
+      payload: { content: [{ type: 'text', text: 'D' }], model: 'm', connectionId: 'c' },
+      parentId: c.id,
+    });
     const meta1 = await tree.getThread(thread.id);
-    const e = await tree.appendNode(thread.id, { type: 'user_message', payload: msg('E'), parentId: meta1!.leafId });
+    const e = await tree.appendNode(thread.id, {
+      type: 'user_message',
+      payload: msg('E'),
+      parentId: meta1!.leafId,
+    });
 
     // Fork at C, then switch back to the original C branch.
     await tree.forkAt(thread.id, c.id, { type: 'user_message', payload: msg('C2') });
@@ -122,8 +136,13 @@ describe('integrity validation (docs/02 §3.4)', () => {
     const { thread, c } = await seedThread();
     // Orphan node whose parent does not exist.
     await db.nodes.add({
-      id: 'orphan', threadId: thread.id, parentId: 'missing-parent',
-      seq: 99, ts: Date.now(), type: 'user_message', payload: msg('orphan'),
+      id: 'orphan',
+      threadId: thread.id,
+      parentId: 'missing-parent',
+      seq: 99,
+      ts: Date.now(),
+      type: 'user_message',
+      payload: msg('orphan'),
     });
     await db.threads.update(thread.id, { leafId: 'orphan' });
 
@@ -136,8 +155,24 @@ describe('integrity validation (docs/02 §3.4)', () => {
     const thread = await tree.createThread({});
     // Hand-craft a 2-node cycle.
     await db.nodes.bulkAdd([
-      { id: 'x', threadId: thread.id, parentId: 'y', seq: 1, ts: 1, type: 'user_message', payload: msg('x') },
-      { id: 'y', threadId: thread.id, parentId: 'x', seq: 2, ts: 2, type: 'user_message', payload: msg('y') },
+      {
+        id: 'x',
+        threadId: thread.id,
+        parentId: 'y',
+        seq: 1,
+        ts: 1,
+        type: 'user_message',
+        payload: msg('x'),
+      },
+      {
+        id: 'y',
+        threadId: thread.id,
+        parentId: 'x',
+        seq: 2,
+        ts: 2,
+        type: 'user_message',
+        payload: msg('y'),
+      },
     ]);
     await expect(tree.getPath(thread.id, 'x')).rejects.toThrow(/corruption/);
   });

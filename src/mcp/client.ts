@@ -1,15 +1,5 @@
-/**
- * McpClient (docs/07 §1): one client per remote server over Streamable HTTP
- * (JSON-RPC 2.0), with SSE fallback for servers that stream responses.
- *
- * Kept dependency-light: a hand-rolled JSON-RPC-over-HTTP client rather than
- * wiring the full @modelcontextprotocol/sdk transport into the service worker
- * (MV3 SW + the SDK's Node assumptions add friction; the wire protocol is
- * small and stable). The `annotations.readOnlyHint` → effects mapping and
- * capability bridging follow the SDK's semantics.
- */
-
-import { SseParser } from '../providers/sse';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 export interface McpTool {
   name: string;
@@ -33,18 +23,14 @@ export interface McpResource {
 
 export interface McpClientOptions {
   url: string;
-  /** Returns the current auth header value, or null. Called per request so
-   *  refreshed tokens are picked up. */
   authHeader: () => Promise<string | null>;
-  /** Called on 401 to trigger re-auth; returns true if re-auth succeeded. */
   onUnauthorized?: () => Promise<boolean>;
+  onCapabilitiesChanged?: () => void;
 }
 
-const PROTOCOL_VERSION = '2025-06-18';
-
 export class McpClient {
-  private nextId = 1;
-  private sessionId: string | null = null;
+  private sdk: Client | null = null;
+  private transport: StreamableHTTPClientTransport | null = null;
   tools: McpTool[] = [];
   prompts: McpPrompt[] = [];
   resources: McpResource[] = [];
@@ -52,110 +38,112 @@ export class McpClient {
   constructor(private opts: McpClientOptions) {}
 
   async connect(): Promise<void> {
-    await this.rpc('initialize', {
-      protocolVersion: PROTOCOL_VERSION,
-      capabilities: {},
-      clientInfo: { name: 'Panelot', version: '0.1.0' },
+    const sdk = new Client(
+      { name: 'Panelot', version: '0.2.0' },
+      {
+        capabilities: {},
+        listChanged: {
+          tools: { onChanged: () => void this.refreshCapabilities() },
+          prompts: { onChanged: () => void this.refreshCapabilities() },
+          resources: { onChanged: () => void this.refreshCapabilities() },
+        },
+      },
+    );
+    const transport = new StreamableHTTPClientTransport(new URL(this.opts.url), {
+      fetch: (input, init) => this.fetchWithAuth(input, init),
     });
-    await this.rpcNotify('notifications/initialized');
+    await sdk.connect(transport);
+    this.sdk = sdk;
+    this.transport = transport;
     await this.refreshCapabilities();
   }
 
+  async close(): Promise<void> {
+    const sdk = this.sdk;
+    this.sdk = null;
+    this.transport = null;
+    if (sdk) await sdk.close();
+  }
+
   async refreshCapabilities(): Promise<void> {
-    this.tools = ((await this.rpc('tools/list', {}).catch(() => ({ tools: [] }))) as { tools: McpTool[] }).tools ?? [];
-    this.prompts = ((await this.rpc('prompts/list', {}).catch(() => ({ prompts: [] }))) as { prompts: McpPrompt[] }).prompts ?? [];
-    this.resources = ((await this.rpc('resources/list', {}).catch(() => ({ resources: [] }))) as { resources: McpResource[] }).resources ?? [];
-  }
-
-  async callTool(name: string, args: unknown): Promise<{ content: { type: string; text?: string }[]; isError?: boolean }> {
-    return this.rpc('tools/call', { name, arguments: args ?? {} }) as Promise<{ content: { type: string; text?: string }[]; isError?: boolean }>;
-  }
-
-  async getPrompt(name: string, args: Record<string, unknown>): Promise<{ messages: { role: string; content: { type: string; text?: string } }[] }> {
-    return this.rpc('prompts/get', { name, arguments: args }) as Promise<{ messages: { role: string; content: { type: string; text?: string } }[] }>;
-  }
-
-  async readResource(uri: string): Promise<{ contents: { uri: string; text?: string; mimeType?: string }[] }> {
-    return this.rpc('resources/read', { uri }) as Promise<{ contents: { uri: string; text?: string; mimeType?: string }[] }>;
-  }
-
-  // ---- JSON-RPC over Streamable HTTP ----------------------------------------
-
-  private async rpc(method: string, params: unknown, retried = false): Promise<unknown> {
-    const id = this.nextId++;
-    const res = await this.post({ jsonrpc: '2.0', id, method, params });
-
-    if (res.status === 401) {
-      if (!retried && this.opts.onUnauthorized && (await this.opts.onUnauthorized())) {
-        return this.rpc(method, params, true);
-      }
-      throw new Error('MCP 服务器需要重新授权 (401)');
-    }
-    if (!res.ok) throw new Error(`MCP ${method} 失败: HTTP ${res.status}`);
-
-    const sessionId = res.headers.get('mcp-session-id');
-    if (sessionId) this.sessionId = sessionId;
-
-    const contentType = res.headers.get('content-type') ?? '';
-    const message = contentType.includes('text/event-stream')
-      ? await this.readSseResponse(res, id)
-      : ((await res.json()) as JsonRpcResponse);
-
-    if (message.error) throw new Error(`MCP ${method} 错误: ${message.error.message}`);
-    return message.result;
-  }
-
-  private async rpcNotify(method: string, params?: unknown): Promise<void> {
-    await this.post({ jsonrpc: '2.0', method, params });
-  }
-
-  private async post(body: object): Promise<Response> {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      Accept: 'application/json, text/event-stream',
-      'MCP-Protocol-Version': PROTOCOL_VERSION,
-    };
-    if (this.sessionId) headers['Mcp-Session-Id'] = this.sessionId;
-    const auth = await this.opts.authHeader();
-    if (auth) headers.Authorization = auth;
-    return fetch(this.opts.url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(60_000), // docs/07 §4 tool timeout
-    });
-  }
-
-  /** Read a single JSON-RPC response from an SSE stream (matched by id). */
-  private async readSseResponse(res: Response, id: number): Promise<JsonRpcResponse> {
-    if (!res.body) throw new Error('SSE 响应无 body');
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    const parser = new SseParser();
-    try {
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        const { events } = parser.feed(decoder.decode(value, { stream: true }));
-        for (const ev of events) {
-          try {
-            const msg = JSON.parse(ev.data) as JsonRpcResponse;
-            if (msg.id === id) return msg;
-          } catch {
-            /* skip non-JSON frames */
+    const sdk = this.requireClient();
+    const [tools, prompts, resources] = await Promise.all([
+      sdk.listTools().catch(() => ({ tools: [] })),
+      sdk.listPrompts().catch(() => ({ prompts: [] })),
+      sdk.listResources().catch(() => ({ resources: [] })),
+    ]);
+    this.tools = tools.tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema as Record<string, unknown>,
+      annotations: tool.annotations
+        ? {
+            readOnlyHint: tool.annotations.readOnlyHint,
+            title: tool.annotations.title,
           }
-        }
-      }
-    } finally {
-      reader.releaseLock();
-    }
-    throw new Error('SSE 流结束但未收到匹配的响应');
+        : undefined,
+    }));
+    this.prompts = prompts.prompts.map((prompt) => ({
+      name: prompt.name,
+      description: prompt.description,
+      arguments: prompt.arguments,
+    }));
+    this.resources = resources.resources.map((resource) => ({
+      uri: resource.uri,
+      name: resource.name,
+      description: resource.description,
+      mimeType: resource.mimeType,
+    }));
+    this.opts.onCapabilitiesChanged?.();
   }
-}
 
-interface JsonRpcResponse {
-  jsonrpc: '2.0';
-  id?: number;
-  result?: unknown;
-  error?: { code: number; message: string };
+  async callTool(
+    name: string,
+    args: unknown,
+  ): Promise<{ content: { type: string; text?: string }[]; isError?: boolean }> {
+    const result = await this.requireClient().callTool({
+      name,
+      arguments: (args ?? {}) as Record<string, unknown>,
+    });
+    return result as { content: { type: string; text?: string }[]; isError?: boolean };
+  }
+
+  async getPrompt(
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<{ messages: { role: string; content: { type: string; text?: string } }[] }> {
+    const promptArguments = Object.fromEntries(
+      Object.entries(args).map(([key, value]) => [key, String(value)]),
+    );
+    return this.requireClient().getPrompt({ name, arguments: promptArguments }) as Promise<{
+      messages: { role: string; content: { type: string; text?: string } }[];
+    }>;
+  }
+
+  async readResource(
+    uri: string,
+  ): Promise<{ contents: { uri: string; text?: string; blob?: string; mimeType?: string }[] }> {
+    return this.requireClient().readResource({ uri }) as Promise<{
+      contents: { uri: string; text?: string; blob?: string; mimeType?: string }[];
+    }>;
+  }
+
+  private requireClient(): Client {
+    if (!this.sdk) throw new Error('MCP client is not connected');
+    return this.sdk;
+  }
+
+  private async fetchWithAuth(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    const request = async () => {
+      const headers = new Headers(init?.headers);
+      const authorization = await this.opts.authHeader();
+      if (authorization) headers.set('Authorization', authorization);
+      return fetch(input, { ...init, headers });
+    };
+    let response = await request();
+    if (response.status === 401 && this.opts.onUnauthorized && (await this.opts.onUnauthorized())) {
+      response = await request();
+    }
+    return response;
+  }
 }

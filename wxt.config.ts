@@ -9,6 +9,11 @@ export default defineConfig({
   outDir: 'dist',
   vite: () => ({
     plugins: [tailwindcss()],
+    resolve: {
+      alias: {
+        dexie: 'dexie/dist/modern/dexie.min.mjs',
+      },
+    },
   }),
   manifest: {
     name: 'Panelot',
@@ -29,6 +34,7 @@ export default defineConfig({
       'identity',
       'clipboardWrite',
       'notifications',
+      'offscreen',
     ],
     optional_host_permissions: ['<all_urls>'],
     host_permissions: [],

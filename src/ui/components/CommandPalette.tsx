@@ -48,13 +48,22 @@ function Highlight({ text, query }: { text: string; query: string }) {
   return (
     <>
       {text.slice(0, idx)}
-      <mark className="rounded-sm bg-primary/20 text-inherit">{text.slice(idx, idx + q.length)}</mark>
+      <mark className="rounded-sm bg-primary/20 text-inherit">
+        {text.slice(idx, idx + q.length)}
+      </mark>
       {text.slice(idx + q.length)}
     </>
   );
 }
 
-export function CommandPalette({ open, onOpenChange, onOpenThread, onNewThread, onOpenSettings, commands = [] }: Props) {
+export function CommandPalette({
+  open,
+  onOpenChange,
+  onOpenThread,
+  onNewThread,
+  onOpenSettings,
+  commands = [],
+}: Props) {
   const [query, setQuery] = useState('');
   const [hits, setHits] = useState<ThreadSearchHit[]>([]);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -63,9 +72,12 @@ export function CommandPalette({ open, onOpenChange, onOpenThread, onNewThread, 
   useEffect(() => {
     if (!open) return;
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => {
-      void searchThreads(db, query).then(setHits);
-    }, query.trim() ? 300 : 0);
+    timer.current = setTimeout(
+      () => {
+        void searchThreads(db, query).then(setHits);
+      },
+      query.trim() ? 300 : 0,
+    );
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
@@ -84,7 +96,13 @@ export function CommandPalette({ open, onOpenChange, onOpenThread, onNewThread, 
   const actionMatch = (label: string) => !q || label.toLowerCase().includes(q);
 
   return (
-    <CommandDialog open={open} onOpenChange={onOpenChange} title={t('palette.title')} description={t('palette.desc')} shouldFilter={false}>
+    <CommandDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title={t('palette.title')}
+      description={t('palette.desc')}
+      shouldFilter={false}
+    >
       <CommandInput
         value={query}
         onValueChange={setQuery}
@@ -96,7 +114,9 @@ export function CommandPalette({ open, onOpenChange, onOpenThread, onNewThread, 
       />
       <CommandList>
         <CommandEmpty>{t('palette.noResults')}</CommandEmpty>
-        {(actionMatch(t('app.newChat')) || actionMatch(t('app.settings')) || commands.some((c) => actionMatch(c.label))) && (
+        {(actionMatch(t('app.newChat')) ||
+          actionMatch(t('app.settings')) ||
+          commands.some((c) => actionMatch(c.label))) && (
           <CommandGroup heading={t('palette.actions')}>
             {actionMatch(t('app.newChat')) && (
               <CommandItem value="__new__" onSelect={runAndClose(onNewThread)}>
@@ -110,18 +130,26 @@ export function CommandPalette({ open, onOpenChange, onOpenThread, onNewThread, 
                 <span className="ml-auto text-[11px] text-faint-foreground">Ctrl+,</span>
               </CommandItem>
             )}
-            {commands.filter((c) => actionMatch(c.label)).map((c) => (
-              <CommandItem key={c.id} value={c.id} onSelect={runAndClose(c.run)}>
-                {c.label}
-                {c.hint && <span className="ml-auto text-[11px] text-faint-foreground">{c.hint}</span>}
-              </CommandItem>
-            ))}
+            {commands
+              .filter((c) => actionMatch(c.label))
+              .map((c) => (
+                <CommandItem key={c.id} value={c.id} onSelect={runAndClose(c.run)}>
+                  {c.label}
+                  {c.hint && (
+                    <span className="ml-auto text-[11px] text-faint-foreground">{c.hint}</span>
+                  )}
+                </CommandItem>
+              ))}
           </CommandGroup>
         )}
         <CommandSeparator />
         <CommandGroup heading={t('palette.threads')}>
           {hits.map(({ thread, snippet }) => (
-            <CommandItem key={thread.id} value={thread.id} onSelect={runAndClose(() => onOpenThread(thread.id))}>
+            <CommandItem
+              key={thread.id}
+              value={thread.id}
+              onSelect={runAndClose(() => onOpenThread(thread.id))}
+            >
               <MessageSquare className="size-4 shrink-0 text-muted-foreground" />
               <div className="flex min-w-0 flex-col">
                 <span className="truncate">

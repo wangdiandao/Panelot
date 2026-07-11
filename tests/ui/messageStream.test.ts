@@ -26,9 +26,16 @@ describe('buildRows live overlay', () => {
 
   it('carries attached context chips onto the echoed user row', () => {
     const attachedContext = [
-      { kind: 'page' as const, label: '淘宝-XX耳机', content: [{ type: 'text' as const, text: '…' }] },
+      {
+        kind: 'page' as const,
+        label: '淘宝-XX耳机',
+        content: [{ type: 'text' as const, text: '…' }],
+      },
     ];
-    const rows = buildRows([], [live({ kind: 'user_message', text: 'compare these', status: 'ok', attachedContext })]);
+    const rows = buildRows(
+      [],
+      [live({ kind: 'user_message', text: 'compare these', status: 'ok', attachedContext })],
+    );
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       kind: 'user',
@@ -39,7 +46,11 @@ describe('buildRows live overlay', () => {
   it('keeps a completed live assistant item visible (no flicker mid-turn)', () => {
     const rows = buildRows([], [live({ text: 'partial answer', status: 'ok' })]);
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ kind: 'assistant', streaming: false, liveText: 'partial answer' });
+    expect(rows[0]).toMatchObject({
+      kind: 'assistant',
+      streaming: false,
+      liveText: 'partial answer',
+    });
   });
 
   it('still marks streaming assistant rows as streaming', () => {
@@ -48,7 +59,10 @@ describe('buildRows live overlay', () => {
   });
 
   it('skips empty live items (no text yet)', () => {
-    const rows = buildRows([], [live({ kind: 'user_message', text: '' }), live({ itemId: 'i2', text: '' })]);
+    const rows = buildRows(
+      [],
+      [live({ kind: 'user_message', text: '' }), live({ itemId: 'i2', text: '' })],
+    );
     expect(rows).toHaveLength(0);
   });
 });
@@ -65,14 +79,22 @@ const item = (kind: SnapshotItem['kind'], payload: unknown): SnapshotItem => ({
   payload,
 });
 const userMsg = (text: string) => item('user_message', { content: [{ type: 'text', text }] });
-const assistantMsg = (text: string) => item('assistant_message', { content: [{ type: 'text', text }], model: 'm', connectionId: 'c' });
+const assistantMsg = (text: string) =>
+  item('assistant_message', { content: [{ type: 'text', text }], model: 'm', connectionId: 'c' });
 const toolCall = (toolName: string, params: unknown = {}) =>
   item('tool_call', { itemId: `t${seq}`, toolName, params, level: 'L1' });
 
 describe('buildRows historical fold (docs/09 §4.2)', () => {
   it('marks tools rows BEFORE the last user message as historical', () => {
     const rows = buildRows(
-      [userMsg('q1'), toolCall('click'), assistantMsg('a1'), userMsg('q2'), toolCall('click'), assistantMsg('a2')],
+      [
+        userMsg('q1'),
+        toolCall('click'),
+        assistantMsg('a1'),
+        userMsg('q2'),
+        toolCall('click'),
+        assistantMsg('a2'),
+      ],
       [],
     );
     const toolsRows = rows.filter((r) => r.kind === 'tools') as { historical?: boolean }[];
@@ -101,7 +123,10 @@ describe('buildRows citations (visited-page pill)', () => {
       [],
     );
     const assistant = rows.find((r) => r.kind === 'assistant') as { citations?: { url: string }[] };
-    expect(assistant.citations?.map((c) => c.url)).toEqual(['https://a.example/x', 'https://b.example/y']);
+    expect(assistant.citations?.map((c) => c.url)).toEqual([
+      'https://a.example/x',
+      'https://b.example/y',
+    ]);
   });
 
   it('resets per turn and ignores non-URL tools', () => {
@@ -116,7 +141,9 @@ describe('buildRows citations (visited-page pill)', () => {
       ],
       [],
     );
-    const assistants = rows.filter((r) => r.kind === 'assistant') as { citations?: { url: string }[] }[];
+    const assistants = rows.filter((r) => r.kind === 'assistant') as {
+      citations?: { url: string }[];
+    }[];
     expect(assistants[0]!.citations?.map((c) => c.url)).toEqual(['https://a.example']);
     expect(assistants[1]!.citations).toBeUndefined();
   });

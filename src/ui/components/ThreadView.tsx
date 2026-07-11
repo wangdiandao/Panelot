@@ -5,8 +5,10 @@
  */
 
 import { useSyncExternalStore, useState, useCallback, useRef, useEffect } from 'react';
-import { TriangleAlert } from 'lucide-react';
+import { toast } from 'sonner';
 import type { ApprovalDecision, ContextBlock } from '../../messaging/protocol';
+import { AttachmentRepository } from '../../data/attachments';
+import { PanelotDB } from '../../db/schema';
 import type { EngineSession, ThreadUiState } from '../engineClient';
 import { MessageStream } from './MessageStream';
 import { PromptInput } from './PromptInput';
@@ -14,18 +16,31 @@ import { ApprovalCard } from './ApprovalCard';
 import { PlanConfirmCard } from './PlanConfirmCard';
 import { EmptyState } from './EmptyState';
 import { QueueDock } from './QueueDock';
+import { RecoveryCard } from './RecoveryCard';
 import { Onboarding } from './Onboarding';
-import { Alert, AlertDescription } from './ui/alert';
 import { Button } from './ui/button';
 import { Skeleton } from './ui/skeleton';
 import { t } from '../i18n';
 
 export function useEngineState(session: EngineSession): ThreadUiState {
-  return useSyncExternalStore(session.store.subscribe, session.store.getState, session.store.getState);
+  return useSyncExternalStore(
+    session.store.subscribe,
+    session.store.getState,
+    session.store.getState,
+  );
 }
 
 /** Human-readable provider-error attribution (docs/03 §7, docs/09 §7). */
-const ERROR_KINDS = new Set(['auth', 'rate_limit', 'overloaded', 'context_too_long', 'content_filter', 'network', 'protocol']);
+const ERROR_KINDS = new Set([
+  'auth',
+  'rate_limit',
+  'overloaded',
+  'context_too_long',
+  'content_filter',
+  'network',
+  'protocol',
+]);
+const attachmentRepository = new AttachmentRepository(new PanelotDB());
 
 function humanizeError(err: { message: string; kind?: string }): string {
   return err.kind && ERROR_KINDS.has(err.kind) ? t(`error.${err.kind}`) : err.message;
@@ -64,7 +79,21 @@ interface Props {
   onPlanCommand?: () => void;
 }
 
-export function ThreadView({ session, providerConfigured, onOpenSettings, onProviderConfigured, stagedContext = [], onRemoveStagedContext, onAttachContext, modelSelectorInComposer = true, surface = 'page', pageUrl, onBackspaceEmpty, contentMaxWidth, onPlanCommand }: Props) {
+export function ThreadView({
+  session,
+  providerConfigured,
+  onOpenSettings,
+  onProviderConfigured,
+  stagedContext = [],
+  onRemoveStagedContext,
+  onAttachContext,
+  modelSelectorInComposer = true,
+  surface = 'page',
+  pageUrl,
+  onBackspaceEmpty,
+  contentMaxWidth,
+  onPlanCommand,
+}: Props) {
   const state = useEngineState(session);
   const [, setSendTick] = useState(0);
   // Debounced disconnect banner (OpenWebUI toast discipline): SW restarts
@@ -108,24 +137,90 @@ export function ThreadView({ session, providerConfigured, onOpenSettings, onProv
     const key = `draft:${state.threadId ?? 'draft'}`;
     try {
       void chrome.storage?.session?.get(key).then((r) => setDraft((r[key] as string) ?? ''));
-    } catch { /* non-extension env */ }
+    } catch {
+      /* non-extension env */
+    }
   }, [state.threadId]);
   useEffect(() => {
     const key = `draft:${state.threadId ?? 'draft'}`;
     try {
       if (draft) void chrome.storage?.session?.set({ [key]: draft });
       else void chrome.storage?.session?.remove(key);
-    } catch { /* non-extension env */ }
+    } catch {
+      /* non-extension env */
+    }
   }, [draft, state.threadId]);
+
+  const buildInput = useCallback(
+    (text: string) => {
+      const attachmentIds = stagedContext.flatMap((block) =>
+        block.kind === 'file' && block.provenance === 'user' && block.sourceRef
+          ? [block.sourceRef]
+          : [],
+      );
+      return {
+        text,
+        attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        attachedContext: stagedContext.length > 0 ? stagedContext : undefined,
+      };
+    },
+    [stagedContext],
+  );
+
+  const consumeStagedContext = useCallback(() => {
+    for (let i = stagedContext.length - 1; i >= 0; i--) onRemoveStagedContext?.(i);
+  }, [stagedContext, onRemoveStagedContext]);
 
   const send = useCallback(
     (text: string) => {
-      session.submit({ text, attachedContext: stagedContext.length > 0 ? stagedContext : undefined });
+      session.submit(buildInput(text));
       // Chips are consumed by the send.
-      for (let i = stagedContext.length - 1; i >= 0; i--) onRemoveStagedContext?.(i);
+      consumeStagedContext();
       setSendTick((t) => t + 1);
     },
-    [session, stagedContext, onRemoveStagedContext],
+    [session, buildInput, consumeStagedContext],
+  );
+
+  const enqueue = useCallback(
+    (text: string) => {
+      session.enqueue(buildInput(text));
+      consumeStagedContext();
+    },
+    [session, buildInput, consumeStagedContext],
+  );
+
+  const attachFile = useCallback(
+    async (file: File): Promise<ContextBlock | null> => {
+      if (!state.threadId) return null;
+      try {
+        const attachment = await attachmentRepository.addUpload({
+          threadId: state.threadId,
+          kind: file.type.startsWith('image/') ? 'image' : 'file',
+          mime: file.type || 'application/octet-stream',
+          bytes: file,
+          provenance: 'user',
+          sourceRef: file.name,
+        });
+        return {
+          kind: 'file',
+          label: file.name,
+          sourceRef: attachment.id,
+          trust: 'trusted',
+          provenance: 'user',
+          content: [
+            {
+              type: 'text',
+              text: `User-provided attachment: ${file.name}\nAttachment ID: ${attachment.id}\nMIME: ${attachment.mime}\nSize: ${attachment.bytes.size} bytes`,
+            },
+          ],
+          approxTokens: 40,
+        };
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : String(error));
+        return null;
+      }
+    },
+    [state.threadId],
   );
 
   const onDecision = useCallback(
@@ -163,7 +258,8 @@ export function ThreadView({ session, providerConfigured, onOpenSettings, onProv
         for (let i = items.length - 1; i >= 0; i--) {
           const item = items[i]!;
           if (item.kind === 'assistant_message') {
-            const content = (item.payload as { content: { type: string; text?: string }[] }).content;
+            const content = (item.payload as { content: { type: string; text?: string }[] })
+              .content;
             const text = content.map((c) => (c.type === 'text' ? c.text : '')).join('');
             if (text) {
               e.preventDefault();
@@ -191,12 +287,22 @@ export function ThreadView({ session, providerConfigured, onOpenSettings, onProv
             {humanizeError(state.lastError)}
           </span>
           {state.lastError.kind === 'auth' && onOpenSettings && (
-            <Button variant="ghost" size="sm" className="h-5 shrink-0 px-2 text-[11px] text-destructive underline-offset-2 hover:underline" onClick={onOpenSettings}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-5 shrink-0 px-2 text-[11px] text-destructive underline-offset-2 hover:underline"
+              onClick={onOpenSettings}
+            >
               {t('error.openSettings')}
             </Button>
           )}
           {state.lastError.retryable && state.lastInput && (
-            <Button variant="ghost" size="sm" className="h-5 shrink-0 px-2 text-[11px] text-destructive underline-offset-2 hover:underline" onClick={() => session.retryLast()}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-5 shrink-0 px-2 text-[11px] text-destructive underline-offset-2 hover:underline"
+              onClick={() => session.retryLast()}
+            >
               {t('error.retry')}
             </Button>
           )}
@@ -205,12 +311,19 @@ export function ThreadView({ session, providerConfigured, onOpenSettings, onProv
       {(showDisconnected || state.loading) && state.items.length === 0 ? (
         /* Thread switch / reconnect: 3-message skeleton (docs/09 §7). */
         <div className="flex-1 space-y-6 px-4 py-6">
-          <div className="flex justify-end"><Skeleton className="h-10 w-3/5 rounded-2xl" /></div>
+          <div className="flex justify-end">
+            <Skeleton className="h-10 w-3/5 rounded-2xl" />
+          </div>
           <div className="flex gap-3">
             <Skeleton className="size-7 rounded-lg" />
-            <div className="flex-1 space-y-2"><Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-4/5" /></div>
+            <div className="flex-1 space-y-2">
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-4/5" />
+            </div>
           </div>
-          <div className="flex justify-end"><Skeleton className="h-10 w-2/5 rounded-2xl" /></div>
+          <div className="flex justify-end">
+            <Skeleton className="h-10 w-2/5 rounded-2xl" />
+          </div>
         </div>
       ) : !providerConfigured && state.items.length === 0 && state.liveItems.length === 0 ? (
         <div className="min-h-0 flex-1 overflow-y-auto">
@@ -244,110 +357,126 @@ export function ThreadView({ session, providerConfigured, onOpenSettings, onProv
       )}
       {/* Bottom dock (approvals / banners / composer) shares the content cap
           so it aligns with the centered rows above. */}
-      <div className="mx-auto w-full" style={contentMaxWidth ? { maxWidth: contentMaxWidth } : undefined}>
-      {state.pendingApprovals.length > 0 && (
-        <div className="space-y-2 px-4 pb-2">
-          {state.pendingApprovals.slice(0, 1).map((a, _, arr) => (
-            <ApprovalCard
-              key={a.approvalId}
-              approval={a}
-              queuePosition={{ index: 1, total: state.pendingApprovals.length || arr.length }}
-              onDecision={onDecision}
+      <div
+        className="mx-auto w-full"
+        style={contentMaxWidth ? { maxWidth: contentMaxWidth } : undefined}
+      >
+        {state.pendingApprovals.length > 0 && (
+          <div className="space-y-2 px-4 pb-2">
+            {state.pendingApprovals.slice(0, 1).map((a, _, arr) => (
+              <ApprovalCard
+                key={a.approvalId}
+                approval={a}
+                queuePosition={{ index: 1, total: state.pendingApprovals.length || arr.length }}
+                onDecision={onDecision}
+              />
+            ))}
+          </div>
+        )}
+        {state.recoverableRuns
+          .filter((run) => run.state !== 'waiting_approval')
+          .slice(0, 1)
+          .map((run) => (
+            <RecoveryCard
+              key={run.runId}
+              run={run}
+              onResume={() => session.resumeRun(run.runId)}
+              onResolve={(resolution) => session.resolveUncertain(run.runId, resolution)}
             />
           ))}
-        </div>
-      )}
-      {state.wasInterrupted && (
-        <Alert className="mx-4 mb-2 w-auto border-warning/40 bg-warning/10 text-warning">
-          <TriangleAlert className="size-4" />
-          <AlertDescription className="flex items-center gap-2 text-[12px] text-warning">
-            <span>{t('recovery.interrupted')}</span>
-            <Button
-              size="sm"
-              className="ml-auto h-6 bg-warning px-2.5 text-[11px] text-warning-foreground hover:bg-warning/90"
-              onClick={() => session.enqueue({ text: '继续刚才的任务' })}
-            >
-              {t('recovery.continue')}
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
-      {!providerConfigured && (
-        <button
-          type="button"
-          onClick={onOpenSettings}
-          className="mx-4 mb-2 rounded-xl border border-primary/40 bg-primary/10 px-3 py-2 text-[12px] text-primary transition-colors hover:bg-primary/20"
-        >
-          {t('input.noProvider')}
-        </button>
-      )}
-      <QueueDock
-        count={state.queuedInputs}
-        texts={state.queuedTexts}
-        paused={state.pendingApprovals.length > 0}
-      />
-      {/* Plan confirm card replaces the composer when plan mode is active and
+        {!providerConfigured && (
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            className="mx-4 mb-2 rounded-xl border border-primary/40 bg-primary/10 px-3 py-2 text-[12px] text-primary transition-colors hover:bg-primary/20"
+          >
+            {t('input.noProvider')}
+          </button>
+        )}
+        <QueueDock
+          runs={state.queuedRuns}
+          paused={state.pendingApprovals.length > 0}
+          onUpdate={(runId, text) => {
+            const run = state.queuedRuns.find((candidate) => candidate.runId === runId);
+            session.updateQueued(runId, { ...run?.input, text }, run?.overrides);
+          }}
+          onRemove={(runId) => session.removeQueued(runId)}
+        />
+        {/* Plan confirm card replaces the composer when plan mode is active and
           the agent has finished writing todos. Approval cards take priority
           (never fold a pending approval). */}
-      {planMode && state.activeTurn === null && state.todos.length > 0 && state.pendingApprovals.length === 0 ? (
-        <PlanConfirmCard
-          todos={state.todos}
-          onConfirm={() => {
-            setPlanMode(false);
-            send(t('plan.confirmMsg'));
-            onPlanCommand?.();
-          }}
-          onEdit={() => {
-            // Drop back to the normal textarea so the user can revise their task.
-            setPlanMode(false);
-          }}
-          onCancel={() => {
-            setPlanMode(false);
-          }}
-        />
-      ) : (
-      <PromptInput
-        running={state.activeTurn !== null}
-        steerable={state.activeTurn?.steerable ?? false}
-        disabled={!providerConfigured}
-        contextChips={stagedContext}
-        onRemoveChip={(i) => onRemoveStagedContext?.(i)}
-        onAttachContext={onAttachContext}
-        onSend={send}
-        onEnqueue={(text) => session.enqueue({ text })}
-        onStop={() => session.interrupt()}
-        textareaRef={inputRef}
-        draft={draft}
-        onDraftChange={setDraft}
-        onBackspaceEmpty={onBackspaceEmpty}
-        onRecallLast={recallLast}
-        modelOverride={state.pendingOverrides.model ?? null}
-        onSelectModel={modelSelectorInComposer ? (choice) =>
-          session.setOverrides({ model: choice ? { connectionId: choice.connectionId, modelId: choice.modelId } : undefined })
-        : undefined}
-        approvalPolicy={state.pendingOverrides.approvalPolicy}
-        planMode={planMode}
-        onSelectPolicy={(tier) => {
-          if (tier === 'plan') {
-            setPlanMode(true);
-            onPlanCommand?.();
-          } else {
-            setPlanMode(false);
-            session.setOverrides({ approvalPolicy: tier });
-          }
-        }}
-        builtinCommands={[{
-          id: '/plan',
-          label: '/plan',
-          hint: t('cmd.planHint'),
-          run: () => {
-            setPlanMode(true);
-            onPlanCommand?.();
-            requestAnimationFrame(() => inputRef.current?.focus());
-          },
-        }]}
-      />
-      )}
+        {planMode &&
+        state.activeTurn === null &&
+        state.todos.length > 0 &&
+        state.pendingApprovals.length === 0 ? (
+          <PlanConfirmCard
+            todos={state.todos}
+            onConfirm={() => {
+              setPlanMode(false);
+              send(t('plan.confirmMsg'));
+              onPlanCommand?.();
+            }}
+            onEdit={() => {
+              // Drop back to the normal textarea so the user can revise their task.
+              setPlanMode(false);
+            }}
+            onCancel={() => {
+              setPlanMode(false);
+            }}
+          />
+        ) : (
+          <PromptInput
+            running={state.activeTurn !== null}
+            steerable={state.activeTurn?.steerable ?? false}
+            disabled={!providerConfigured}
+            contextChips={stagedContext}
+            onRemoveChip={(i) => onRemoveStagedContext?.(i)}
+            onAttachContext={onAttachContext}
+            onAttachFile={onAttachContext ? attachFile : undefined}
+            onSend={send}
+            onEnqueue={enqueue}
+            onStop={() => session.interrupt()}
+            textareaRef={inputRef}
+            draft={draft}
+            onDraftChange={setDraft}
+            onBackspaceEmpty={onBackspaceEmpty}
+            onRecallLast={recallLast}
+            modelOverride={state.pendingOverrides.model ?? null}
+            onSelectModel={
+              modelSelectorInComposer
+                ? (choice) =>
+                    session.setOverrides({
+                      model: choice
+                        ? { connectionId: choice.connectionId, modelId: choice.modelId }
+                        : undefined,
+                    })
+                : undefined
+            }
+            approvalPolicy={state.pendingOverrides.approvalPolicy}
+            planMode={planMode}
+            onSelectPolicy={(tier) => {
+              if (tier === 'plan') {
+                setPlanMode(true);
+                onPlanCommand?.();
+              } else {
+                setPlanMode(false);
+                session.setOverrides({ approvalPolicy: tier });
+              }
+            }}
+            builtinCommands={[
+              {
+                id: '/plan',
+                label: '/plan',
+                hint: t('cmd.planHint'),
+                run: () => {
+                  setPlanMode(true);
+                  onPlanCommand?.();
+                  requestAnimationFrame(() => inputRef.current?.focus());
+                },
+              },
+            ]}
+          />
+        )}
       </div>
     </div>
   );

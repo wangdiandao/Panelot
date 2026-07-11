@@ -18,11 +18,17 @@ describe('greetingKey', () => {
 describe('pageSuggestion', () => {
   it('detects video pages', () => {
     expect(pageSuggestion('https://www.youtube.com/watch?v=1').title).toBeTruthy();
-    expect(pageSuggestion('https://www.youtube.com/watch?v=1')).not.toEqual(pageSuggestion('https://example.com/a'));
+    expect(pageSuggestion('https://www.youtube.com/watch?v=1')).not.toEqual(
+      pageSuggestion('https://example.com/a'),
+    );
   });
   it('detects PDFs and GitHub repos', () => {
-    expect(pageSuggestion('https://x.com/paper.pdf')).not.toEqual(pageSuggestion('https://example.com'));
-    expect(pageSuggestion('https://github.com/foo/bar')).not.toEqual(pageSuggestion('https://example.com'));
+    expect(pageSuggestion('https://x.com/paper.pdf')).not.toEqual(
+      pageSuggestion('https://example.com'),
+    );
+    expect(pageSuggestion('https://github.com/foo/bar')).not.toEqual(
+      pageSuggestion('https://example.com'),
+    );
   });
   it('falls back to a generic page suggestion', () => {
     expect(pageSuggestion(undefined).title).toBeTruthy();

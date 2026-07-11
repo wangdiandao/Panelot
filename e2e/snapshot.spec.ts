@@ -14,10 +14,14 @@ import { transformSync } from 'esbuild';
 const fixtureUrl = 'file://' + fileURLToPath(new URL('./fixtures/form.html', import.meta.url));
 
 // Transpile the snapshot engine for injection (self-contained, no imports).
-const engineSrc = transformSync(
-  readFileSync(path.join(process.cwd(), 'src/tools/snapshot/engine.ts'), 'utf-8').replace(/^import .*$/gm, ''),
-  { loader: 'ts', format: 'iife', globalName: '__engine' },
-).code + '\nvar buildSnapshot = __engine.buildSnapshot;';
+const engineSrc =
+  transformSync(
+    readFileSync(path.join(process.cwd(), 'src/tools/snapshot/engine.ts'), 'utf-8').replace(
+      /^import .*$/gm,
+      '',
+    ),
+    { loader: 'ts', format: 'iife', globalName: '__engine' },
+  ).code + '\nvar buildSnapshot = __engine.buildSnapshot;';
 
 test.describe('snapshot engine in a real browser', () => {
   test('builds a snapshot with refs for a real form', async ({ page }) => {

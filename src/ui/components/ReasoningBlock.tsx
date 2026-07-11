@@ -56,7 +56,12 @@ export function ReasoningBlock({ text, streaming }: { text: string; streaming?: 
         )}
       >
         <Brain className={cn('size-3.5', streaming && 'text-info')} />
-        <span className={cn(streaming && 'animate-shimmer bg-[linear-gradient(110deg,var(--color-muted-foreground)_35%,var(--color-foreground)_50%,var(--color-muted-foreground)_65%)] bg-[length:200%_100%] bg-clip-text text-transparent')}>
+        <span
+          className={cn(
+            streaming &&
+              'animate-shimmer bg-[linear-gradient(110deg,var(--color-muted-foreground)_35%,var(--color-foreground)_50%,var(--color-muted-foreground)_65%)] bg-[length:200%_100%] bg-clip-text text-transparent',
+          )}
+        >
           {label}
         </span>
         <ChevronRight className="size-3 opacity-50 transition-transform group-data-[state=open]/reason:rotate-90" />

@@ -6,12 +6,30 @@
  */
 
 import type { ThreadTree } from '../db/tree';
+import type { AppendNodeInput } from '../db/tree';
+import type { PendingToolExecution, ResolvedRunEnvironment, RunState } from '../db/types';
 import { buildSessionContext } from '../db/sessionContext';
-import type { UserInput, AgentEvent, ApprovalRequestPayload, ApprovalDecision, TurnKind, StopReason, Usage } from '../messaging/protocol';
+import type {
+  UserInput,
+  AgentEvent,
+  ApprovalRequestPayload,
+  ApprovalDecision,
+  TurnKind,
+  StopReason,
+  Usage,
+} from '../messaging/protocol';
 import type { ProviderAdapter, GenParams, ToolSchema } from '../providers/types';
 import { ProviderError } from '../providers/types';
 import { validateParams, type ToolRegistry } from './tool';
-import { CONSECUTIVE_FAILURE_REMIND, CONSECUTIVE_FAILURE_STOP, FAILURE_REMINDER, HARD_STEP_LIMIT, HARD_STEP_NOTICE, STEP_REMINDER, STUCK_REMINDER } from '../prompts/kernel';
+import {
+  CONSECUTIVE_FAILURE_REMIND,
+  CONSECUTIVE_FAILURE_STOP,
+  FAILURE_REMINDER,
+  HARD_STEP_LIMIT,
+  HARD_STEP_NOTICE,
+  STEP_REMINDER,
+  STUCK_REMINDER,
+} from '../prompts/kernel';
 
 // ---------------------------------------------------------------------------
 // Collaborator interfaces (wired by EngineCore; mockable in tests)
@@ -19,12 +37,19 @@ import { CONSECUTIVE_FAILURE_REMIND, CONSECUTIVE_FAILURE_STOP, FAILURE_REMINDER,
 
 /** Gatekeeper facade. */
 export interface GatekeeperCheck {
-  check(call: { toolName: string; params: unknown; effects: 'read' | 'write' }, threadId: string):
-    Promise<
-      | { verdict: 'allow' }
-      | { verdict: 'ask'; request: ApprovalRequestPayload }
-      | { verdict: 'deny'; reason: string }
-    >;
+  check(
+    call: {
+      toolName: string;
+      params: unknown;
+      effects: 'read' | 'write';
+      target?: PendingToolExecution['target'];
+    },
+    threadId: string,
+  ): Promise<
+    | { verdict: 'allow' }
+    | { verdict: 'ask'; request: ApprovalRequestPayload }
+    | { verdict: 'deny'; reason: string }
+  >;
 }
 
 /** Engine-initiated approval RPC: resolves when the user (or timeout) decides. */
@@ -44,6 +69,36 @@ export interface TurnEnv {
   systemPrompt: string;
   params: GenParams;
   enabledToolLevels?: readonly ('L0' | 'L1' | 'L2' | 'mcp')[];
+  turnId?: string;
+  runEnvironment?: ResolvedRunEnvironment;
+  setRunState?: (
+    state: RunState,
+    patch?: {
+      pendingTool?: PendingToolExecution;
+      stepCursor?: number;
+      stopReason?: string;
+      error?: { code: string; message: string };
+    },
+  ) => Promise<void>;
+  appendNodesAndSetRunState?: (
+    nodes: readonly AppendNodeInput[],
+    state: RunState,
+    patch?: {
+      pendingTool?: PendingToolExecution;
+      stepCursor?: number;
+      stopReason?: string;
+      error?: { code: string; message: string };
+    },
+    attachmentLink?: { attachmentIds: readonly string[]; nodeId: string },
+  ) => Promise<void>;
+  appendAssistantAndCommitUsage?: (
+    node: AppendNodeInput,
+    usage: Usage,
+    state: RunState,
+    patch?: { stepCursor?: number },
+  ) => Promise<void>;
+  commitUsage?: (usage: Usage) => Promise<void>;
+  activateSkill?: (skillId: string) => Promise<void>;
   /** Optional hard token budget for the turn (docs/04 §1). */
   tokenBudget?: number;
 }
@@ -67,8 +122,9 @@ export function runTurn(
   threadId: string,
   input: UserInput,
   turnKind: TurnKind = 'user',
+  options: { resumeExisting?: boolean; initialStepCursor?: number } = {},
 ): TurnHandle {
-  const turnId = crypto.randomUUID();
+  const turnId = env.turnId ?? crypto.randomUUID();
   const steerable = turnKind === 'user';
   const abort = new AbortController();
   const steerQueue: UserInput[] = [];
@@ -88,21 +144,48 @@ export function runTurn(
   async function execute(): Promise<StopReason> {
     let stopReason: StopReason = 'done';
     try {
-      // Environment anchor for replay (docs/02 §2.2 turn_context).
-      await env.tree.appendNode(threadId, {
-        type: 'turn_context',
-        payload: {
-          turnId,
-          model: { connectionId: '', modelId: env.model },
-          approvalPolicy: 'untrusted',
-          capabilityScope: 'full',
-          activeSkills: [],
-        },
-      });
-      await env.tree.appendNode(threadId, {
-        type: 'user_message',
-        payload: { content: [{ type: 'text', text: input.text }], attachedContext: input.attachedContext },
-      });
+      if (!options.resumeExisting) {
+        const userNodeId = crypto.randomUUID();
+        const initialNodes: AppendNodeInput[] = [
+          {
+            type: 'turn_context',
+            payload: {
+              turnId,
+              model: {
+                connectionId: env.runEnvironment?.connectionId ?? '',
+                modelId: env.model,
+              },
+              approvalPolicy: env.runEnvironment?.approvalPolicy ?? 'untrusted',
+              capabilityScope: env.runEnvironment?.capabilityScope ?? 'full',
+              activeSkills: env.runEnvironment?.activeSkills ?? [],
+              promptVersion: env.runEnvironment?.promptVersion,
+            },
+          },
+          {
+            id: userNodeId,
+            type: 'user_message',
+            payload: {
+              content: [{ type: 'text', text: input.text }],
+              attachedContext: input.attachedContext,
+            },
+          },
+        ];
+        if (env.appendNodesAndSetRunState) {
+          await env.appendNodesAndSetRunState(
+            initialNodes,
+            'streaming_model',
+            {},
+            input.attachmentIds?.length
+              ? { attachmentIds: input.attachmentIds, nodeId: userNodeId }
+              : undefined,
+          );
+        } else {
+          for (const node of initialNodes) await env.tree.appendNode(threadId, node);
+          await env.setRunState?.('streaming_model');
+        }
+      } else {
+        await env.setRunState?.('streaming_model');
+      }
       env.emit({ type: 'turn.start', threadId, turnId, turnKind, steerable });
 
       let toolCallCount = 0;
@@ -111,6 +194,7 @@ export function runTurn(
       let stuckReminderPending = false;
       let consecutiveFailures = 0; // circuit breaker (browser-use max_failures)
       let turnTokens = 0;
+      let stepCursor = options.initialStepCursor ?? 0;
       // Stuck-loop detection (page-agent reflection pattern): track a rolling
       // window of the last N tool+params fingerprints. If the same call repeats
       // STUCK_REPEAT_THRESHOLD times consecutively, inject a reminder.
@@ -142,7 +226,14 @@ export function runTurn(
 
         // ---- one LLM call ----------------------------------------------------
         const itemId = crypto.randomUUID();
-        env.emit({ type: 'item.start', threadId, turnId, itemId, kind: 'assistant_message', meta: {} });
+        env.emit({
+          type: 'item.start',
+          threadId,
+          turnId,
+          itemId,
+          kind: 'assistant_message',
+          meta: {},
+        });
 
         const toolSchemas: ToolSchema[] = env.tools.schemas(env.enabledToolLevels);
         const stream = env.provider.stream({
@@ -157,8 +248,10 @@ export function runTurn(
         let final;
         try {
           for await (const ev of stream) {
-            if (ev.type === 'text') env.emit({ type: 'item.delta', threadId, itemId, delta: { text: ev.delta } });
-            else if (ev.type === 'reasoning') env.emit({ type: 'item.delta', threadId, itemId, delta: { reasoning: ev.delta } });
+            if (ev.type === 'text')
+              env.emit({ type: 'item.delta', threadId, itemId, delta: { text: ev.delta } });
+            else if (ev.type === 'reasoning')
+              env.emit({ type: 'item.delta', threadId, itemId, delta: { reasoning: ev.delta } });
           }
           final = await stream.final();
         } catch (e) {
@@ -170,16 +263,26 @@ export function runTurn(
           throw e;
         }
 
-        await env.tree.appendNode(threadId, {
+        const assistantNode: AppendNodeInput = {
           type: 'assistant_message',
           payload: {
             content: final.message,
             model: env.model,
-            connectionId: '',
+            connectionId: env.runEnvironment?.connectionId ?? '',
             reasoning: final.reasoning,
             usage: final.usage,
           },
-        });
+        };
+        const nextStepCursor = ++stepCursor;
+        if (env.appendAssistantAndCommitUsage) {
+          await env.appendAssistantAndCommitUsage(assistantNode, final.usage, 'streaming_model', {
+            stepCursor: nextStepCursor,
+          });
+        } else {
+          await env.tree.appendNode(threadId, assistantNode);
+          await env.commitUsage?.(final.usage);
+          await env.setRunState?.('streaming_model', { stepCursor: nextStepCursor });
+        }
         env.emit({ type: 'item.complete', threadId, itemId, result: { ok: true } });
         turnTokens += final.usage.input + final.usage.output;
         env.emit({ type: 'token.usage', threadId, turnId, usage: final.usage });
@@ -191,7 +294,10 @@ export function runTurn(
         for (const steerInput of steerQueue.splice(0)) {
           await env.tree.appendNode(threadId, {
             type: 'user_message',
-            payload: { content: [{ type: 'text', text: steerInput.text }], attachedContext: steerInput.attachedContext },
+            payload: {
+              content: [{ type: 'text', text: steerInput.text }],
+              attachedContext: steerInput.attachedContext,
+            },
           });
         }
 
@@ -217,7 +323,10 @@ export function runTurn(
           if (consecutiveFailures >= CONSECUTIVE_FAILURE_STOP) {
             await env.tree.appendNode(threadId, {
               type: 'system_notice',
-              payload: { text: `连续 ${CONSECUTIVE_FAILURE_STOP} 次工具调用失败，任务已停止。请检查页面状态或换一种方式继续。`, noticeKind: 'paused' },
+              payload: {
+                text: `连续 ${CONSECUTIVE_FAILURE_STOP} 次工具调用失败，任务已停止。请检查页面状态或换一种方式继续。`,
+                noticeKind: 'paused',
+              },
             });
             stopReason = 'error';
             break loop;
@@ -242,30 +351,63 @@ export function runTurn(
             stepReminderPending = true;
             await env.tree.appendNode(threadId, {
               type: 'system_notice',
-              payload: { text: `已执行 ${SOFT_STEP_LIMIT} 步工具调用`, noticeKind: 'step_reminder' },
+              payload: {
+                text: `已执行 ${SOFT_STEP_LIMIT} 步工具调用`,
+                noticeKind: 'step_reminder',
+              },
             });
           }
 
           const tool = env.tools.get(call.name);
 
           env.emit({
-            type: 'item.start', threadId, turnId, itemId: callItemId, kind: 'tool_call',
+            type: 'item.start',
+            threadId,
+            turnId,
+            itemId: callItemId,
+            kind: 'tool_call',
             meta: { toolName: call.name, label: tool?.label ?? call.name, level: tool?.level },
           });
           await env.tree.appendNode(threadId, {
             type: 'tool_call',
-            payload: { itemId: callItemId, toolName: call.name, params: call.params, level: tool?.level ?? 'builtin' },
+            payload: {
+              itemId: callItemId,
+              toolName: call.name,
+              params: call.params,
+              level: tool?.level ?? 'builtin',
+            },
           });
 
           // countsAsFailure=false for user declines / policy denies: those are
           // deliberate "no", not a broken tool. Counting them would let 5
           // declines (or a `never` policy) kill an otherwise-fine turn.
-          const fail = async (error: string, countsAsFailure = true) => {
-            await env.tree.appendNode(threadId, {
+          const fail = async (
+            error: string,
+            countsAsFailure = true,
+            state: RunState = 'streaming_model',
+          ) => {
+            const resultNode: AppendNodeInput = {
               type: 'tool_result',
-              payload: { itemId: callItemId, ok: false, contentForLlm: [{ type: 'text', text: error }] },
+              payload: {
+                itemId: callItemId,
+                ok: false,
+                contentForLlm: [{ type: 'text', text: error }],
+              },
+            };
+            if (env.appendNodesAndSetRunState) {
+              await env.appendNodesAndSetRunState([resultNode], state, {
+                pendingTool: undefined,
+              });
+            } else {
+              await env.tree.appendNode(threadId, resultNode);
+              await env.setRunState?.(state, { pendingTool: undefined });
+            }
+            env.emit({
+              type: 'item.complete',
+              threadId,
+              itemId: callItemId,
+              result: { ok: false },
             });
-            env.emit({ type: 'item.complete', threadId, itemId: callItemId, result: { ok: false } });
             if (!countsAsFailure) return;
             // Circuit breaker: 3 consecutive failures → one-shot reminder to
             // change approach; 5 → stop the turn instead of looping forever.
@@ -286,10 +428,23 @@ export function runTurn(
             await fail(validation.error);
             continue;
           }
+          const preparedTool: PendingToolExecution = {
+            itemId: callItemId,
+            toolName: call.name,
+            params: validation.params,
+            target: await tool.resolveTarget?.(validation.params as never),
+            effect: tool.effects,
+            recovery: tool.recovery ?? (tool.effects === 'read' ? 'retry-safe' : 'never-retry'),
+          };
 
           // Gatekeeper — the single interception point (docs/06 §2).
           const verdictResult = await env.gatekeeper.check(
-            { toolName: call.name, params: call.params, effects: tool.effects },
+            {
+              toolName: call.name,
+              params: call.params,
+              effects: tool.effects,
+              target: preparedTool.target,
+            },
             threadId,
           );
           if (verdictResult.verdict === 'deny') {
@@ -297,14 +452,16 @@ export function runTurn(
             continue;
           }
           if (verdictResult.verdict === 'ask') {
+            await env.setRunState?.('waiting_approval', { pendingTool: preparedTool });
             const decision = await env.requestApproval(turnId, verdictResult.request);
-            await env.tree.appendNode(threadId, {
-              type: 'approval_decision',
-              payload: { approvalId: callItemId, request: verdictResult.request, decision, decidedAt: Date.now() },
-            });
             if (decision.kind === 'decline' || decision.kind === 'cancel') {
-              const note = decision.kind === 'decline' && decision.note ? ` User said: ${decision.note}` : '';
-              await fail(`The user declined this action.${note} Do not retry it verbatim — adapt or ask.`, false);
+              const note =
+                decision.kind === 'decline' && decision.note ? ` User said: ${decision.note}` : '';
+              await fail(
+                `The user declined this action.${note} Do not retry it verbatim — adapt or ask.`,
+                false,
+                decision.kind === 'cancel' ? 'interrupted' : 'streaming_model',
+              );
               if (decision.kind === 'cancel') {
                 stopReason = 'interrupted';
                 break loop;
@@ -314,17 +471,52 @@ export function runTurn(
           }
 
           try {
+            await env.setRunState?.('executing_tool', {
+              pendingTool: { ...preparedTool, startedAt: Date.now() },
+            });
             const result = await tool.execute(
               callItemId,
               validation.params as never,
               abort.signal,
-              (partial) => env.emit({ type: 'item.delta', threadId, itemId: callItemId, delta: { toolProgress: partial } }),
+              (partial) =>
+                env.emit({
+                  type: 'item.delta',
+                  threadId,
+                  itemId: callItemId,
+                  delta: { toolProgress: partial },
+                }),
             );
-            await env.tree.appendNode(threadId, {
+            const activeSkill = (result.details as { activeSkillId?: unknown } | undefined)
+              ?.activeSkillId;
+            if (typeof activeSkill === 'string') await env.activateSkill?.(activeSkill);
+            const resultNode: AppendNodeInput = {
               type: 'tool_result',
-              payload: { itemId: callItemId, ok: true, contentForLlm: result.content, details: result.details },
+              payload: {
+                itemId: callItemId,
+                ok: true,
+                contentForLlm: result.content,
+                details: result.details,
+                trust: tool.resultTrust ?? (tool.level === 'builtin' ? 'trusted' : 'untrusted'),
+                provenance:
+                  tool.resultProvenance ??
+                  (tool.level === 'mcp' ? 'mcp' : tool.level === 'builtin' ? 'tool' : 'page'),
+                origin: preparedTool.target?.origin,
+              },
+            };
+            if (env.appendNodesAndSetRunState) {
+              await env.appendNodesAndSetRunState([resultNode], 'streaming_model', {
+                pendingTool: undefined,
+              });
+            } else {
+              await env.tree.appendNode(threadId, resultNode);
+              await env.setRunState?.('streaming_model', { pendingTool: undefined });
+            }
+            env.emit({
+              type: 'item.complete',
+              threadId,
+              itemId: callItemId,
+              result: { ok: true, details: result.details },
             });
-            env.emit({ type: 'item.complete', threadId, itemId: callItemId, result: { ok: true, details: result.details } });
             consecutiveFailures = 0;
             // Stuck-loop detection (page-agent reflection pattern): fingerprint
             // every successful call. If the same tool+params hash appears
@@ -340,7 +532,7 @@ export function runTurn(
           } catch (e) {
             if (abort.signal.aborted) {
               stopReason = 'interrupted';
-              await fail('interrupted');
+              await fail('interrupted', false, 'interrupted');
               break loop;
             }
             // Tool errors go back to the model for self-correction (docs/04 §2).
@@ -360,6 +552,15 @@ export function runTurn(
     }
     // turn.complete fires only after all writes above have resolved — every
     // appendNode is awaited, so reaching this line IS the ack (docs/04 §2).
+    const terminalState: RunState =
+      stopReason === 'done'
+        ? 'completed'
+        : stopReason === 'interrupted'
+          ? 'interrupted'
+          : stopReason === 'budget_pause'
+            ? 'paused_budget'
+            : 'failed';
+    await env.setRunState?.(terminalState, { stopReason });
     env.emit({ type: 'turn.complete', threadId, turnId, stopReason });
     return stopReason;
   }

@@ -1,0 +1,144 @@
+import { useEffect, useMemo, useState } from 'react';
+import { FileArchive, Trash2 } from 'lucide-react';
+import { toast } from 'sonner';
+import { AttachmentRepository } from '../../data/attachments';
+import { PanelotDB } from '../../db/schema';
+import type { Attachment } from '../../db/types';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../components/ui/alert-dialog';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '../components/ui/card';
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from '../components/ui/empty';
+
+const db = new PanelotDB();
+const repository = new AttachmentRepository(db);
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+export function AttachmentsPage() {
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [deleting, setDeleting] = useState<Attachment | null>(null);
+  const totalBytes = useMemo(
+    () => attachments.reduce((sum, attachment) => sum + attachment.bytes.size, 0),
+    [attachments],
+  );
+  const refresh = () => repository.list().then(setAttachments);
+
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  return (
+    <div className="flex max-w-3xl flex-col gap-4">
+      <div>
+        <h2 className="text-[15px] font-semibold">Attachments</h2>
+        <p className="mt-1 text-[12px] text-muted-foreground">
+          {attachments.length} records · {formatBytes(totalBytes)} stored locally
+        </p>
+      </div>
+
+      {attachments.length === 0 ? (
+        <Empty>
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <FileArchive />
+            </EmptyMedia>
+            <EmptyTitle>No stored attachments</EmptyTitle>
+            <EmptyDescription>
+              Screenshots, page extracts, and user uploads referenced by chats appear here.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {attachments.map((attachment) => (
+            <Card key={attachment.id}>
+              <CardHeader>
+                <CardTitle className="truncate text-sm">
+                  {attachment.meta?.title ?? attachment.sourceRef ?? attachment.id}
+                </CardTitle>
+                <CardDescription>
+                  {attachment.mime} · {formatBytes(attachment.bytes.size)} ·{' '}
+                  {new Date(attachment.createdAt).toLocaleString()}
+                </CardDescription>
+                <CardAction>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Delete attachment"
+                    onClick={() => setDeleting(attachment)}
+                  >
+                    <Trash2 />
+                  </Button>
+                </CardAction>
+              </CardHeader>
+              <CardContent className="flex flex-wrap gap-2">
+                <Badge variant="secondary">{attachment.kind}</Badge>
+                <Badge variant={attachment.trust === 'untrusted' ? 'outline' : 'secondary'}>
+                  {attachment.trust ?? 'unclassified'}
+                </Badge>
+                <Badge variant="outline">{attachment.provenance ?? 'unknown source'}</Badge>
+                <Badge variant="outline">{attachment.threadId}</Badge>
+                {(attachment.refs?.nodeIds?.length ?? 0) > 0 && (
+                  <Badge variant="outline">{attachment.refs!.nodeIds!.length} node refs</Badge>
+                )}
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      <AlertDialog open={deleting !== null} onOpenChange={(open) => !open && setDeleting(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this attachment?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Referencing message nodes will be marked unavailable before the bytes are removed.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (deleting) {
+                  void repository.remove(deleting.id).then(refresh);
+                  toast.success('Attachment deleted');
+                }
+                setDeleting(null);
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}

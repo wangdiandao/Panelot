@@ -27,8 +27,20 @@ import type { ApprovalPolicy } from '../../messaging/protocol';
 /** Composer-facing tiers (includes the UI-only 'plan' pseudo-tier). */
 export type PermissionTier = Extract<ApprovalPolicy, 'always' | 'untrusted' | 'auto'> | 'plan';
 
-const TIERS: { id: PermissionTier; labelKey: string; hintKey: string; Icon: typeof Eye; isPlan?: boolean }[] = [
-  { id: 'plan', labelKey: 'perm.plan', hintKey: 'perm.planHint', Icon: ClipboardList, isPlan: true },
+const TIERS: {
+  id: PermissionTier;
+  labelKey: string;
+  hintKey: string;
+  Icon: typeof Eye;
+  isPlan?: boolean;
+}[] = [
+  {
+    id: 'plan',
+    labelKey: 'perm.plan',
+    hintKey: 'perm.planHint',
+    Icon: ClipboardList,
+    isPlan: true,
+  },
   { id: 'always', labelKey: 'perm.always', hintKey: 'perm.alwaysHint', Icon: Eye },
   { id: 'untrusted', labelKey: 'perm.balanced', hintKey: 'perm.balancedHint', Icon: ShieldCheck },
   { id: 'auto', labelKey: 'perm.auto', hintKey: 'perm.autoHint', Icon: Zap },
@@ -43,7 +55,9 @@ interface Props {
 }
 
 export function PermissionSwitch({ value, planMode, onSelect }: Props) {
-  const active = planMode ? TIERS[0]! : (TIERS.find((m) => m.id === value && !m.isPlan) ?? TIERS[2]!);
+  const active = planMode
+    ? TIERS[0]!
+    : (TIERS.find((m) => m.id === value && !m.isPlan) ?? TIERS[2]!);
   const { Icon } = active;
   return (
     <DropdownMenu>
@@ -56,8 +70,8 @@ export function PermissionSwitch({ value, planMode, onSelect }: Props) {
             active.isPlan
               ? 'border-info/40 bg-info/10 text-info'
               : active.id === 'auto'
-              ? 'border-warning/40 bg-warning/10 text-warning'
-              : 'border-primary/30 bg-primary/10 text-primary',
+                ? 'border-warning/40 bg-warning/10 text-warning'
+                : 'border-primary/30 bg-primary/10 text-primary',
           )}
         >
           <Icon className="size-3" />
@@ -68,7 +82,14 @@ export function PermissionSwitch({ value, planMode, onSelect }: Props) {
       <DropdownMenuContent align="start" side="top" className="w-64">
         {TIERS.map((m) => (
           <DropdownMenuItem key={m.id} onClick={() => onSelect(m.id)}>
-            <Check className={cn('size-4', (m.isPlan ? planMode : m.id === active.id && !planMode) ? 'opacity-100' : 'opacity-0')} />
+            <Check
+              className={cn(
+                'size-4',
+                (m.isPlan ? planMode : m.id === active.id && !planMode)
+                  ? 'opacity-100'
+                  : 'opacity-0',
+              )}
+            />
             <m.Icon className="size-4 text-muted-foreground" />
             <div className="flex min-w-0 flex-col">
               <span>{t(m.labelKey)}</span>

@@ -55,8 +55,12 @@ export function PlanConfirmCard({ todos, onConfirm, onEdit, onCancel }: Props) {
           <ol className="space-y-1.5">
             {todos.map((todo, i) => (
               <li key={i} className="flex items-start gap-2 text-[13px]">
-                <span className="mt-0.5 shrink-0 text-[11px] font-mono text-faint-foreground">{i + 1}.</span>
-                <span className={todo.done ? 'text-faint-foreground line-through' : ''}>{todo.text}</span>
+                <span className="mt-0.5 shrink-0 text-[11px] font-mono text-faint-foreground">
+                  {i + 1}.
+                </span>
+                <span className={todo.done ? 'text-faint-foreground line-through' : ''}>
+                  {todo.text}
+                </span>
               </li>
             ))}
           </ol>
@@ -65,20 +69,11 @@ export function PlanConfirmCard({ todos, onConfirm, onEdit, onCancel }: Props) {
 
       {/* Action row */}
       <div className="flex gap-2 border-t border-info/20 px-4 py-3">
-        <Button
-          size="sm"
-          className="flex-1 gap-1.5"
-          onClick={onConfirm}
-        >
+        <Button size="sm" className="flex-1 gap-1.5" onClick={onConfirm}>
           <Check className="size-3.5" />
           {t('plan.confirm')}
         </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          className="gap-1.5"
-          onClick={onEdit}
-        >
+        <Button size="sm" variant="outline" className="gap-1.5" onClick={onEdit}>
           <Pencil className="size-3.5" />
           {t('plan.edit')}
         </Button>

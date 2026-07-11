@@ -75,10 +75,17 @@ export interface ThreadGroup {
 export function groupThreads(threads: ThreadMeta[], now = Date.now()): ThreadGroup[] {
   const dayMs = 86_400_000;
   const buckets: Record<ThreadGroup['id'], ThreadMeta[]> = {
-    pinned: [], today: [], yesterday: [], week: [], older: [],
+    pinned: [],
+    today: [],
+    yesterday: [],
+    week: [],
+    older: [],
   };
   for (const th of threads) {
-    if (th.pinned) { buckets.pinned.push(th); continue; }
+    if (th.pinned) {
+      buckets.pinned.push(th);
+      continue;
+    }
     const age = now - th.updatedAt;
     if (age < dayMs) buckets.today.push(th);
     else if (age < 2 * dayMs) buckets.yesterday.push(th);
@@ -101,7 +108,11 @@ export function timeAgo(ts: number, now = Date.now()): string {
 }
 
 /** Unread = thread advanced since last seen, and it isn't the open thread. */
-export function isUnread(thread: ThreadMeta, seen: Record<string, number>, activeThreadId: string | null): boolean {
+export function isUnread(
+  thread: ThreadMeta,
+  seen: Record<string, number>,
+  activeThreadId: string | null,
+): boolean {
   if (thread.id === activeThreadId) return false;
   const seenAt = seen[thread.id];
   return seenAt !== undefined && thread.updatedAt > seenAt;
@@ -212,7 +223,9 @@ export function ThreadSidebar({
           onToggleCollapsed();
           requestAnimationFrame(() => searchInputRef?.current?.focus());
         })}
-        {onOpenSettings && <div className="mt-auto">{railButton(t('app.settings'), Settings, onOpenSettings)}</div>}
+        {onOpenSettings && (
+          <div className="mt-auto">{railButton(t('app.settings'), Settings, onOpenSettings)}</div>
+        )}
       </aside>
     );
   }
@@ -260,39 +273,45 @@ export function ThreadSidebar({
           // Collapse only applies while browsing; search always shows hits.
           const collapsed = !search.trim() && collapsedGroups.includes(g.id);
           return (
-          <div key={g.id} className="mb-3">
-            <button
-              type="button"
-              onClick={() => onToggleGroup?.(g.id)}
-              aria-expanded={!collapsed}
-              className="flex w-full items-center gap-1 rounded px-2 py-1 text-left text-[11px] font-medium uppercase tracking-wide text-faint-foreground hover:text-muted-foreground"
-            >
-              {t(`group.${g.id}`)}
-              {onToggleGroup && (
-                <ChevronDown className={cn('size-3 opacity-60 transition-transform', collapsed && '-rotate-90')} />
-              )}
-              {collapsed && <span className="ml-auto normal-case">{g.threads.length}</span>}
-            </button>
-            {!collapsed && g.threads.map((th) => (
-              <ThreadRow
-                key={th.id}
-                thread={th}
-                active={th.id === activeThreadId}
-                unread={isUnread(th, seen, activeThreadId)}
-                activity={activity?.get(th.id)}
-                renaming={renamingId === th.id}
-                onOpen={() => onOpenThread(th.id)}
-                onTogglePin={() => onTogglePin(th)}
-                onStartRename={() => setRenamingId(th.id)}
-                onCommitRename={(title) => {
-                  setRenamingId(null);
-                  if (title.trim() && title !== th.title) onRename(th, title.trim());
-                }}
-                onCancelRename={() => setRenamingId(null)}
-                onDelete={() => setDeleting(th)}
-              />
-            ))}
-          </div>
+            <div key={g.id} className="mb-3">
+              <button
+                type="button"
+                onClick={() => onToggleGroup?.(g.id)}
+                aria-expanded={!collapsed}
+                className="flex w-full items-center gap-1 rounded px-2 py-1 text-left text-[11px] font-medium uppercase tracking-wide text-faint-foreground hover:text-muted-foreground"
+              >
+                {t(`group.${g.id}`)}
+                {onToggleGroup && (
+                  <ChevronDown
+                    className={cn(
+                      'size-3 opacity-60 transition-transform',
+                      collapsed && '-rotate-90',
+                    )}
+                  />
+                )}
+                {collapsed && <span className="ml-auto normal-case">{g.threads.length}</span>}
+              </button>
+              {!collapsed &&
+                g.threads.map((th) => (
+                  <ThreadRow
+                    key={th.id}
+                    thread={th}
+                    active={th.id === activeThreadId}
+                    unread={isUnread(th, seen, activeThreadId)}
+                    activity={activity?.get(th.id)}
+                    renaming={renamingId === th.id}
+                    onOpen={() => onOpenThread(th.id)}
+                    onTogglePin={() => onTogglePin(th)}
+                    onStartRename={() => setRenamingId(th.id)}
+                    onCommitRename={(title) => {
+                      setRenamingId(null);
+                      if (title.trim() && title !== th.title) onRename(th, title.trim());
+                    }}
+                    onCancelRename={() => setRenamingId(null)}
+                    onDelete={() => setDeleting(th)}
+                  />
+                ))}
+            </div>
           );
         })}
         {groups.length === 0 && (
@@ -324,7 +343,9 @@ export function ThreadSidebar({
         onKeyDown={(e) => {
           if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
           e.preventDefault();
-          const next = clampSidebarWidth((width || SIDEBAR_DEFAULT) + (e.key === 'ArrowRight' ? 16 : -16));
+          const next = clampSidebarWidth(
+            (width || SIDEBAR_DEFAULT) + (e.key === 'ArrowRight' ? 16 : -16),
+          );
           onWidthChange(next);
           onWidthCommit(next);
         }}
@@ -361,7 +382,13 @@ function railButton(label: string, Icon: typeof Plus, onClick: () => void) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button variant="ghost" size="icon" className="size-9 text-muted-foreground" aria-label={label} onClick={onClick}>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-9 text-muted-foreground"
+          aria-label={label}
+          onClick={onClick}
+        >
           <Icon className="size-4" />
         </Button>
       </TooltipTrigger>
@@ -387,8 +414,17 @@ interface RowProps {
 }
 
 function ThreadRow({
-  thread, active, unread, activity, renaming,
-  onOpen, onTogglePin, onStartRename, onCommitRename, onCancelRename, onDelete,
+  thread,
+  active,
+  unread,
+  activity,
+  renaming,
+  onOpen,
+  onTogglePin,
+  onStartRename,
+  onCommitRename,
+  onCancelRename,
+  onDelete,
 }: RowProps) {
   const [draft, setDraft] = useState(thread.title);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -408,7 +444,11 @@ function ThreadRow({
   ) : activity?.running ? (
     <Loader2 className="size-3 shrink-0 animate-spin text-info" aria-label={t('app.running')} />
   ) : unread ? (
-    <span className="size-1.5 shrink-0 rounded-full bg-primary" role="img" aria-label={t('app.unread')} />
+    <span
+      className="size-1.5 shrink-0 rounded-full bg-primary"
+      role="img"
+      aria-label={t('app.unread')}
+    />
   ) : null;
 
   if (renaming) {

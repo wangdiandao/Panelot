@@ -30,7 +30,8 @@ describe('read_page / snapshot lifecycle', () => {
   });
 
   it('article mode extracts readable text', async () => {
-    document.body.innerHTML = '<article><h1>标题</h1><p>正文内容甲乙丙。</p></article><nav>导航垃圾</nav>';
+    document.body.innerHTML =
+      '<article><h1>标题</h1><p>正文内容甲乙丙。</p></article><nav>导航垃圾</nav>';
     const r = await executeContentTool('read_page', { mode: 'article' });
     expect(r.resultText).toContain('正文内容甲乙丙');
     expect(r.resultText).not.toContain('导航垃圾');
@@ -51,7 +52,7 @@ describe('extract (borrowed from browser-use extract + browsercluster GNE)', () 
     expect(r.snapshot).toBeUndefined();
   });
 
-  it('scope limits extraction to a ref\'d subtree', async () => {
+  it("scope limits extraction to a ref'd subtree", async () => {
     document.body.innerHTML =
       '<main><button id="a">甲区块内容</button><section id="b"><p>乙区块内容</p></section></main>';
     // The button is the only ref'd element containing 甲区块内容; grab the ref
@@ -75,7 +76,8 @@ describe('extract (borrowed from browser-use extract + browsercluster GNE)', () 
   });
 
   it('drops javascript: links (no markdown link emitted)', async () => {
-    document.body.innerHTML = '<article><p><a href="javascript:steal()">点我</a> 安全文本</p></article>';
+    document.body.innerHTML =
+      '<article><p><a href="javascript:steal()">点我</a> 安全文本</p></article>';
     const r = await executeContentTool('extract', {});
     expect(r.resultText).not.toContain('javascript:');
     expect(r.resultText).toContain('安全文本');
@@ -88,7 +90,9 @@ describe('stale-ref rejection (docs/05 §1.1 — protocol-level expiry)', () => 
     const yaml1 = await readPage();
     const oldRef = refOf(yaml1, '点我');
     await readPage(); // snapshot id advances → oldRef now stale
-    await expect(executeContentTool('click', { ref: oldRef })).rejects.toThrow(/快照已过期.*read_page/s);
+    await expect(executeContentTool('click', { ref: oldRef })).rejects.toThrow(
+      /快照已过期.*read_page/s,
+    );
   });
 
   it('rejects refs to disconnected elements', async () => {
@@ -144,7 +148,9 @@ describe('click / type / select', () => {
 
     const yaml2 = await readPage();
     const ref2 = refOf(yaml2, '城市');
-    await expect(executeContentTool('select_option', { ref: ref2, values: ['广州'] })).rejects.toThrow(/可用选项.*北京/s);
+    await expect(
+      executeContentTool('select_option', { ref: ref2, values: ['广州'] }),
+    ).rejects.toThrow(/可用选项.*北京/s);
   }, 20_000);
 });
 

@@ -10,6 +10,9 @@
  */
 
 export const PROTOCOL_VERSION = 1;
+export const ENGINE_PROTOCOL = 'panelot/engine-v1' as const;
+export const ENGINE_SCHEMA_HASH =
+  '521a90e4636a74a5cec994fa95b1bd34d53402529ef894d81e5e92a6dcd2593c' as const;
 
 // ---------------------------------------------------------------------------
 // Content primitives
@@ -26,6 +29,9 @@ export interface ContextBlock {
   label: string;
   /** Origin the content came from — drives untrusted-content fencing (docs/10 §4). */
   origin?: string;
+  trust?: 'trusted' | 'untrusted';
+  provenance?: 'user' | 'page' | 'mcp' | 'tool' | 'import' | 'plugin';
+  sourceRef?: string;
   content: ContentBlock[];
   /** Rough token estimate for UI display. */
   approxTokens?: number;
@@ -77,7 +83,8 @@ export type ApprovalDecision =
   | { kind: 'cancel' };
 
 /** `cross_scope` is legacy (origin-whitelist model) — no longer emitted. */
-export type ApprovalFlag = 'cross_scope' | 'sensitive_payload' | 'escalation_l2';
+export type ApprovalFlag =
+  'cross_scope' | 'sensitive_payload' | 'escalation_l2' | 'host_permission';
 
 export interface ApprovalRequestPayload {
   tool: string;
@@ -94,12 +101,7 @@ export interface ApprovalRequestPayload {
 // ---------------------------------------------------------------------------
 
 export type ItemKind =
-  | 'user_message'
-  | 'assistant_message'
-  | 'reasoning'
-  | 'tool_call'
-  | 'approval'
-  | 'system_notice';
+  'user_message' | 'assistant_message' | 'reasoning' | 'tool_call' | 'approval' | 'system_notice';
 
 export type TurnKind = 'user' | 'title';
 
@@ -165,6 +167,7 @@ export interface PendingApproval {
 
 export interface ThreadSnapshotMeta {
   id: string;
+  revision: number;
   title: string;
   createdAt: number;
   updatedAt: number;
@@ -181,6 +184,27 @@ export interface ThreadSnapshot {
   activeTurn: ActiveTurnState | null;
   pendingApprovals: PendingApproval[];
   queuedInputs: number;
+  queuedRuns: {
+    runId: string;
+    input: UserInput;
+    overrides?: TurnOverrides;
+    revision: number;
+  }[];
+  recoverableRuns: RunRecoveryState[];
+}
+
+export interface RunRecoveryState {
+  runId: string;
+  state: 'waiting_approval' | 'paused_budget' | 'paused_uncertain' | 'interrupted';
+  revision: number;
+  stopReason?: string;
+  pendingTool?: {
+    toolName: string;
+    params: unknown;
+    target?: { tabId?: number; frameId?: number; origin?: string; serverId?: string };
+    effect: 'read' | 'write';
+    recovery: 'retry-safe' | 'inspect-first' | 'never-retry';
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -191,7 +215,10 @@ export type Op =
   | {
       type: 'initialize';
       submissionId: string;
-      protocolVersion: number;
+      protocol?: typeof ENGINE_PROTOCOL;
+      schemaHash?: string;
+      clientId?: string;
+      protocolVersion?: number;
       subscribe?: { threadId: string };
     }
   | { type: 'thread.create'; submissionId: string; preset?: string; folderId?: string }
@@ -233,8 +260,31 @@ export type Op =
       expectedTurnId: string;
       input: UserInput;
     }
-  | { type: 'turn.enqueue'; submissionId: string; threadId: string; input: UserInput }
+  | {
+      type: 'turn.enqueue';
+      submissionId: string;
+      threadId: string;
+      input: UserInput;
+      overrides?: TurnOverrides;
+    }
   | { type: 'turn.interrupt'; submissionId: string; threadId: string }
+  | {
+      type: 'queue.update';
+      submissionId: string;
+      threadId: string;
+      runId: string;
+      input: UserInput;
+      overrides?: TurnOverrides;
+    }
+  | { type: 'queue.remove'; submissionId: string; threadId: string; runId: string }
+  | { type: 'run.resume'; submissionId: string; threadId: string; runId: string }
+  | {
+      type: 'run.resolveUncertain';
+      submissionId: string;
+      threadId: string;
+      runId: string;
+      resolution: 'retry' | 'mark_done' | 'fail';
+    }
   | {
       type: 'approval.response';
       submissionId: string;
@@ -254,18 +304,48 @@ export type ErrorCode =
   | 'turn_not_steerable'
   | 'no_active_turn'
   | 'queue_full'
+  | 'overloaded'
+  | 'interrupted'
   | 'provider_error'
   | 'not_configured'
+  | 'invalid_command'
   | 'internal';
+
+export interface CommandAck {
+  type: 'command.ack';
+  submissionId: string;
+  threadId?: string;
+  runId?: string;
+  revision?: number;
+}
+
+export interface CommandRejected {
+  type: 'command.rejected';
+  submissionId: string;
+  code: ErrorCode;
+  message: string;
+  threadId?: string;
+  revision?: number;
+}
 
 export type AgentEvent =
   // —— responses (echo submissionId) ——
   | {
       type: 'initialized';
       submissionId: string;
-      protocolVersion: number;
+      protocol: typeof ENGINE_PROTOCOL;
+      schemaHash: typeof ENGINE_SCHEMA_HASH;
       snapshot?: ThreadSnapshot;
     }
+  | {
+      type: 'fatal.reload_required';
+      submissionId: string;
+      protocol: typeof ENGINE_PROTOCOL;
+      schemaHash: typeof ENGINE_SCHEMA_HASH;
+      message: string;
+    }
+  | CommandAck
+  | CommandRejected
   | { type: 'pong'; submissionId: string }
   | {
       type: 'error';
@@ -274,9 +354,15 @@ export type AgentEvent =
       message: string;
       retryable: boolean;
       /** Provider error taxonomy for human-readable attribution (docs/03 §7). */
-      errorKind?: 'auth' | 'rate_limit' | 'overloaded' | 'context_too_long' | 'content_filter' | 'network' | 'protocol';
+      errorKind?:
+        | 'auth'
+        | 'rate_limit'
+        | 'overloaded'
+        | 'context_too_long'
+        | 'content_filter'
+        | 'network'
+        | 'protocol';
     }
-  | { type: 'overloaded'; submissionId: string }
   | { type: 'thread.created'; submissionId: string; threadId: string }
   | { type: 'thread.forked'; submissionId: string; threadId: string; newThreadId: string }
 
@@ -328,8 +414,19 @@ export type AgentEvent =
       request: ApprovalRequestPayload;
     }
   // —— broadcasts ——
-  | { type: 'thread.updated'; threadId: string; patch: Partial<ThreadSnapshotMeta> }
-  | { type: 'queue.updated'; threadId: string; pending: number }
+  | {
+      type: 'thread.updated';
+      threadId: string;
+      revision: number;
+      patch: Partial<ThreadSnapshotMeta>;
+    }
+  | {
+      type: 'queue.updated';
+      threadId: string;
+      pending: number;
+      runs: ThreadSnapshot['queuedRuns'];
+    }
+  | { type: 'run.recovery_required'; threadId: string; run: RunRecoveryState }
   | {
       /** Agent touched-tab audit trail changed (docs/05 §6 → task panel, docs/09 §3.1). */
       type: 'tabs.updated';
@@ -376,6 +473,10 @@ const OP_TYPES = new Set<Op['type']>([
   'turn.steer',
   'turn.enqueue',
   'turn.interrupt',
+  'queue.update',
+  'queue.remove',
+  'run.resume',
+  'run.resolveUncertain',
   'approval.response',
   'ping',
 ]);
@@ -389,3 +490,6 @@ export function isOp(value: unknown): value is Op {
     typeof (value as { submissionId?: unknown }).submissionId === 'string'
   );
 }
+
+export type ClientCommand = Op;
+export type ThreadEvent = AgentEvent;

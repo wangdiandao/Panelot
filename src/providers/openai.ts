@@ -33,8 +33,7 @@ type OpenAiMessage =
   | { role: 'tool'; tool_call_id: string; content: string };
 
 type OpenAiContentPart =
-  | { type: 'text'; text: string }
-  | { type: 'image_url'; image_url: { url: string } };
+  { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } };
 
 interface OpenAiToolCall {
   id: string;
@@ -54,9 +53,7 @@ function blocksToParts(blocks: ContentBlock[]): string | OpenAiContentPart[] {
 }
 
 function blocksToPlainText(blocks: ContentBlock[]): string {
-  return blocks
-    .map((b) => (b.type === 'text' ? b.text : '[image omitted]'))
-    .join('\n');
+  return blocks.map((b) => (b.type === 'text' ? b.text : '[image omitted]')).join('\n');
 }
 
 export function toOpenAiMessages(
@@ -91,7 +88,11 @@ export function toOpenAiMessages(
       }
       case 'tool_result':
         // OpenAI has no isError flag; error semantics live in the text.
-        out.push({ role: 'tool', tool_call_id: m.toolCallId, content: blocksToPlainText(m.content) });
+        out.push({
+          role: 'tool',
+          tool_call_id: m.toolCallId,
+          content: blocksToPlainText(m.content),
+        });
         break;
     }
   }
@@ -249,7 +250,11 @@ export class OpenAiAdapter implements ProviderAdapter {
             throw new ProviderError('network', `fetch failed: ${(e as Error).message}`);
           }
           if (!res.ok) {
-            throw normalizeHttpError(res.status, await res.text().catch(() => ''), res.headers.get('retry-after'));
+            throw normalizeHttpError(
+              res.status,
+              await res.text().catch(() => ''),
+              res.headers.get('retry-after'),
+            );
           }
           if (!res.body) throw new ProviderError('protocol', 'response has no body');
           return res;
@@ -269,16 +274,27 @@ export class OpenAiAdapter implements ProviderAdapter {
             delta?: {
               content?: string | null;
               reasoning_content?: string | null;
-              tool_calls?: { index: number; id?: string; function?: { name?: string; arguments?: string } }[];
+              tool_calls?: {
+                index: number;
+                id?: string;
+                function?: { name?: string; arguments?: string };
+              }[];
             };
             finish_reason?: string | null;
           }[];
-          usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
+          usage?: {
+            prompt_tokens?: number;
+            completion_tokens?: number;
+            prompt_tokens_details?: { cached_tokens?: number };
+          };
           error?: { message?: string };
         };
 
         if (chunk.error) {
-          throw new ProviderError('protocol', chunk.error.message ?? 'provider returned error frame');
+          throw new ProviderError(
+            'protocol',
+            chunk.error.message ?? 'provider returned error frame',
+          );
         }
         if (chunk.usage) {
           usage = {
@@ -390,7 +406,12 @@ export async function verifyConnection(
   adapter: ProviderAdapter,
   connection: Connection,
 ): Promise<VerifyResult> {
-  const result: VerifyResult = { reachable: false, keyValid: false, streaming: false, toolUse: false };
+  const result: VerifyResult = {
+    reachable: false,
+    keyValid: false,
+    streaming: false,
+    toolUse: false,
+  };
 
   // Step 1: GET /models (3s timeout, optional — many relays lack it).
   let models: string[] | undefined;
@@ -436,7 +457,11 @@ export async function verifyConnection(
     if (e instanceof ProviderError) {
       result.reachable = e.kind !== 'network';
       result.failure =
-        e.kind === 'auth' ? 'invalid_key' : e.kind === 'network' ? 'unreachable' : 'protocol_mismatch';
+        e.kind === 'auth'
+          ? 'invalid_key'
+          : e.kind === 'network'
+            ? 'unreachable'
+            : 'protocol_mismatch';
       result.detail = e.message;
     } else {
       result.failure = 'unreachable';
@@ -448,7 +473,9 @@ export async function verifyConnection(
   // Step 3: echo-tool probe for toolUse capability.
   try {
     const stream = adapter.stream({
-      messages: [{ role: 'user', content: [{ type: 'text', text: 'Call the echo tool with text="hi".' }] }],
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'Call the echo tool with text="hi".' }] },
+      ],
       tools: [
         {
           name: 'echo',

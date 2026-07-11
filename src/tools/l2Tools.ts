@@ -10,6 +10,7 @@ import type { AnyAgentTool } from '../agent/tool';
 import type { CdpManager } from './cdp/debugger';
 import type { BrowserToolGateway } from './gateway';
 import type { PanelotDB } from '../db/schema';
+import { currentBrowserTarget } from './browserTools';
 
 export function createL2Tools(
   cdp: CdpManager,
@@ -19,7 +20,7 @@ export function createL2Tools(
 ): AnyAgentTool[] {
   const targetTab = () => gateway.getTargetTab(getThreadId());
 
-  return [
+  const tools: AnyAgentTool[] = [
     {
       name: 'screenshot',
       label: '截图',
@@ -35,44 +36,67 @@ export function createL2Tools(
         const tabId = await targetTab();
         const format = params.format ?? 'png';
         return cdp.withTab(tabId, async () => {
-          if (params.target === 'fullpage') {
-            const { cssContentSize } = await cdp.send<{ cssContentSize: { width: number; height: number } }>('Page.getLayoutMetrics');
-            await cdp.send('Emulation.setDeviceMetricsOverride', {
-              width: Math.ceil(cssContentSize.width),
-              height: Math.ceil(cssContentSize.height),
-              deviceScaleFactor: 1,
-              mobile: false,
+          let metricsOverridden = false;
+          let clip:
+            { x: number; y: number; width: number; height: number; scale: number } | undefined;
+          try {
+            if (params.target === 'fullpage') {
+              const { cssContentSize } = await cdp.send<{
+                cssContentSize: { width: number; height: number };
+              }>('Page.getLayoutMetrics');
+              await cdp.send('Emulation.setDeviceMetricsOverride', {
+                width: Math.ceil(cssContentSize.width),
+                height: Math.ceil(cssContentSize.height),
+                deviceScaleFactor: 1,
+                mobile: false,
+              });
+              metricsOverridden = true;
+            } else if (params.target && params.target !== 'viewport') {
+              const rect = await gateway.getElementRect(getThreadId(), params.target);
+              if (rect.width <= 0 || rect.height <= 0)
+                throw new Error(`Element ${params.target} is not visible`);
+              clip = { ...rect, scale: 1 };
+            }
+            const { data } = await cdp.send<{ data: string }>('Page.captureScreenshot', {
+              format,
+              captureBeyondViewport: params.target === 'fullpage' || clip !== undefined,
+              ...(clip ? { clip } : {}),
             });
-          }
-          const { data } = await cdp.send<{ data: string }>('Page.captureScreenshot', { format, captureBeyondViewport: params.target === 'fullpage' });
-          if (params.target === 'fullpage') await cdp.send('Emulation.clearDeviceMetricsOverride');
 
-          // Store as an attachment; reference by id in details, embed image for the model.
-          const threadId = getThreadId();
-          const bytes = base64ToBlob(data, `image/${format}`);
-          const attachmentId = crypto.randomUUID();
-          await db.attachments.add({
-            id: attachmentId,
-            threadId,
-            createdAt: Date.now(),
-            kind: 'screenshot',
-            mime: `image/${format}`,
-            bytes,
-          });
-          return {
-            content: [
-              { type: 'text', text: '已截图（见图）' },
-              { type: 'image', mime: `image/${format}`, data },
-            ],
-            details: { screenshotAttachmentId: attachmentId },
-          };
+            // Store as an attachment; reference by id in details, embed image for the model.
+            const threadId = getThreadId();
+            const bytes = base64ToBlob(data, `image/${format}`);
+            const attachmentId = crypto.randomUUID();
+            await db.attachments.add({
+              id: attachmentId,
+              threadId,
+              createdAt: Date.now(),
+              kind: 'screenshot',
+              mime: `image/${format}`,
+              bytes,
+              trust: 'untrusted',
+              provenance: 'page',
+            });
+            return {
+              content: [
+                { type: 'text', text: '已截图（见图）' },
+                { type: 'image', mime: `image/${format}`, data },
+              ],
+              details: { screenshotAttachmentId: attachmentId },
+            };
+          } finally {
+            if (metricsOverridden) {
+              await cdp.send('Emulation.clearDeviceMetricsOverride').catch(() => {});
+            }
+          }
         });
       },
     },
     {
       name: 'click_xy',
       label: '坐标点击',
-      description: 'Click at pixel coordinates (vision coordinate mode). Use only when no ref is available (canvas). Coordinates are CSS pixels relative to the viewport.',
+      description:
+        'Click at pixel coordinates (vision coordinate mode). Use only when no ref is available (canvas). Coordinates are CSS pixels relative to the viewport.',
       parameters: z.object({ x: z.number(), y: z.number() }),
       level: 'L2',
       effects: 'write',
@@ -92,22 +116,47 @@ export function createL2Tools(
     {
       name: 'drag',
       label: '拖拽',
-      description: 'Drag from one point to another (vision coordinate mode) using trusted mouse events.',
+      description:
+        'Drag from one point to another (vision coordinate mode) using trusted mouse events.',
       parameters: z.object({
         from: z.object({ x: z.number(), y: z.number() }),
         to: z.object({ x: z.number(), y: z.number() }),
       }),
       level: 'L2',
       effects: 'write',
-      execute: async (_id, params: { from: { x: number; y: number }; to: { x: number; y: number } }) => {
+      execute: async (
+        _id,
+        params: { from: { x: number; y: number }; to: { x: number; y: number } },
+      ) => {
         const tabId = await targetTab();
         gateway.markAgentInput(tabId);
         gateway.markDriven(getThreadId(), tabId);
         return cdp.withTab(tabId, async () => {
-          await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...params.from, button: 'left', clickCount: 1 });
-          await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...params.to, button: 'left' });
-          await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...params.to, button: 'left', clickCount: 1 });
-          return { content: [{ type: 'text', text: `已从 (${params.from.x},${params.from.y}) 拖到 (${params.to.x},${params.to.y})` }] };
+          await cdp.send('Input.dispatchMouseEvent', {
+            type: 'mousePressed',
+            ...params.from,
+            button: 'left',
+            clickCount: 1,
+          });
+          await cdp.send('Input.dispatchMouseEvent', {
+            type: 'mouseMoved',
+            ...params.to,
+            button: 'left',
+          });
+          await cdp.send('Input.dispatchMouseEvent', {
+            type: 'mouseReleased',
+            ...params.to,
+            button: 'left',
+            clickCount: 1,
+          });
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `已从 (${params.from.x},${params.from.y}) 拖到 (${params.to.x},${params.to.y})`,
+              },
+            ],
+          };
         });
       },
     },
@@ -126,21 +175,29 @@ export function createL2Tools(
       execute: async (_id, params: { element: string; ref: string; attachmentId: string }) => {
         const threadId = getThreadId();
         const attachment = await db.attachments.get(params.attachmentId);
-        if (!attachment) throw new Error(`附件 ${params.attachmentId} 不存在。只能上传用户提供的附件。`);
+        if (!attachment)
+          throw new Error(`附件 ${params.attachmentId} 不存在。只能上传用户提供的附件。`);
         if (attachment.threadId !== threadId) throw new Error('该附件不属于当前会话。');
+        if (attachment.provenance !== 'user') {
+          throw new Error('只能上传用户明确提供的附件；页面、工具和导入内容不能作为上传来源。');
+        }
         const MAX = 8 * 1024 * 1024;
         if (attachment.bytes.size > MAX) {
-          throw new Error(`附件过大（${(attachment.bytes.size / 1024 / 1024).toFixed(1)} MB > 8 MB 上限），请让用户手动选择文件。`);
+          throw new Error(
+            `附件过大（${(attachment.bytes.size / 1024 / 1024).toFixed(1)} MB > 8 MB 上限），请让用户手动选择文件。`,
+          );
         }
         const buf = new Uint8Array(await attachment.bytes.arrayBuffer());
         let binary = '';
         const CHUNK = 0x8000;
-        for (let i = 0; i < buf.length; i += CHUNK) binary += String.fromCharCode(...buf.subarray(i, i + CHUNK));
+        for (let i = 0; i < buf.length; i += CHUNK)
+          binary += String.fromCharCode(...buf.subarray(i, i + CHUNK));
         const base64 = btoa(binary);
         const ext = attachment.mime.split('/')[1]?.split('+')[0] ?? 'bin';
         const result = await gateway.callContentTool(threadId, 'upload', {
           ref: params.ref,
-          filename: attachment.meta?.title ?? `attachment-${params.attachmentId.slice(0, 8)}.${ext}`,
+          filename:
+            attachment.meta?.title ?? `attachment-${params.attachmentId.slice(0, 8)}.${ext}`,
           mime: attachment.mime,
           base64,
         });
@@ -148,6 +205,10 @@ export function createL2Tools(
       },
     },
   ];
+  return tools.map((tool) => ({
+    ...tool,
+    resolveTarget: tool.resolveTarget ?? (() => currentBrowserTarget(gateway, getThreadId)),
+  }));
 }
 
 function base64ToBlob(base64: string, mime: string): Blob {

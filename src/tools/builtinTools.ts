@@ -7,7 +7,6 @@
 import { z } from 'zod';
 import type { AnyAgentTool } from '../agent/tool';
 import type { PanelotDB } from '../db/schema';
-import { fenceUntrusted } from '../prompts/assemble';
 
 // ---------------------------------------------------------------------------
 
@@ -20,6 +19,10 @@ export function createFetchUrlTool(): AnyAgentTool {
     parameters: z.object({ url: z.string().url() }),
     level: 'builtin',
     effects: 'read',
+    recovery: 'retry-safe',
+    resultTrust: 'untrusted',
+    resultProvenance: 'page',
+    resolveTarget: async (params: { url: string }) => ({ origin: new URL(params.url).origin }),
     execute: async (_id, params: { url: string }, signal) => {
       const res = await fetch(params.url, {
         signal,
@@ -60,7 +63,7 @@ export function createFetchUrlTool(): AnyAgentTool {
       const max = 16_000; // ≈4k tokens
       if (text.length > max) text = `${text.slice(0, max)}\n[内容已截断]`;
       return {
-        content: [{ type: 'text', text: fenceUntrusted(text, new URL(params.url).origin, 'fetch_url') }],
+        content: [{ type: 'text', text }],
       };
     },
   };
@@ -91,14 +94,17 @@ export function createMemoryTools(db: PanelotDB): AnyAgentTool[] {
     {
       name: 'memory_read',
       label: '读取记忆',
-      description: 'Read persistent memories by key, or list all keys when key is omitted. Memories persist across conversations.',
+      description:
+        'Read persistent memories by key, or list all keys when key is omitted. Memories persist across conversations.',
       parameters: z.object({ key: z.string().optional() }),
       level: 'builtin',
       effects: 'read',
       execute: async (_id, params: { key?: string }) => {
         if (params.key) {
           const record = await db.memories.where('key').equals(params.key).first();
-          return { content: [{ type: 'text', text: record ? record.value : `（无记忆: ${params.key}）` }] };
+          return {
+            content: [{ type: 'text', text: record ? record.value : `（无记忆: ${params.key}）` }],
+          };
         }
         const all = await db.memories.toArray();
         const list = all.map((m) => `- ${m.key}`).join('\n');
@@ -108,7 +114,8 @@ export function createMemoryTools(db: PanelotDB): AnyAgentTool[] {
     {
       name: 'memory_write',
       label: '写入记忆',
-      description: 'Save a persistent memory (key + value). Use for user preferences and durable facts, not transient task state.',
+      description:
+        'Save a persistent memory (key + value). Use for user preferences and durable facts, not transient task state.',
       parameters: z.object({ key: z.string().min(1).max(100), value: z.string().max(4000) }),
       level: 'builtin',
       effects: 'write',
@@ -117,7 +124,12 @@ export function createMemoryTools(db: PanelotDB): AnyAgentTool[] {
         if (existing) {
           await db.memories.update(existing.id, { value: params.value, updatedAt: Date.now() });
         } else {
-          await db.memories.add({ id: crypto.randomUUID(), key: params.key, value: params.value, updatedAt: Date.now() });
+          await db.memories.add({
+            id: crypto.randomUUID(),
+            key: params.key,
+            value: params.value,
+            updatedAt: Date.now(),
+          });
         }
         return { content: [{ type: 'text', text: `已保存记忆: ${params.key}` }] };
       },
@@ -133,7 +145,10 @@ export interface TodoItem {
 }
 
 /** Todo store surfaces to the TaskPanel via the details channel. */
-export function createTodoTool(onUpdate: (threadId: string, todos: TodoItem[]) => void, getThreadId: () => string): AnyAgentTool {
+export function createTodoTool(
+  onUpdate: (threadId: string, todos: TodoItem[]) => void,
+  getThreadId: () => string,
+): AnyAgentTool {
   return {
     name: 'todo_write',
     label: '更新任务清单',
@@ -161,15 +176,22 @@ export function createDownloadTool(): AnyAgentTool {
   return {
     name: 'download',
     label: '下载文件',
-    description: 'Download a URL to the user\'s downloads folder. filename is a suggestion within downloads.',
+    description:
+      "Download a URL to the user's downloads folder. filename is a suggestion within downloads.",
     parameters: z.object({
       url: z.string().url(),
-      filename: z.string().regex(/^[^/\\]+$/, 'filename must not contain path separators').optional(),
+      filename: z
+        .string()
+        .regex(/^[^/\\]+$/, 'filename must not contain path separators')
+        .optional(),
     }),
     level: 'builtin',
     effects: 'write',
     execute: async (_id, params: { url: string; filename?: string }) => {
-      const downloadId = await chrome.downloads.download({ url: params.url, filename: params.filename });
+      const downloadId = await chrome.downloads.download({
+        url: params.url,
+        filename: params.filename,
+      });
       return { content: [{ type: 'text', text: `已开始下载 (#${downloadId}): ${params.url}` }] };
     },
   };

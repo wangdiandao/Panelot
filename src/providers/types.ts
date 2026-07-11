@@ -40,6 +40,8 @@ export interface Connection {
   prefixId?: string;
   /** Manual model whitelist for endpoints without /models. */
   modelIds?: string[];
+  /** Optional per-model capability and price overrides supplied by the user. */
+  models?: Omit<ModelEntry, 'connectionId'>[];
   enabled: boolean;
   quirks?: QuirkFlags;
 }
@@ -86,7 +88,9 @@ export interface ModelPreset {
   params?: GenParams;
   enabledToolLevels?: ('L0' | 'L1' | 'L2' | 'mcp')[];
   defaultApprovalPolicy?: import('../messaging/protocol').ApprovalPolicy;
+  defaultCapabilityScope?: import('../messaging/protocol').CapabilityScope;
   skills?: string[];
+  promptVersion?: string;
 }
 
 /**

@@ -8,20 +8,30 @@ describe('parseMcpJson (docs/07 §2 — Claude Code / Cursor import)', () => {
   it('parses the Claude Code mcpServers shape with a bearer header', () => {
     const json = JSON.stringify({
       mcpServers: {
-        github: { url: 'https://mcp.github.com/mcp', type: 'http', headers: { Authorization: 'Bearer ghp_xxx' } },
+        github: {
+          url: 'https://mcp.github.com/mcp',
+          type: 'http',
+          headers: { Authorization: 'Bearer ghp_xxx' },
+        },
       },
     });
     const parsed = parseMcpJson(json);
     expect(parsed).toHaveLength(1);
-    expect(parsed[0]).toMatchObject({ name: 'github', url: 'https://mcp.github.com/mcp', auth: { kind: 'bearer', token: 'ghp_xxx' } });
+    expect(parsed[0]).toMatchObject({
+      name: 'github',
+      url: 'https://mcp.github.com/mcp',
+      auth: { kind: 'bearer', token: 'ghp_xxx' },
+    });
   });
 
   it('parses a bare server map and defaults to no auth', () => {
-    const parsed = parseMcpJson(JSON.stringify({ linear: { url: 'https://mcp.linear.app/sse', type: 'sse' } }));
+    const parsed = parseMcpJson(
+      JSON.stringify({ linear: { url: 'https://mcp.linear.app/sse', type: 'sse' } }),
+    );
     expect(parsed[0]).toMatchObject({ name: 'linear', auth: { kind: 'none' } });
   });
 
-  it('skips stdio (command-based) servers — V1 is remote-only', () => {
+  it('skips stdio command-based servers', () => {
     expect(() =>
       parseMcpJson(JSON.stringify({ local: { command: 'node', args: ['server.js'] } })),
     ).toThrow(/远端 MCP/);
@@ -43,20 +53,58 @@ function jsonResponse(body: unknown, headers: Record<string, string> = {}): Resp
   });
 }
 
+function initializeResult(id: number | string) {
+  return {
+    jsonrpc: '2.0',
+    id,
+    result: {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      serverInfo: { name: 'mock-mcp', version: '1.0.0' },
+    },
+  };
+}
+
+function emptyCapabilityResult(method: string, id: number | string) {
+  if (method === 'tools/list') return { jsonrpc: '2.0', id, result: { tools: [] } };
+  if (method === 'prompts/list') return { jsonrpc: '2.0', id, result: { prompts: [] } };
+  if (method === 'resources/list') return { jsonrpc: '2.0', id, result: { resources: [] } };
+  return { jsonrpc: '2.0', id, result: {} };
+}
+
 describe('McpClient', () => {
   it('performs the initialize handshake then lists capabilities', async () => {
     const calls: string[] = [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
       const body = JSON.parse((init as RequestInit).body as string);
       calls.push(body.method);
-      if (body.method === 'initialize') return jsonResponse({ jsonrpc: '2.0', id: body.id, result: { capabilities: {} } }, { 'mcp-session-id': 'sess-1' });
-      if (body.method === 'tools/list') return jsonResponse({ jsonrpc: '2.0', id: body.id, result: { tools: [{ name: 'echo', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } }] } });
-      if (body.method === 'prompts/list') return jsonResponse({ jsonrpc: '2.0', id: body.id, result: { prompts: [] } });
-      if (body.method === 'resources/list') return jsonResponse({ jsonrpc: '2.0', id: body.id, result: { resources: [] } });
-      return jsonResponse({ jsonrpc: '2.0', id: body.id, result: {} });
+      if (body.method === 'initialize')
+        return jsonResponse(initializeResult(body.id), { 'mcp-session-id': 'sess-1' });
+      if (body.method === 'tools/list')
+        return jsonResponse({
+          jsonrpc: '2.0',
+          id: body.id,
+          result: {
+            tools: [
+              {
+                name: 'echo',
+                inputSchema: { type: 'object' },
+                annotations: { readOnlyHint: true },
+              },
+            ],
+          },
+        });
+      if (body.method === 'prompts/list')
+        return jsonResponse({ jsonrpc: '2.0', id: body.id, result: { prompts: [] } });
+      if (body.method === 'resources/list')
+        return jsonResponse({ jsonrpc: '2.0', id: body.id, result: { resources: [] } });
+      return jsonResponse(emptyCapabilityResult(body.method, body.id));
     });
 
-    const client = new McpClient({ url: 'https://mcp.test/mcp', authHeader: async () => 'Bearer t' });
+    const client = new McpClient({
+      url: 'https://mcp.test/mcp',
+      authHeader: async () => 'Bearer t',
+    });
     await client.connect();
     expect(calls).toContain('initialize');
     expect(calls).toContain('notifications/initialized');
@@ -73,7 +121,8 @@ describe('McpClient', () => {
         firstCall = false;
         return new Response('unauthorized', { status: 401 });
       }
-      return jsonResponse({ jsonrpc: '2.0', id: body.id, result: { capabilities: {} } });
+      if (body.method === 'initialize') return jsonResponse(initializeResult(body.id));
+      return jsonResponse(emptyCapabilityResult(body.method, body.id));
     });
 
     const client = new McpClient({
@@ -90,26 +139,50 @@ describe('McpClient', () => {
   });
 
   it('surfaces JSON-RPC errors', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      jsonResponse({ jsonrpc: '2.0', id: 1, error: { code: -32601, message: 'method not found' } }),
-    );
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const body = JSON.parse((init as RequestInit).body as string);
+      if (body.method === 'initialize') return jsonResponse(initializeResult(body.id));
+      if (body.method.endsWith('/list')) {
+        return jsonResponse(emptyCapabilityResult(body.method, body.id));
+      }
+      return jsonResponse({
+        jsonrpc: '2.0',
+        id: body.id,
+        error: { code: -32601, message: 'method not found' },
+      });
+    });
     const client = new McpClient({ url: 'https://mcp.test/mcp', authHeader: async () => null });
+    await client.connect();
     await expect(client.callTool('missing', {})).rejects.toThrow(/method not found/);
   });
 
   it('reads a JSON-RPC response from an SSE stream', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
       const body = JSON.parse((init as RequestInit).body as string);
-      const frame = `data: ${JSON.stringify({ jsonrpc: '2.0', id: body.id, result: { content: [{ type: 'text', text: 'streamed' }] } })}\n\n`;
+      const payload =
+        body.method === 'initialize'
+          ? initializeResult(body.id)
+          : body.method.endsWith('/list')
+            ? emptyCapabilityResult(body.method, body.id)
+            : {
+                jsonrpc: '2.0',
+                id: body.id,
+                result: { content: [{ type: 'text', text: 'streamed' }] },
+              };
+      const frame = `data: ${JSON.stringify(payload)}\n\n`;
       const stream = new ReadableStream<Uint8Array>({
         start(c) {
           c.enqueue(new TextEncoder().encode(frame));
           c.close();
         },
       });
-      return new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+      return new Response(stream, {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      });
     });
     const client = new McpClient({ url: 'https://mcp.test/mcp', authHeader: async () => null });
+    await client.connect();
     const result = await client.callTool('echo', { text: 'hi' });
     expect(result.content[0]!.text).toBe('streamed');
   });

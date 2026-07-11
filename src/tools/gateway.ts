@@ -18,19 +18,30 @@ class ToolReportedError extends Error {}
  * the agent, and reports each via a CustomEvent the isolated-world executor
  * collects into the tool result (JSON-string detail crosses worlds in Chrome).
  */
-function patchDialogs(): void {
-  const w = window as Window & { __panelotDialogPatched?: boolean };
-  if (w.__panelotDialogPatched) return;
-  w.__panelotDialogPatched = true;
+function installDialogInterception(): void {
+  const w = window as Window & {
+    __panelotDialogScope?: {
+      depth: number;
+      alert: typeof window.alert;
+      confirm: typeof window.confirm;
+      prompt: typeof window.prompt;
+    };
+  };
+  if (w.__panelotDialogScope) {
+    w.__panelotDialogScope.depth++;
+    return;
+  }
   const report = (kind: string, message: string, response: string) => {
     document.dispatchEvent(
       new CustomEvent('panelot:dialog', { detail: JSON.stringify({ kind, message, response }) }),
     );
   };
-  const origAlert = window.alert.bind(window);
-  const origConfirm = window.confirm.bind(window);
-  const origPrompt = window.prompt.bind(window);
-  void origAlert; void origConfirm; void origPrompt; // originals kept for potential restore
+  w.__panelotDialogScope = {
+    depth: 1,
+    alert: window.alert,
+    confirm: window.confirm,
+    prompt: window.prompt,
+  };
   window.alert = (message?: unknown) => {
     report('alert', String(message ?? ''), '已确认');
   };
@@ -42,6 +53,25 @@ function patchDialogs(): void {
     report('prompt', String(message ?? ''), '已自动取消(null)');
     return null;
   };
+}
+
+function restoreDialogInterception(): void {
+  const w = window as Window & {
+    __panelotDialogScope?: {
+      depth: number;
+      alert: typeof window.alert;
+      confirm: typeof window.confirm;
+      prompt: typeof window.prompt;
+    };
+  };
+  const scope = w.__panelotDialogScope;
+  if (!scope) return;
+  scope.depth--;
+  if (scope.depth > 0) return;
+  window.alert = scope.alert;
+  window.confirm = scope.confirm;
+  window.prompt = scope.prompt;
+  delete w.__panelotDialogScope;
 }
 
 /** Poll until the tab finishes loading (shared by navigation tools & gateway). */
@@ -96,7 +126,10 @@ export class BrowserToolGateway {
   constructor() {
     if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
       chrome.runtime.onMessage.addListener((msg: unknown, sender) => {
-        if ((msg as { type?: string })?.type === 'panelot.manualOperation' && sender.tab?.id !== undefined) {
+        if (
+          (msg as { type?: string })?.type === 'panelot.manualOperation' &&
+          sender.tab?.id !== undefined
+        ) {
           this.handleManualOperationReport(sender.tab.id);
         }
       });
@@ -219,10 +252,16 @@ export class BrowserToolGateway {
     // Look across windows for the most recently used active web page.
     const activeTabs = await chrome.tabs.query({ active: true });
     const webTabs = activeTabs
-      .filter((t): t is chrome.tabs.Tab & { id: number; url: string } => t.id !== undefined && !!t.url && /^https?:/.test(t.url))
+      .filter(
+        (t): t is chrome.tabs.Tab & { id: number; url: string } =>
+          t.id !== undefined && !!t.url && /^https?:/.test(t.url),
+      )
       .sort((a, b) => (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0));
     const tab = webTabs[0];
-    if (!tab) throw new Error('没有可操作的网页标签页（扩展自身页面不能作为操作目标）。请先用 tab_open 打开页面或激活一个网页标签页。');
+    if (!tab)
+      throw new Error(
+        '没有可操作的网页标签页（扩展自身页面不能作为操作目标）。请先用 tab_open 打开页面或激活一个网页标签页。',
+      );
     // Unpinned: locked for this turn, released at turn end (see
     // releaseFloatingTarget) so the next turn follows the user again.
     this.target.set(threadId, { tabId: tab.id, pinned: false });
@@ -243,22 +282,57 @@ export class BrowserToolGateway {
   // ---- L1 dispatch (docs/01 §5) ----------------------------------------------
 
   /** L1 write tools: user input on the tab during these = a real conflict. */
-  private static WRITE_CONTENT_TOOLS = new Set(['click', 'type', 'select_option', 'press_key', 'hover', 'batch_actions', 'upload']);
+  private static WRITE_CONTENT_TOOLS = new Set([
+    'click',
+    'type',
+    'select_option',
+    'press_key',
+    'hover',
+    'batch_actions',
+    'upload',
+  ]);
 
   async callContentTool(threadId: string, tool: string, params: unknown): Promise<ExecuteResult> {
     const tabId = await this.getTargetTab(threadId);
     if (BrowserToolGateway.WRITE_CONTENT_TOOLS.has(tool)) this.markDriven(threadId, tabId);
     await this.ensureInjected(tabId);
-    return this.sendToTab(tabId, tool, params);
+    await this.setDialogInterception(tabId, true);
+    try {
+      return await this.sendToTab(tabId, tool, params);
+    } finally {
+      await this.setDialogInterception(tabId, false);
+    }
   }
 
-  private async sendToTab(tabId: number, tool: string, params: unknown, retried = false): Promise<ExecuteResult> {
+  async getElementRect(
+    threadId: string,
+    ref: string,
+  ): Promise<{ x: number; y: number; width: number; height: number }> {
+    const result = await this.callContentTool(threadId, 'get_rect', { ref });
+    if (!result.rect) throw new Error(`Element ${ref} has no visible bounds`);
+    return result.rect;
+  }
+
+  private async sendToTab(
+    tabId: number,
+    tool: string,
+    params: unknown,
+    retried = false,
+  ): Promise<ExecuteResult> {
     const op: ContentScriptOp = { requestId: crypto.randomUUID(), tool, params };
-    const urlBefore = await chrome.tabs.get(tabId).then((t) => t.url).catch(() => undefined);
+    const urlBefore = await chrome.tabs
+      .get(tabId)
+      .then((t) => t.url)
+      .catch(() => undefined);
     try {
       const result = await Promise.race([
         chrome.tabs.sendMessage(tabId, op) as Promise<ContentScriptResult>,
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`工具执行超时（${CS_TIMEOUT_MS / 1000}s）`)), CS_TIMEOUT_MS)),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`工具执行超时（${CS_TIMEOUT_MS / 1000}s）`)),
+            CS_TIMEOUT_MS,
+          ),
+        ),
       ]);
       if (!result) throw new Error('content script 无响应');
       // A response ARRIVED reporting failure (stale ref, element not found):
@@ -290,7 +364,10 @@ export class BrowserToolGateway {
    * is a genuine failure, not a navigation). Waits for load, re-injects, and
    * returns a neutral success result with a fresh snapshot.
    */
-  private async detectNavigation(tabId: number, urlBefore: string | undefined): Promise<ExecuteResult | null> {
+  private async detectNavigation(
+    tabId: number,
+    urlBefore: string | undefined,
+  ): Promise<ExecuteResult | null> {
     if (urlBefore === undefined) return null;
     let tab: chrome.tabs.Tab;
     try {
@@ -324,7 +401,9 @@ export class BrowserToolGateway {
     const op: ContentScriptOp = { requestId: crypto.randomUUID(), tool, params };
     const result = await Promise.race([
       chrome.tabs.sendMessage(tabId, op) as Promise<ContentScriptResult>,
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('snapshot timeout')), CS_TIMEOUT_MS)),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('snapshot timeout')), CS_TIMEOUT_MS),
+      ),
     ]);
     if (!result?.ok) throw new Error(result ? (result as { error: string }).error : 'no response');
     return result.result as ExecuteResult;
@@ -332,7 +411,11 @@ export class BrowserToolGateway {
 
   private async ensureInjected(tabId: number): Promise<void> {
     try {
-      const pong = await chrome.tabs.sendMessage(tabId, { requestId: 'ping', tool: '__ping', params: {} });
+      const pong = await chrome.tabs.sendMessage(tabId, {
+        requestId: 'ping',
+        tool: '__ping',
+        params: {},
+      });
       if (pong) return;
     } catch {
       /* not injected yet */
@@ -345,15 +428,18 @@ export class BrowserToolGateway {
     // site (docs/06); activeTab covers the current tab in most flows.
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: ['content-scripts/content.js'],
+      files: ['page-executor.js'],
     });
-    // Dialog patch in the MAIN world: window.confirm/alert/prompt block the
-    // page AND our tool call (15s timeout). Auto-answer and report instead.
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      world: 'MAIN',
-      func: patchDialogs,
-    }).catch(() => {/* some pages forbid MAIN-world injection; degrade gracefully */});
     await new Promise((r) => setTimeout(r, 50));
+  }
+
+  private async setDialogInterception(tabId: number, install: boolean): Promise<void> {
+    await chrome.scripting
+      .executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        func: install ? installDialogInterception : restoreDialogInterception,
+      })
+      .catch(() => {});
   }
 }

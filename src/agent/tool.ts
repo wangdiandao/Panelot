@@ -8,6 +8,7 @@
  */
 
 import { z } from 'zod';
+import type { ToolRecoveryPolicy } from '../db/types';
 import type { ContentBlock, ToolLevel } from '../messaging/protocol';
 import type { ToolSchema } from '../providers/types';
 
@@ -31,9 +32,20 @@ export interface AgentTool<P = unknown, D = unknown> {
   /** For the LLM — one sentence of function + when to use + failure recovery (docs/10 §3). */
   description: string;
   parameters: z.ZodType<P>;
+  /** Provider-facing schema is preserved when a remote tool supplies one. */
+  inputSchema?: Record<string, unknown>;
   level: ToolLevel;
   /** Basis for the Gatekeeper's default verdict (docs/06). */
   effects: 'read' | 'write';
+  recovery?: ToolRecoveryPolicy;
+  resultTrust?: 'trusted' | 'untrusted';
+  resultProvenance?: 'user' | 'page' | 'mcp' | 'tool' | 'import' | 'plugin';
+  resolveTarget?: (params: P) => Promise<{
+    tabId?: number;
+    frameId?: number;
+    origin?: string;
+    serverId?: string;
+  }>;
   execute(
     toolCallId: string,
     params: P,
@@ -82,7 +94,8 @@ export class ToolRegistry {
     return this.list(enabledLevels).map((t) => ({
       name: t.name,
       description: t.description,
-      parameters: z.toJSONSchema(t.parameters, { io: 'input' }) as Record<string, unknown>,
+      parameters:
+        t.inputSchema ?? (z.toJSONSchema(t.parameters, { io: 'input' }) as Record<string, unknown>),
     }));
   }
 }

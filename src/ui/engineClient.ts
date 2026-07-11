@@ -8,12 +8,14 @@
 
 import { create } from 'zustand';
 import {
-  PROTOCOL_VERSION,
+  ENGINE_PROTOCOL,
+  ENGINE_SCHEMA_HASH,
   type AgentEvent,
   type ApprovalDecision,
   type ContextBlock,
   type Op,
   type PendingApproval,
+  type RunRecoveryState,
   type SnapshotItem,
   type ThreadSnapshot,
   type ThreadSnapshotMeta,
@@ -22,6 +24,7 @@ import {
 } from '../messaging/protocol';
 import { createPortTransport, type EngineTransport } from '../messaging/transport';
 import { SettingsStore } from '../settings/store';
+import { hostPermissionBroker } from '../permissions/hostPermissionBroker';
 
 // ---------------------------------------------------------------------------
 // Live item state (streaming overlay)
@@ -44,6 +47,7 @@ export interface LiveItem {
 
 export interface ThreadUiState {
   connected: boolean;
+  reloadRequired: boolean;
   /** True between openThread and the snapshot's arrival (skeleton, not empty state). */
   loading: boolean;
   threadId: string | null;
@@ -57,6 +61,8 @@ export interface ThreadUiState {
   wasInterrupted: boolean;
   pendingApprovals: PendingApproval[];
   queuedInputs: number;
+  queuedRuns: ThreadSnapshot['queuedRuns'];
+  recoverableRuns: RunRecoveryState[];
   /**
    * Local echo of enqueued input texts (queue dock). The protocol only
    * broadcasts a count, so texts survive only within this session — after a
@@ -81,6 +87,7 @@ export interface ThreadActivity {
 
 const initialState: ThreadUiState = {
   connected: false,
+  reloadRequired: false,
   loading: false,
   threadId: null,
   meta: null,
@@ -90,6 +97,8 @@ const initialState: ThreadUiState = {
   wasInterrupted: false,
   pendingApprovals: [],
   queuedInputs: 0,
+  queuedRuns: [],
+  recoverableRuns: [],
   queuedTexts: [],
   todos: [],
   lastError: null,
@@ -108,6 +117,10 @@ export class EngineSession {
   private reconnectDelay = 500;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private disposed = false;
+  private clientId: string = crypto.randomUUID();
+  private readonly outbox = new Map<string, Op>();
+  private readonly storageScope =
+    typeof location === 'undefined' ? 'test' : location.pathname.replace(/[^a-z0-9_-]/gi, '_');
   /** Draft-mode input waiting for thread.created before it can be submitted. */
   private pendingDraft: UserInput | null = null;
   /** thread.updated patch that arrived before the snapshot (meta still null). */
@@ -127,8 +140,69 @@ export class EngineSession {
   }));
 
   constructor(private makeTransport: () => EngineTransport = createPortTransport) {
-    this.connect();
+    if (this.hasSessionStorage()) {
+      void this.restoreSession().finally(() => this.connect());
+    } else {
+      this.connect();
+    }
     void this.restoreModelOverride();
+  }
+
+  private hasSessionStorage(): boolean {
+    return typeof chrome !== 'undefined' && !!chrome.storage?.session;
+  }
+
+  private get clientStorageKey(): string {
+    return `engine_client_id:${this.storageScope}`;
+  }
+
+  private get outboxStorageKey(): string {
+    return `engine_outbox:${this.storageScope}`;
+  }
+
+  private async restoreSession(): Promise<void> {
+    try {
+      const stored = await chrome.storage.session.get([
+        this.clientStorageKey,
+        this.outboxStorageKey,
+      ]);
+      const clientId = stored[this.clientStorageKey];
+      if (typeof clientId === 'string' && clientId) this.clientId = clientId;
+      const commands = stored[this.outboxStorageKey];
+      if (Array.isArray(commands)) {
+        for (const command of commands) {
+          if (typeof command?.submissionId === 'string') {
+            this.outbox.set(command.submissionId, command as Op);
+          }
+        }
+      }
+      await chrome.storage.session.set({ [this.clientStorageKey]: this.clientId });
+    } catch {
+      // The in-memory outbox remains authoritative for this UI lifetime.
+    }
+  }
+
+  private persistOutbox(): void {
+    if (!this.hasSessionStorage()) return;
+    void chrome.storage.session
+      .set({ [this.outboxStorageKey]: [...this.outbox.values()] })
+      .catch(() => {});
+  }
+
+  private shouldTrack(op: Op): boolean {
+    return op.type !== 'initialize' && op.type !== 'ping' && op.type !== 'thread.subscribe';
+  }
+
+  private acknowledge(submissionId: string): void {
+    this.outbox.delete(submissionId);
+    this.echoOps.delete(submissionId);
+    this.persistOutbox();
+  }
+
+  private replayOutbox(): void {
+    const transport = this.transport;
+    if (!transport) return;
+    for (const command of this.outbox.values()) transport.send(command);
   }
 
   /**
@@ -139,7 +213,8 @@ export class EngineSession {
   private async restoreModelOverride(): Promise<void> {
     const threadIdAtStart = this.store.getState().threadId;
     try {
-      const model = (await SettingsStore.lastModel.get()) ?? (await SettingsStore.global.get()).defaultModel;
+      const model =
+        (await SettingsStore.lastModel.get()) ?? (await SettingsStore.global.get()).defaultModel;
       if (!model) return;
       const s = this.store.getState();
       if (s.threadId !== threadIdAtStart || s.pendingOverrides.model !== undefined) return;
@@ -169,7 +244,9 @@ export class EngineSession {
     const threadId = this.store.getState().threadId;
     this.send({
       type: 'initialize',
-      protocolVersion: PROTOCOL_VERSION,
+      protocol: ENGINE_PROTOCOL,
+      schemaHash: ENGINE_SCHEMA_HASH,
+      clientId: this.clientId,
       ...(threadId ? { subscribe: { threadId } } : {}),
     });
 
@@ -193,7 +270,12 @@ export class EngineSession {
 
   send(op: OpInput): string {
     const submissionId = crypto.randomUUID();
-    this.transport?.send({ ...op, submissionId } as Op);
+    const command = { ...op, submissionId } as Op;
+    if (this.shouldTrack(command)) {
+      this.outbox.set(submissionId, command);
+      this.persistOutbox();
+    }
+    this.transport?.send(command);
     return submissionId;
   }
 
@@ -218,7 +300,12 @@ export class EngineSession {
   openThread(threadId: string): void {
     this.pendingMetaPatch = null;
     this.echoOps.clear();
-    this.store.setState({ ...initialState, connected: this.store.getState().connected, threadId, loading: true });
+    this.store.setState({
+      ...initialState,
+      connected: this.store.getState().connected,
+      threadId,
+      loading: true,
+    });
     this.send({ type: 'thread.subscribe', threadId });
     void this.restoreModelOverride();
   }
@@ -231,7 +318,10 @@ export class EngineSession {
    */
   private echoUser(input: UserInput, isRetry = false): string | null {
     // A retry re-submits lastInput — its echo bubble already exists.
-    if (isRetry && this.store.getState().liveItems.some((it) => it.local && it.text === input.text)) {
+    if (
+      isRetry &&
+      this.store.getState().liveItems.some((it) => it.local && it.text === input.text)
+    ) {
       return null;
     }
     const itemId = `local-${crypto.randomUUID()}`;
@@ -272,7 +362,9 @@ export class EngineSession {
     }
     if (activeTurn) {
       if (activeTurn.steerable) {
-        track(this.send({ type: 'turn.steer', threadId, expectedTurnId: activeTurn.turnId, input }));
+        track(
+          this.send({ type: 'turn.steer', threadId, expectedTurnId: activeTurn.turnId, input }),
+        );
       } else {
         track(this.send({ type: 'turn.enqueue', threadId, input }));
       }
@@ -280,7 +372,14 @@ export class EngineSession {
     }
     const hasOverrides = Object.values(pendingOverrides).some((v) => v !== undefined);
     this.store.setState({ lastInput: input });
-    track(this.send({ type: 'turn.submit', threadId, input, ...(hasOverrides ? { overrides: pendingOverrides } : {}) }));
+    track(
+      this.send({
+        type: 'turn.submit',
+        threadId,
+        input,
+        ...(hasOverrides ? { overrides: pendingOverrides } : {}),
+      }),
+    );
   }
 
   /** Re-submit the last input (error-banner retry). */
@@ -299,7 +398,9 @@ export class EngineSession {
     if ('model' in patch) {
       try {
         void SettingsStore.lastModel.set(patch.model ?? null);
-      } catch { /* storage unavailable (tests) */ }
+      } catch {
+        /* storage unavailable (tests) */
+      }
     }
   }
 
@@ -345,13 +446,68 @@ export class EngineSession {
     if (echoId) this.echoOps.set(submissionId, echoId);
   }
 
+  updateQueued(runId: string, input: UserInput, overrides?: TurnOverrides): void {
+    const { threadId } = this.store.getState();
+    if (!threadId) return;
+    this.send({ type: 'queue.update', threadId, runId, input, overrides });
+  }
+
+  removeQueued(runId: string): void {
+    const { threadId } = this.store.getState();
+    if (!threadId) return;
+    this.send({ type: 'queue.remove', threadId, runId });
+  }
+
+  resumeRun(runId: string): void {
+    const { threadId } = this.store.getState();
+    if (!threadId) return;
+    this.store.setState((state) => ({
+      recoverableRuns: state.recoverableRuns.filter((run) => run.runId !== runId),
+      wasInterrupted: false,
+    }));
+    this.send({ type: 'run.resume', threadId, runId });
+  }
+
+  resolveUncertain(runId: string, resolution: 'retry' | 'mark_done' | 'fail'): void {
+    const { threadId } = this.store.getState();
+    if (!threadId) return;
+    this.store.setState((state) => ({
+      recoverableRuns: state.recoverableRuns.filter((run) => run.runId !== runId),
+    }));
+    this.send({ type: 'run.resolveUncertain', threadId, runId, resolution });
+  }
+
   interrupt(): void {
     const { threadId } = this.store.getState();
     if (threadId) this.send({ type: 'turn.interrupt', threadId });
   }
 
-  respondApproval(approvalId: string, decision: ApprovalDecision): void {
-    this.send({ type: 'approval.response', approvalId, decision });
+  async respondApproval(approvalId: string, decision: ApprovalDecision): Promise<void> {
+    const pending = this.store
+      .getState()
+      .pendingApprovals.find((item) => item.approvalId === approvalId);
+    let resolvedDecision = decision;
+    if (
+      pending?.request.flags.includes('host_permission') &&
+      decision.kind !== 'decline' &&
+      decision.kind !== 'cancel'
+    ) {
+      try {
+        const granted = await hostPermissionBroker.request(pending.request.targetOrigin);
+        if (!granted) {
+          resolvedDecision = {
+            kind: 'decline',
+            note: 'Browser host permission was not granted.',
+          };
+        }
+      } catch {
+        resolvedDecision = {
+          kind: 'decline',
+          note: 'Browser host permission request failed.',
+        };
+      }
+    }
+    this.send({ type: 'approval.response', approvalId, decision: resolvedDecision });
     this.store.setState((s) => ({
       pendingApprovals: s.pendingApprovals.filter((p) => p.approvalId !== approvalId),
     }));
@@ -379,6 +535,30 @@ export class EngineSession {
         this.reconnectDelay = 500;
         if (ev.snapshot) this.applySnapshot(ev.snapshot);
         s.setState({ connected: true });
+        this.replayOutbox();
+        break;
+      }
+      case 'fatal.reload_required': {
+        this.disposed = true;
+        this.transport?.close();
+        s.setState({
+          connected: false,
+          reloadRequired: true,
+          lastError: { message: ev.message, retryable: false, kind: 'protocol' },
+        });
+        break;
+      }
+      case 'command.ack': {
+        this.acknowledge(ev.submissionId);
+        break;
+      }
+      case 'command.rejected': {
+        const echoId = this.echoOps.get(ev.submissionId);
+        if (echoId) this.retractEcho(echoId);
+        this.acknowledge(ev.submissionId);
+        s.setState({
+          lastError: { message: ev.message, retryable: ev.code === 'overloaded' },
+        });
         break;
       }
       case 'thread.created': {
@@ -386,7 +566,14 @@ export class EngineSession {
         // Keep optimistic echoes across the draft→thread transition so the
         // just-sent message doesn't blink out and back in.
         const echoes = liveItems.filter((it) => it.local);
-        s.setState({ ...initialState, connected: true, threadId: ev.threadId, pendingOverrides, liveItems: echoes, lastInput });
+        s.setState({
+          ...initialState,
+          connected: true,
+          threadId: ev.threadId,
+          pendingOverrides,
+          liveItems: echoes,
+          lastInput,
+        });
         this.send({ type: 'thread.subscribe', threadId: ev.threadId });
         const draft = this.pendingDraft;
         this.pendingDraft = null;
@@ -413,7 +600,14 @@ export class EngineSession {
         s.setState((st) => ({
           liveItems: [
             ...st.liveItems,
-            { itemId: ev.itemId, kind: ev.kind, meta: ev.meta, text: '', reasoning: '', status: 'streaming' },
+            {
+              itemId: ev.itemId,
+              kind: ev.kind,
+              meta: ev.meta,
+              text: '',
+              reasoning: '',
+              status: 'streaming',
+            },
           ],
         }));
         break;
@@ -451,11 +645,16 @@ export class EngineSession {
         break;
       case 'item.complete': {
         // todo_write surfaces the plan via the details channel (docs/05 §3).
-        const details = ev.result?.details as { todos?: { text: string; done: boolean }[] } | undefined;
+        const details = ev.result?.details as
+          { todos?: { text: string; done: boolean }[] } | undefined;
         s.setState((st) => ({
           liveItems: st.liveItems.map((it) =>
             it.itemId === ev.itemId
-              ? { ...it, status: ev.result?.ok === false ? 'fail' : 'ok', details: ev.result?.details }
+              ? {
+                  ...it,
+                  status: ev.result?.ok === false ? 'fail' : 'ok',
+                  details: ev.result?.details,
+                }
               : it,
           ),
           todos: details?.todos ?? st.todos,
@@ -466,7 +665,12 @@ export class EngineSession {
         s.setState((st) => ({
           pendingApprovals: [
             ...st.pendingApprovals,
-            { approvalId: ev.approvalId, turnId: ev.turnId, request: ev.request, requestedAt: Date.now() },
+            {
+              approvalId: ev.approvalId,
+              turnId: ev.turnId,
+              request: ev.request,
+              requestedAt: Date.now(),
+            },
           ],
         }));
         break;
@@ -477,9 +681,20 @@ export class EngineSession {
         // keep what we have — the dock shows placeholders for the rest.
         s.setState((prev) => ({
           queuedInputs: ev.pending,
-          queuedTexts: prev.queuedTexts.length > ev.pending
-            ? prev.queuedTexts.slice(prev.queuedTexts.length - ev.pending)
-            : prev.queuedTexts,
+          queuedRuns: ev.runs,
+          queuedTexts:
+            prev.queuedTexts.length > ev.pending
+              ? prev.queuedTexts.slice(prev.queuedTexts.length - ev.pending)
+              : prev.queuedTexts,
+        }));
+        break;
+      case 'run.recovery_required':
+        s.setState((state) => ({
+          recoverableRuns: [
+            ...state.recoverableRuns.filter((run) => run.runId !== ev.run.runId),
+            ev.run,
+          ],
+          wasInterrupted: state.wasInterrupted || ev.run.state === 'interrupted',
         }));
         break;
       case 'tabs.updated':
@@ -489,18 +704,24 @@ export class EngineSession {
         // Separate store: background-thread indicators must not re-render
         // ThreadUiState subscribers (the virtualized message stream).
         const next = new Map(this.activityStore.getState().activity);
-        if (!ev.activity.running && ev.activity.pendingApprovals === 0) next.delete(ev.activity.threadId);
-        else next.set(ev.activity.threadId, { running: ev.activity.running, pendingApprovals: ev.activity.pendingApprovals });
+        if (!ev.activity.running && ev.activity.pendingApprovals === 0)
+          next.delete(ev.activity.threadId);
+        else
+          next.set(ev.activity.threadId, {
+            running: ev.activity.running,
+            pendingApprovals: ev.activity.pendingApprovals,
+          });
         this.activityStore.setState({ activity: next });
         break;
       }
       case 'thread.updated':
         if (ev.threadId !== s.getState().threadId) break;
         s.setState((st) => {
-          if (st.meta) return { meta: { ...st.meta, ...ev.patch } };
+          if (st.meta && ev.revision < st.meta.revision) return st;
+          if (st.meta) return { meta: { ...st.meta, ...ev.patch, revision: ev.revision } };
           // Snapshot not here yet (subscribe still in flight): stash the
           // patch so the title isn't lost, apply it over the snapshot meta.
-          this.pendingMetaPatch = { ...this.pendingMetaPatch, ...ev.patch };
+          this.pendingMetaPatch = { ...this.pendingMetaPatch, ...ev.patch, revision: ev.revision };
           return st;
         });
         break;
@@ -522,16 +743,20 @@ export class EngineSession {
           this.startDraft();
           break;
         }
-        s.setState({ lastError: { message: ev.message, retryable: ev.retryable, kind: ev.errorKind } });
+        s.setState({
+          lastError: { message: ev.message, retryable: ev.retryable, kind: ev.errorKind },
+        });
         break;
       }
-      // pong / overloaded / unknown types: ignored here.
+      // pong / unknown types: ignored here.
       default:
         break;
     }
   }
 
   private applySnapshot(snap: ThreadSnapshot): void {
+    const current = this.store.getState();
+    if (current.meta?.id === snap.meta.id && current.meta.revision > snap.meta.revision) return;
     const metaPatch = this.pendingMetaPatch;
     this.pendingMetaPatch = null;
     this.store.setState((st) => {
@@ -550,14 +775,16 @@ export class EngineSession {
       const toolItemIds = new Set<string>();
       for (const item of snap.items) {
         if (item.kind === 'user_message') {
-          const text = (item.payload as { content?: { type: string; text?: string }[] }).content
-            ?.map((c) => (c.type === 'text' ? c.text ?? '' : ''))
-            .join('\n') ?? '';
+          const text =
+            (item.payload as { content?: { type: string; text?: string }[] }).content
+              ?.map((c) => (c.type === 'text' ? (c.text ?? '') : ''))
+              .join('\n') ?? '';
           userCounts.set(text, (userCounts.get(text) ?? 0) + 1);
         } else if (item.kind === 'assistant_message') {
-          const text = (item.payload as { content?: { type: string; text?: string }[] }).content
-            ?.map((c) => (c.type === 'text' ? c.text ?? '' : ''))
-            .join('') ?? '';
+          const text =
+            (item.payload as { content?: { type: string; text?: string }[] }).content
+              ?.map((c) => (c.type === 'text' ? (c.text ?? '') : ''))
+              .join('') ?? '';
           if (text) assistantTexts.add(text);
         } else if (item.kind === 'tool_call') {
           const id = (item.payload as { itemId?: string }).itemId;
@@ -576,7 +803,8 @@ export class EngineSession {
         }
         if (it.local || !turnLive) return false;
         if (it.kind === 'tool_call') return !toolItemIds.has(it.itemId);
-        if (it.kind === 'assistant_message') return it.status === 'streaming' || !assistantTexts.has(it.text);
+        if (it.kind === 'assistant_message')
+          return it.status === 'streaming' || !assistantTexts.has(it.text);
         return it.status === 'streaming';
       });
       return {
@@ -585,12 +813,15 @@ export class EngineSession {
         meta: metaPatch ? { ...snap.meta, ...metaPatch } : snap.meta,
         items: snap.items,
         liveItems,
-        activeTurn: snap.activeTurn && !snap.activeTurn.wasInterrupted
-          ? { turnId: snap.activeTurn.turnId, steerable: snap.activeTurn.steerable }
-          : null,
+        activeTurn:
+          snap.activeTurn && !snap.activeTurn.wasInterrupted
+            ? { turnId: snap.activeTurn.turnId, steerable: snap.activeTurn.steerable }
+            : null,
         wasInterrupted: snap.activeTurn?.wasInterrupted ?? false,
         pendingApprovals: snap.pendingApprovals,
         queuedInputs: snap.queuedInputs,
+        queuedRuns: snap.queuedRuns,
+        recoverableRuns: snap.recoverableRuns,
         // Restore todos from the latest todo_write result persisted in the
         // snapshot. The snapshot doesn't have a dedicated todos field, so we
         // scan backward for the last tool_result whose details carry todos[].
@@ -598,7 +829,8 @@ export class EngineSession {
           for (let i = snap.items.length - 1; i >= 0; i--) {
             const it = snap.items[i]!;
             if (it.kind !== 'tool_result') continue;
-            const d = (it.payload as { details?: { todos?: { text: string; done: boolean }[] } }).details;
+            const d = (it.payload as { details?: { todos?: { text: string; done: boolean }[] } })
+              .details;
             if (Array.isArray(d?.todos)) return d.todos;
           }
           return st.todos; // no todo_write in snapshot → keep live value

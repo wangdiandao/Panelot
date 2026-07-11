@@ -77,7 +77,10 @@ export function CitationsPill({ citations }: { citations: Citation[] }) {
 function Favicon({ url }: { url: string }) {
   const [failed, setFailed] = useState(false);
   const src = faviconUrl(url);
-  if (!src || failed) return <Globe className="size-4 rounded-full bg-background p-0.5 text-faint-foreground ring-1 ring-border" />;
+  if (!src || failed)
+    return (
+      <Globe className="size-4 rounded-full bg-background p-0.5 text-faint-foreground ring-1 ring-border" />
+    );
   return (
     <img
       src={src}

@@ -13,8 +13,14 @@ import { EngineHost } from '../../src/engine/host';
 import { createDirectPair } from '../../src/messaging/transport';
 import { ToolRegistry } from '../../src/agent/tool';
 import type { GatekeeperCheck } from '../../src/agent/loop';
+import { ENGINE_PROTOCOL, ENGINE_SCHEMA_HASH } from '../../src/messaging/protocol';
 import type { AgentEvent, Op } from '../../src/messaging/protocol';
-import type { FinalResult, ProviderAdapter, ProviderStream, StreamRequest } from '../../src/providers/types';
+import type {
+  FinalResult,
+  ProviderAdapter,
+  ProviderStream,
+  StreamRequest,
+} from '../../src/providers/types';
 
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
 
@@ -41,7 +47,9 @@ class MockProvider implements ProviderAdapter {
       [Symbol.asyncIterator]: () => it,
       final: async () => {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        for await (const _ of it) { /* drain */ }
+        for await (const _ of it) {
+          /* drain */
+        }
         return final;
       },
     };
@@ -53,7 +61,8 @@ class MockProvider implements ProviderAdapter {
 
 class TestClient {
   events: AgentEvent[] = [];
-  private waiters: { predicate: (ev: AgentEvent) => boolean; resolve: (ev: AgentEvent) => void }[] = [];
+  private waiters: { predicate: (ev: AgentEvent) => boolean; resolve: (ev: AgentEvent) => void }[] =
+    [];
   constructor(private send: (op: Op) => void) {}
   receive(ev: AgentEvent): void {
     this.events.push(ev);
@@ -61,19 +70,36 @@ class TestClient {
   }
   post(op: DistributiveOmit<Op, 'submissionId'> & { submissionId?: string }): string {
     const submissionId = op.submissionId ?? crypto.randomUUID();
-    this.send({ ...op, submissionId } as Op);
+    this.send({
+      ...op,
+      submissionId,
+      ...(op.type === 'initialize'
+        ? { protocol: ENGINE_PROTOCOL, schemaHash: ENGINE_SCHEMA_HASH, clientId: 'fork-client' }
+        : {}),
+    } as Op);
     return submissionId;
   }
-  waitNth<T extends AgentEvent['type']>(type: T, nth: number, timeoutMs = 3000): Promise<Extract<AgentEvent, { type: T }>> {
+  waitNth<T extends AgentEvent['type']>(
+    type: T,
+    nth: number,
+    timeoutMs = 3000,
+  ): Promise<Extract<AgentEvent, { type: T }>> {
     const found = this.events.filter((e) => e.type === type);
-    if (found.length >= nth) return Promise.resolve(found[nth - 1] as Extract<AgentEvent, { type: T }>);
+    if (found.length >= nth)
+      return Promise.resolve(found[nth - 1] as Extract<AgentEvent, { type: T }>);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(
-        () => reject(new Error(`timeout waiting for ${type} #${nth}; got: ${this.events.map((e) => e.type).join(',')}`)),
+        () =>
+          reject(
+            new Error(
+              `timeout waiting for ${type} #${nth}; got: ${this.events.map((e) => e.type).join(',')}`,
+            ),
+          ),
         timeoutMs,
       );
       this.waiters.push({
-        predicate: (ev) => ev.type === type && this.events.filter((e) => e.type === type).length >= nth,
+        predicate: (ev) =>
+          ev.type === type && this.events.filter((e) => e.type === type).length >= nth,
         resolve: (ev) => {
           clearTimeout(timer);
           resolve(ev as Extract<AgentEvent, { type: T }>);
@@ -106,7 +132,10 @@ async function setupThread(client: TestClient, db: PanelotDB): Promise<string> {
   client.post({ type: 'initialize', protocolVersion: 1 });
   await client.waitNth('initialized', 1);
   client.post({ type: 'thread.create' });
-  const created = (await client.waitNth('thread.created', 1)) as Extract<AgentEvent, { type: 'thread.created' }>;
+  const created = (await client.waitNth('thread.created', 1)) as Extract<
+    AgentEvent,
+    { type: 'thread.created' }
+  >;
   await db.threads.update(created.threadId, { title: 'pre-titled' });
   client.post({ type: 'thread.subscribe', threadId: created.threadId });
   await client.waitNth('initialized', 2);
@@ -127,7 +156,12 @@ describe('turn.fork', () => {
     expect(user1.branch).toBeUndefined();
 
     // Regenerate = fork at the preceding user node, re-sending its text.
-    client.post({ type: 'turn.fork', threadId, siblingOfNodeId: user1.nodeId, input: { text: 'question' } });
+    client.post({
+      type: 'turn.fork',
+      threadId,
+      siblingOfNodeId: user1.nodeId,
+      input: { text: 'question' },
+    });
     await client.waitNth('turn.complete', 2);
 
     const snap2 = await core.getSnapshot(threadId);
@@ -159,7 +193,12 @@ describe('turn.fork', () => {
     const snap1 = await core.getSnapshot(threadId);
     const user1 = snap1!.items.find((i) => i.kind === 'user_message')!;
 
-    client.post({ type: 'turn.fork', threadId, siblingOfNodeId: user1.nodeId, input: { text: 'edited' } });
+    client.post({
+      type: 'turn.fork',
+      threadId,
+      siblingOfNodeId: user1.nodeId,
+      input: { text: 'edited' },
+    });
     await client.waitNth('turn.complete', 2);
 
     const snap2 = await core.getSnapshot(threadId);
@@ -184,7 +223,12 @@ describe('turn.fork', () => {
     const snap1 = await core.getSnapshot(threadId);
     const user1 = snap1!.items.find((i) => i.kind === 'user_message')!;
 
-    client.post({ type: 'turn.fork', threadId, siblingOfNodeId: user1.nodeId, input: { text: 'edited' } });
+    client.post({
+      type: 'turn.fork',
+      threadId,
+      siblingOfNodeId: user1.nodeId,
+      input: { text: 'edited' },
+    });
     await client.waitNth('turn.complete', 2);
 
     // Switch back to the original branch via its user node.
@@ -209,8 +253,28 @@ describe('turn.fork', () => {
   it('rejects forking an unknown node', async () => {
     const { db, client } = build();
     const threadId = await setupThread(client, db);
-    client.post({ type: 'turn.fork', threadId, siblingOfNodeId: 'no-such-node', input: { text: 'x' } });
+    client.post({
+      type: 'turn.fork',
+      threadId,
+      siblingOfNodeId: 'no-such-node',
+      input: { text: 'x' },
+    });
     const err = (await client.waitNth('error', 1)) as Extract<AgentEvent, { type: 'error' }>;
     expect(err.code).toBe('thread_not_found');
+  });
+
+  it('rejects selecting an unknown node without corrupting the active leaf', async () => {
+    const { db, core, client, provider } = build();
+    const threadId = await setupThread(client, db);
+    provider.queue('answer');
+    client.post({ type: 'turn.submit', threadId, input: { text: 'question' } });
+    await client.waitNth('turn.complete', 1);
+    const before = await core.getSnapshot(threadId);
+
+    client.post({ type: 'thread.selectBranch', threadId, nodeId: 'no-such-node' });
+    const error = await client.waitNth('error', 1);
+
+    expect(error).toMatchObject({ code: 'thread_not_found' });
+    expect((await core.getSnapshot(threadId))?.meta.leafId).toBe(before?.meta.leafId);
   });
 });

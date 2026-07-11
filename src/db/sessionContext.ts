@@ -11,6 +11,7 @@
  */
 
 import type { ContentBlock } from '../messaging/protocol';
+import { fenceUntrusted } from '../prompts/assemble';
 import type { ThreadTree } from './tree';
 import type {
   AssistantMessagePayload,
@@ -72,10 +73,21 @@ function appendNodeAsMessage(messages: UnifiedMessage[], node: ThreadNode): void
     case 'user_message': {
       const p = node.payload as UserMessagePayload;
       const blocks: ContentBlock[] = [...p.content];
-      // Attached context (page excerpts etc.) rides along inside the user
-      // message; untrusted-content fencing is applied by the prompt assembler
-      // (docs/10 §4), not here.
-      for (const ctx of p.attachedContext ?? []) blocks.push(...ctx.content);
+      // This is the single boundary where attached context becomes provider input.
+      for (const ctx of p.attachedContext ?? []) {
+        const mustFence =
+          ctx.trust === 'untrusted' ||
+          ['page', 'selection', 'screenshot', 'tab', 'mcp_resource', 'file'].includes(ctx.kind);
+        blocks.push(
+          ...(mustFence
+            ? fenceBlocks(
+                ctx.content,
+                ctx.origin ?? `panelot://${ctx.provenance ?? ctx.kind}`,
+                ctx.provenance ?? ctx.kind,
+              )
+            : ctx.content),
+        );
+      }
       messages.push({ role: 'user', content: blocks });
       break;
     }
@@ -99,10 +111,22 @@ function appendNodeAsMessage(messages: UnifiedMessage[], node: ThreadNode): void
     }
     case 'tool_result': {
       const p = node.payload as ToolResultPayload;
+      const toolName = findToolName(messages, p.itemId) ?? 'tool';
+      const mustFence =
+        p.trust === 'untrusted' ||
+        p.provenance === 'page' ||
+        p.provenance === 'mcp' ||
+        p.provenance === 'import';
       messages.push({
         role: 'tool_result',
         toolCallId: p.itemId,
-        content: p.contentForLlm,
+        content: mustFence
+          ? fenceBlocks(
+              p.contentForLlm,
+              p.origin ?? `panelot://${p.provenance ?? 'tool'}`,
+              toolName,
+            )
+          : p.contentForLlm,
         isError: !p.ok,
       });
       break;
@@ -113,4 +137,22 @@ function appendNodeAsMessage(messages: UnifiedMessage[], node: ThreadNode): void
     case 'system_notice':
       break;
   }
+}
+
+function fenceBlocks(blocks: ContentBlock[], origin: string, source: string): ContentBlock[] {
+  return blocks.map((block) =>
+    block.type === 'text'
+      ? { type: 'text', text: fenceUntrusted(block.text, origin, source) }
+      : block,
+  );
+}
+
+function findToolName(messages: UnifiedMessage[], toolCallId: string): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]!;
+    if (message.role !== 'assistant') continue;
+    const call = message.toolCalls?.find((candidate) => candidate.id === toolCallId);
+    if (call) return call.name;
+  }
+  return undefined;
 }

@@ -86,9 +86,11 @@ describe('CdpManager (docs/05 §2 — on-demand, single-target, idle detach)', (
 
   it('a failing task still lets the next task attach (chain stays alive)', async () => {
     const cdp = new CdpManager();
-    await expect(cdp.withTab(1, async () => {
-      throw new Error('boom');
-    })).rejects.toThrow('boom');
+    await expect(
+      cdp.withTab(1, async () => {
+        throw new Error('boom');
+      }),
+    ).rejects.toThrow('boom');
     await cdp.withTab(2, async () => {});
     expect(cdp.isAttached(2)).toBe(true);
   });

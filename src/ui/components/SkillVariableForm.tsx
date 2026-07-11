@@ -16,13 +16,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from './ui/dialog';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from './ui/select';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import type { SkillCommand } from './composerTriggers';
 
 interface Props {
@@ -72,11 +66,18 @@ export function SkillVariableForm({ command, onClose, onSubmit }: Props) {
                 {v.required && <span className="text-destructive"> *</span>}
               </Label>
               {v.type === 'select' && v.options ? (
-                <Select value={values[v.key] ?? ''} onValueChange={(val) => setValues((s) => ({ ...s, [v.key]: val }))}>
-                  <SelectTrigger id={`var-${v.key}`} className="w-full"><SelectValue placeholder="选择…" /></SelectTrigger>
+                <Select
+                  value={values[v.key] ?? ''}
+                  onValueChange={(val) => setValues((s) => ({ ...s, [v.key]: val }))}
+                >
+                  <SelectTrigger id={`var-${v.key}`} className="w-full">
+                    <SelectValue placeholder="选择…" />
+                  </SelectTrigger>
                   <SelectContent>
                     {v.options.map((o) => (
-                      <SelectItem key={o} value={o}>{o}</SelectItem>
+                      <SelectItem key={o} value={o}>
+                        {o}
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -93,8 +94,12 @@ export function SkillVariableForm({ command, onClose, onSubmit }: Props) {
           ))}
         </div>
         <DialogFooter>
-          <Button variant="outline" size="sm" onClick={onClose}>取消</Button>
-          <Button size="sm" disabled={missing.length > 0} onClick={submit}>发送</Button>
+          <Button variant="outline" size="sm" onClick={onClose}>
+            取消
+          </Button>
+          <Button size="sm" disabled={missing.length > 0} onClick={submit}>
+            发送
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

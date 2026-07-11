@@ -1,0 +1,203 @@
+# 开发指南
+
+> 上级文档：[README.zh-CN.md](../README.zh-CN.md) · 设计总览：[DESIGN.md](../DESIGN.md) · AI 协作规范：[AGENTS.md](../AGENTS.md)
+>
+> 本文描述当前仓库中可以从代码、配置和测试验证的开发流程。`DESIGN.md` 与 `docs/01`—`docs/12` 同时包含已实现约束和目标规格；遇到状态差异时，以源码、测试和本文标注的当前边界为准。
+
+## 1. 环境要求
+
+| 项目 | 要求 | 依据 |
+|---|---|---|
+| Node.js | `>=20.12.0` | 当前安装的 WXT 0.20.27 `engines.node` |
+| pnpm | `9.12.3` | `package.json#packageManager` 与 lockfile v9 |
+| 浏览器 | Chrome 116+ | `wxt.config.ts` 的 `minimum_chrome_version`；Edge 作为构建目标但未声明单独最低版本 |
+| Playwright Chromium | 仅 e2e 需要 | `playwright.config.ts` 只配置 Chromium 项目 |
+
+项目没有必需的 `.env` 文件，也没有从 `process.env` / `import.meta.env` 读取运行配置。模型端点、API Key、权限、Skills 和 MCP 服务器均在扩展设置页配置。
+
+## 2. 安装与开发运行
+
+```bash
+pnpm install
+pnpm dev
+```
+
+`pnpm install` 的 `postinstall` 会执行 `wxt prepare`，生成 `.wxt/` 中的类型和构建辅助文件。`pnpm dev` 会：
+
+1. 启动 WXT/Vite 开发服务器；
+2. 构建 `dist/chrome-mv3-dev`；
+3. 尝试启动加载了该目录的开发 Chrome。
+
+如果当前环境不允许自动启动浏览器，构建目录仍可使用：打开 `chrome://extensions`，启用开发者模式，选择“加载已解压的扩展程序”，加载 `dist/chrome-mv3-dev`。
+
+页面热更新不等于 Service Worker 更新。修改 `entrypoints/background.ts`、`src/engine/`、`src/agent/`、`src/gatekeeper/` 或后台工具注册后，需要在 `chrome://extensions` 重新加载扩展。
+
+## 3. 目录导航
+
+| 路径 | 职责 |
+|---|---|
+| `entrypoints/background.ts` | 组合数据库、引擎、Provider、Gatekeeper、浏览器工具、Skills、MCP，并接入 Chrome 事件 |
+| `entrypoints/page-executor.unlisted.ts` | 按需注入页面的 L1 工具执行器、操作指示器与人工接管监听 |
+| `entrypoints/mcp-worker/` | offscreen document 中运行浏览器安全的 MCP SDK Client |
+| `entrypoints/sidepanel/` | 侧边栏入口 |
+| `entrypoints/chat/` | 全屏对话页入口 |
+| `entrypoints/options/` | 独立设置页入口；复用 `SettingsPanel` |
+| `src/engine/` | Op 调度、Thread/Turn 生命周期、队列、审批挂起和 Provider 解析 |
+| `src/agent/` | 极简 Agent loop、工具注册表和参数校验 |
+| `src/messaging/` | UI ↔ Service Worker 的共享协议与 Port/Direct transport |
+| `src/db/` | Dexie schema、会话树操作和模型上下文派生 |
+| `src/providers/` | OpenAI/Anthropic 线协议、SSE、重试、Key failover、模型列表与 Verify |
+| `src/tools/` | L0 标签页、L1 content script、L2 CDP 与后台内置工具 |
+| `src/gatekeeper/` | 审批策略、敏感站点/数据检测和持久规则 |
+| `src/skills/` | SKILL.md 解析、存储、索引与 `load_skill` |
+| `src/mcp/` | 远端 MCP JSON-RPC/Streamable HTTP、Bearer/OAuth 和工具桥接 |
+| `src/plugins/` | 数据型 Plugin 的 ZIP/GitHub 安装、校验、资产所有权、启停与卸载 |
+| `src/prompts/` | 内核提示词、分层拼装和不可信内容定界 |
+| `src/ui/` | EngineClient、共享对话组件、设置页、主题与 i18n |
+| `tests/` | Vitest 单测和无浏览器集成测试 |
+| `e2e/` | Playwright 真实 Chromium 测试；当前覆盖快照引擎和表单值回显 |
+| `preview/` | 表现层 UI 的独立预览入口，不参与扩展生产构建 |
+| `scripts/` | 可保留的仓库脚本；临时验证脚本放 `scratch/` |
+
+## 4. 核心调用链
+
+```text
+Side Panel / Chat UI
+  → EngineClient
+  → chrome.runtime Port（Op）
+  → EngineHost（握手、队列、事件合帧、订阅广播）
+  → RealEngineCore（会话、轮次、审批 RPC、队列）
+  → runTurn
+      → buildSessionContext（从会话树派生线性历史）
+      → SettingsProviderResolver → OpenAI/Anthropic adapter
+      → ToolRegistry → GatekeeperService
+          ├─ L0 标签页 API
+          ├─ L1 Content Script
+          ├─ L2 chrome.debugger
+          ├─ 后台内置工具
+          └─ 已连接的远端 MCP tools
+  → ThreadTree / PanelotDB checkpoint
+  → AgentEvent 广播回所有订阅该 Thread 的 UI
+```
+
+UI 不保存会话真相。会话路径和已完成工具结果来自 IndexedDB snapshot，流式 delta 仅作为实时叠加层；轮次结束后 UI 重新订阅并以持久化 snapshot 收敛。
+
+## 5. 配置与本地数据
+
+### chrome.storage.local
+
+主要键由 `src/settings/store.ts`、`src/gatekeeper/service.ts` 和 `src/mcp/manager.ts` 管理：
+
+- `connections`：Provider 连接；API Key 与敏感 Header 以 `secret:v1:` 前缀的 AES-GCM 密文保存，仍可读取旧 `enc:` 格式；
+- `model_presets`：ModelPreset 数据与独立管理页；
+- `global_settings`：默认模型、任务模型、主题、语言、全局指令等；
+- `last_model`、`thread_params:<threadId>`：模型选择和会话参数覆盖；
+- `site_prompts`、`thread_seen`：站点指令和 UI 已读状态；
+- `permission_rules`、`sensitive_origins`：审批规则和敏感站点列表；
+- `mcp_servers`：远端 MCP 非秘密配置；Bearer 与 OAuth refresh token 分离加密，OAuth access token 仅存 `storage.session`；
+- `panelot_local_secret_key`：本机 AES-GCM 封装 key material；`panelot_kek_v1` 仅用于兼容读取旧密文。
+
+API Key 加密用于避免明文浏览和意外泄漏，不构成对“可读取扩展存储和本机文件的攻击者”的强安全边界。导出数据默认剔除 Key，只有用户显式选择时才包含。
+
+### IndexedDB
+
+Dexie 数据库名为 `panelot_v1`，表定义在 `src/db/schema.ts`。0.1.0 数据不迁移：
+
+- `threads`：会话索引和当前分支叶子；
+- `nodes`：append-only 会话树节点；
+- `attachments`：截图、页面正文和用户附件；
+- `skills`：SKILL.md 原文、frontmatter 和状态；
+- `memories`：Agent memory 工具数据。
+- `runs`、`commandReceipts`、`approvals`：可恢复运行时、命令去重回执与审批；
+- `plugins`、`pluginAssets`：Plugin 元数据与只读资产。
+
+设置页“数据”支持 JSON 导出/覆盖导入。导出内容包括会话、节点、Skills、memories 和部分设置，但**不包含 attachments 表中的 blob**；覆盖导入也不会清空或恢复 attachments。因此该 JSON 不能单独视为完整附件备份，导入后还可能留下不再被节点引用的旧附件。导入前应先保留需要的原始附件，并另行导出 JSON；导入后重新打开侧边栏，让 UI 重新建立 snapshot。
+
+## 6. 开发命令
+
+| 命令 | 用途 | 产物/范围 |
+|---|---|---|
+| `pnpm dev` | Chrome 开发模式与热更新 | `dist/chrome-mv3-dev` |
+| `pnpm dev:edge` | Edge 开发目标 | `dist/edge-mv3-dev` |
+| `pnpm compile` | TypeScript 严格类型检查 | `tsc --noEmit` |
+| `pnpm lint` | ESLint 9 与 React Hooks 门禁 | 全仓库源码与测试 |
+| `pnpm format:check` | Prettier 格式门禁 | TypeScript/JavaScript/JSON |
+| `pnpm test` | Vitest 单测与无浏览器集成测试 | `tests/**/*.test.ts` |
+| `pnpm test:coverage` | Vitest V8 覆盖率与阈值门禁 | 终端 text；`coverage/`（JSON summary、LCOV、HTML） |
+| `pnpm test:watch` | Vitest 监听模式 | 本地开发使用 |
+| `pnpm e2e` | Playwright Chromium 测试 | `e2e/**/*.spec.ts` |
+| `pnpm build` | Chrome MV3 生产构建 | `dist/chrome-mv3` |
+| `pnpm build:edge` | Edge MV3 生产构建 | `dist/edge-mv3` |
+| `pnpm zip` | Chrome 发布压缩包 | `dist/panelot-<version>-chrome.zip` |
+| `pnpm zip:edge` | Edge 发布压缩包 | `dist/panelot-<version>-edge.zip` |
+| `pnpm budget` | 生产 JS、共享首屏与 background 包体预算 | `dist/chrome-mv3` |
+| `pnpm zip:smoke -- <zips...>` | ZIP manifest、权限与 source map smoke | Chrome/Edge ZIP |
+| `pnpm icons` | 从 `public/icon/icon.svg` 重新渲染 PNG 图标 | `public/icon/{16,32,48,128}.png` |
+
+CI 的 `verify` job 依次包含 format、lint、compile、真实扩展 e2e、双浏览器构建、包体预算与 ZIP smoke；独立的 `coverage` job 运行单元测试及覆盖率门禁，避免重复执行普通 `pnpm test`。行为改动需补对应测试。
+
+首次执行 e2e 前安装浏览器：
+
+```bash
+pnpm exec playwright install chromium
+```
+
+## 7. 测试边界
+
+- Vitest 使用 Node 环境；需要 DOM 的用例按文件引入 happy-dom/fake-indexeddb。
+- `pnpm test:coverage` 使用 V8 统计 `src/**/*.ts`（排除声明文件），整体 lines 与 branches 均不得低于 80%。`src/engine/runState.ts`、`src/gatekeeper/gatekeeper.ts`、`src/gatekeeper/rules.ts`、`src/gatekeeper/service.ts`、`src/security/secretStore.ts` 与 `src/data/exportImport.ts` 各自的 branches 均不得低于 90%。报告写入 `coverage/`；CI 的上传步骤始终执行，`coverage-report` artifact 必须存在并保留 30 天，缺失报告会使 `coverage` job 失败。
+- `tests/engine/integration.test.ts` 通过 DirectTransport、mock Provider 和真实 Dexie 逻辑验证引擎链路，不启动 Chrome。
+- Playwright 使用 persistent Chromium context 加载生产 unpacked extension，验证 MV3 Service Worker、options 页面与 manifest；另有快照/ref 与表单回显用例。真实 Provider/MCP mock fixture 矩阵仍未完成。
+- Provider Verify 需要用户配置的真实端点，不能由默认离线测试证明所有第三方兼容性。
+
+## 8. 常见问题
+
+### 修改后台代码后行为没有变化
+
+网页刷新不会替换 MV3 Service Worker。到 `chrome://extensions` 重新加载 Panelot，再刷新被操作页面。
+
+### `pnpm dev` 已构建但浏览器没有启动
+
+确认终端可以启动 Chrome。受限容器或沙箱可能报 `spawn EPERM`；这不影响已经生成的 `dist/chrome-mv3-dev`，可手动加载该目录。
+
+### Vitest/Playwright 在启动阶段报 `spawn EPERM`
+
+Vite、esbuild 和 Playwright 需要创建子进程。若错误发生在测试收集前，应先在允许子进程的终端重跑，不要直接判定为测试用例失败。
+
+### Playwright 报浏览器不存在
+
+执行 `pnpm exec playwright install chromium`。当前配置不会安装或运行 Firefox/WebKit。
+
+### Provider Verify 提示 host permission
+
+添加或验证端点时允许浏览器授予该 origin 的访问权限。项目不在 manifest 中静态声明 `<all_urls>` host permission，而是按需申请。
+
+### 生产构建提示 chunk 超过 500 kB
+
+Shiki 使用 core 单例与按需语言，Mermaid、KaTeX、CodeMirror 和设置页按需加载。Vite 仍会提示个别 chunk 超过 500 kB；CI 以可执行预算为准：生产 JS ≤ 4 MB、可见页共享 eager JS ≤ 500 KB、background ≤ 350 KB。
+
+## 9. 文档和代码约定
+
+- 修改行为前阅读 `DESIGN.md` 和对应分章，但同时核对源码与测试；目标规格不得写成已上线状态。
+- 跨上下文协议只在 `src/messaging/protocol.ts` 定义；UI、后台和测试直接引用同一类型。
+- UI 设计 token 的事实来源是 `src/ui/styles/global.css`；快捷键事实来源是 `src/ui/shortcuts.ts`。
+- 内核 prompt 的事实来源是 `src/prompts/kernel.ts`，文档只保留结构摘要。
+- 遵守 `AGENTS.md`：不写版本迭代/修复轮次注释，不保留注释掉的旧代码，临时脚本放 `scratch/`，任务结束清理临时报告和调试输出。
+
+仓库采用 MIT License，并维护 `CONTRIBUTING.md`、`SECURITY.md`、`CHANGELOG.md`、第三方归属与双语隐私政策。
+
+## 10. 发布打包
+
+```bash
+pnpm compile
+pnpm test
+pnpm e2e
+pnpm build
+pnpm build:edge
+pnpm zip
+pnpm zip:edge
+pnpm budget
+pnpm zip:smoke -- dist/panelot-<version>-chrome.zip dist/panelot-<version>-edge.zip
+```
+
+CI 对 push/PR 执行完整门禁。`v*` tag 在版本匹配后自动生成 Chrome/Edge ZIP、SHA-256 与 CycloneDX SBOM，并创建 GitHub Release；Chrome Web Store 与 Edge Add-ons 仍人工上传。隐私政策由 GitHub Pages 工作流发布。

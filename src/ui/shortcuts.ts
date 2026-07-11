@@ -45,10 +45,22 @@ export const SHORTCUT_REGISTRY: ShortcutDef[] = [
   { id: 'focusComposer', keys: 'Shift+Esc', labelKey: 'keys.focusComposer', scope: 'stream' },
   // Approval card — the fixed safety contract (docs/06 §4).
   { id: 'approveOnce', keys: 'Y', labelKey: 'keys.approveOnce', scope: 'approval', reserved: true },
-  { id: 'approveSession', keys: 'S', labelKey: 'keys.approveSession', scope: 'approval', reserved: true },
+  {
+    id: 'approveSession',
+    keys: 'S',
+    labelKey: 'keys.approveSession',
+    scope: 'approval',
+    reserved: true,
+  },
   { id: 'approveSite', keys: 'A', labelKey: 'keys.approveSite', scope: 'approval', reserved: true },
   { id: 'decline', keys: 'N', labelKey: 'keys.decline', scope: 'approval', reserved: true },
-  { id: 'declineStop', keys: 'Esc', labelKey: 'keys.declineStop', scope: 'approval', reserved: true },
+  {
+    id: 'declineStop',
+    keys: 'Esc',
+    labelKey: 'keys.declineStop',
+    scope: 'approval',
+    reserved: true,
+  },
 ];
 
 const RESERVED_KEYS = new Set(

@@ -10,7 +10,12 @@ import { SettingsStore } from '../settings/store';
 type Theme = 'system' | 'dark' | 'light';
 
 function apply(theme: Theme): void {
-  const resolved = theme === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : theme;
+  const resolved =
+    theme === 'system'
+      ? matchMedia('(prefers-color-scheme: light)').matches
+        ? 'light'
+        : 'dark'
+      : theme;
   document.documentElement.classList.toggle('dark', resolved === 'dark');
 }
 
@@ -30,7 +35,8 @@ export function useTheme(): void {
     // React to setting changes across the extension (chrome.storage events).
     const onStorage = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
       if (area !== 'local' || !changes.global_settings) return;
-      const next = (changes.global_settings.newValue as { theme?: Theme } | undefined)?.theme ?? 'system';
+      const next =
+        (changes.global_settings.newValue as { theme?: Theme } | undefined)?.theme ?? 'system';
       current = next;
       apply(next);
     };

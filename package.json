@@ -2,7 +2,11 @@
   "name": "panelot",
   "description": "Browser-native AI agent extension — BYOK, Skills, MCP, full browser operation",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
+  "packageManager": "pnpm@9.12.3",
+  "engines": {
+    "node": ">=20.12"
+  },
   "type": "module",
   "scripts": {
     "dev": "wxt",
@@ -12,9 +16,15 @@
     "zip": "wxt zip",
     "zip:edge": "wxt zip -b edge",
     "compile": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "format": "prettier --write \"{e2e,entrypoints,src,tests,scripts}/**/*.{ts,tsx,js,mjs,json}\" \"*.{ts,js,mjs,json}\"",
+    "format:check": "prettier --check \"{e2e,entrypoints,src,tests,scripts}/**/*.{ts,tsx,js,mjs,json}\" \"*.{ts,js,mjs,json}\"",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
-    "e2e": "playwright test",
+    "e2e": "wxt build && playwright test",
+    "budget": "node scripts/check-bundle-budget.mjs",
+    "zip:smoke": "node scripts/zip-smoke.mjs",
     "icons": "node scripts/render-icons.mjs",
     "postinstall": "wxt prepare"
   },
@@ -30,9 +40,10 @@
     "cmdk": "^1.1.1",
     "codemirror": "^6.0.2",
     "dexie": "^4.4.4",
+    "js-yaml": "4.3.0",
+    "jszip": "3.10.1",
     "katex": "^0.17.0",
     "lucide-react": "^1.23.0",
-    "mermaid": "^11.16.0",
     "radix-ui": "^1.6.1",
     "react": "^19",
     "react-dom": "^19",
@@ -49,21 +60,28 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@eslint/js": "9.39.4",
     "@playwright/test": "^1.61.1",
     "@tailwindcss/vite": "^4.3.2",
     "@types/chrome": "^0.2.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
+    "@vitest/coverage-v8": "4.1.9",
     "@wxt-dev/module-react": "^1.2.2",
     "esbuild": "^0.28.1",
+    "eslint": "9.39.4",
+    "eslint-plugin-react-hooks": "7.1.1",
     "fake-indexeddb": "^6.2.5",
+    "globals": "^17.7.0",
     "happy-dom": "^20.10.6",
+    "prettier": "3.9.5",
     "shadcn": "^4.13.0",
     "tailwindcss": "^4.3.2",
     "tw-animate-css": "^1.4.0",
     "typescript": "^6.0.3",
+    "typescript-eslint": "8.63.0",
     "vite": "^8.1.3",
-    "vitest": "^4.1.9"
+    "vitest": "4.1.9"
   }
 }

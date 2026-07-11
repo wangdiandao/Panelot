@@ -7,7 +7,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BrowserToolGateway } from '../../src/tools/gateway';
 
-type TabStub = { id: number; url: string; active: boolean; lastAccessed?: number; status?: string; title?: string };
+type TabStub = {
+  id: number;
+  url: string;
+  active: boolean;
+  lastAccessed?: number;
+  status?: string;
+  title?: string;
+};
 
 let tabs: TabStub[] = [];
 let sendMessage: ReturnType<typeof vi.fn>;
@@ -20,7 +27,8 @@ beforeEach(() => {
   (globalThis as unknown as { chrome: unknown }).chrome = {
     tabs: {
       query: vi.fn(async (q: { active?: boolean }) =>
-        tabs.filter((t) => (q.active === undefined ? true : t.active === q.active))),
+        tabs.filter((t) => (q.active === undefined ? true : t.active === q.active)),
+      ),
       get: vi.fn(async (id: number) => {
         const t = tabs.find((x) => x.id === id);
         if (!t) throw new Error('no tab');
@@ -120,7 +128,11 @@ describe('navigation-aware dispatch (click → page change ≠ failure)', () => 
         throw new Error('The message channel closed before a response was received.');
       }
       if (op.tool === 'read_page') {
-        return { requestId: 'x', ok: true, result: { resultText: '# Page Snapshot (s1)\n- button "买" [ref=s1_1]' } };
+        return {
+          requestId: 'x',
+          ok: true,
+          result: { resultText: '# Page Snapshot (s1)\n- button "买" [ref=s1_1]' },
+        };
       }
       throw new Error(`unexpected ${op.tool}`);
     });
@@ -165,7 +177,10 @@ describe('navigation-aware dispatch (click → page change ≠ failure)', () => 
     gw.pinTarget('t1', 5);
     let pinged = false;
     sendMessage.mockImplementation(async (_tabId: number, op: { tool: string }) => {
-      if (op.tool === '__ping') { pinged = true; return 'pong'; }
+      if (op.tool === '__ping') {
+        pinged = true;
+        return 'pong';
+      }
       // Never resolves for the real tool → the race rejects with a timeout.
       return new Promise(() => {});
     });

@@ -10,17 +10,22 @@ import { toast } from 'sonner';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Input } from '../components/ui/input';
-import { Label } from '../components/ui/label';
+import { Field, FieldDescription, FieldGroup, FieldLabel } from '../components/ui/field';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../components/ui/collapsible';
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from '../components/ui/select';
 import { GatekeeperService } from '../../gatekeeper/service';
-import { ACTION_CATEGORIES, DEFAULT_SENSITIVE_PATTERNS, type PermissionRule } from '../../gatekeeper/rules';
+import {
+  ACTION_CATEGORIES,
+  DEFAULT_SENSITIVE_PATTERNS,
+  type PermissionRule,
+} from '../../gatekeeper/rules';
 import { SettingsStore, type GlobalSettings, storageGet, storageSet } from '../../settings/store';
 
 const POLICY_DESC: Record<string, string> = {
@@ -48,7 +53,11 @@ export function PermissionsPage() {
   const [rules, setRules] = useState<PermissionRule[]>([]);
   const [sensitive, setSensitive] = useState<string[]>([]);
   const [newPattern, setNewPattern] = useState('');
-  const [newRule, setNewRule] = useState<{ tool: string; origin: string; verdict: PermissionRule['verdict'] }>({
+  const [newRule, setNewRule] = useState<{
+    tool: string;
+    origin: string;
+    verdict: PermissionRule['verdict'];
+  }>({
     tool: '',
     origin: '*',
     verdict: 'ask',
@@ -76,7 +85,12 @@ export function PermissionsPage() {
     const tool = newRule.tool.trim();
     const origin = newRule.origin.trim() || '*';
     if (!tool) return;
-    await GatekeeperService.addRule({ tool, origin, verdict: newRule.verdict, source: 'user_setting' });
+    await GatekeeperService.addRule({
+      tool,
+      origin,
+      verdict: newRule.verdict,
+      source: 'user_setting',
+    });
     setRules(await GatekeeperService.listRules());
     setNewRule({ tool: '', origin: '*', verdict: 'ask' });
     toast.success('规则已添加');
@@ -101,9 +115,60 @@ export function PermissionsPage() {
     <div className="max-w-2xl space-y-6">
       <h2 className="text-[15px] font-semibold">浏览器权限</h2>
 
+      <FieldGroup className="grid grid-cols-2 gap-4">
+        <Field>
+          <FieldLabel>Default approval policy</FieldLabel>
+          <Select
+            value={settings.defaultApprovalPolicy ?? 'untrusted'}
+            onValueChange={(value) => void updateSettings({ defaultApprovalPolicy: value })}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {Object.keys(POLICY_DESC).map((policy) => (
+                  <SelectItem key={policy} value={policy}>
+                    {policy}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          <FieldDescription>
+            {POLICY_DESC[settings.defaultApprovalPolicy ?? 'untrusted']}
+          </FieldDescription>
+        </Field>
+        <Field>
+          <FieldLabel>Default capability scope</FieldLabel>
+          <Select
+            value={normalizeScope(settings.defaultCapabilityScope)}
+            onValueChange={(value) => void updateSettings({ defaultCapabilityScope: value })}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {Object.keys(SCOPE_DESC).map((scope) => (
+                  <SelectItem key={scope} value={scope}>
+                    {scope}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          <FieldDescription>
+            {SCOPE_DESC[normalizeScope(settings.defaultCapabilityScope)]}
+          </FieldDescription>
+        </Field>
+      </FieldGroup>
+
       {/* Rule table */}
       <div className="space-y-2">
-        <div className="text-[13px] font-medium text-muted-foreground">权限规则（allow / ask / deny）</div>
+        <div className="text-[13px] font-medium text-muted-foreground">
+          权限规则（allow / ask / deny）
+        </div>
         {rules.length === 0 ? (
           <div className="rounded-md border border-dashed border-border p-4 text-center text-[12px] text-muted-foreground">
             暂无规则。审批时选择「本站始终」会在此生成持久规则，也可在下方手动添加。
@@ -124,7 +189,17 @@ export function PermissionsPage() {
                 <tr key={r.id} className="border-b border-border/50">
                   <td className="py-1 font-mono">{r.tool}</td>
                   <td className="font-mono">{r.origin}</td>
-                  <td className={r.verdict === 'deny' ? 'text-destructive' : r.verdict === 'ask' ? 'text-warning' : 'text-success'}>{r.verdict}</td>
+                  <td
+                    className={
+                      r.verdict === 'deny'
+                        ? 'text-destructive'
+                        : r.verdict === 'ask'
+                          ? 'text-warning'
+                          : 'text-success'
+                    }
+                  >
+                    {r.verdict}
+                  </td>
                   <td className="text-muted-foreground">{r.source}</td>
                   <td className="text-right">
                     <Button
@@ -157,25 +232,38 @@ export function PermissionsPage() {
           />
           <Select
             value={newRule.verdict}
-            onValueChange={(v) => setNewRule({ ...newRule, verdict: v as PermissionRule['verdict'] })}
+            onValueChange={(v) =>
+              setNewRule({ ...newRule, verdict: v as PermissionRule['verdict'] })
+            }
           >
-            <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="w-24">
+              <SelectValue />
+            </SelectTrigger>
             <SelectContent>
-              <SelectItem value="allow">allow</SelectItem>
-              <SelectItem value="ask">ask</SelectItem>
-              <SelectItem value="deny">deny</SelectItem>
+              <SelectGroup>
+                <SelectItem value="allow">allow</SelectItem>
+                <SelectItem value="ask">ask</SelectItem>
+                <SelectItem value="deny">deny</SelectItem>
+              </SelectGroup>
             </SelectContent>
           </Select>
-          <Button size="sm" onClick={() => void addRule()}>添加</Button>
+          <Button size="sm" onClick={() => void addRule()}>
+            添加
+          </Button>
         </div>
         <div className="text-[11px] text-muted-foreground">
-          ask = 即使默认策略会放行也强制确认。类别：{Object.keys(ACTION_CATEGORIES).map((c) => `category:${c}`).join('、')}
+          ask = 即使默认策略会放行也强制确认。类别：
+          {Object.keys(ACTION_CATEGORIES)
+            .map((c) => `category:${c}`)
+            .join('、')}
         </div>
       </div>
 
       {/* Sensitive-origin blacklist */}
       <div className="space-y-2">
-        <div className="text-[13px] font-medium text-muted-foreground">敏感站点黑名单（硬拒绝，不可被规则覆盖）</div>
+        <div className="text-[13px] font-medium text-muted-foreground">
+          敏感站点黑名单（硬拒绝，不可被规则覆盖）
+        </div>
         <div className="flex gap-2">
           <Input
             value={newPattern}
@@ -184,14 +272,23 @@ export function PermissionsPage() {
             placeholder="*.mybank.com"
             className="flex-1 font-mono"
           />
-          <Button size="sm" onClick={() => void addSensitive()}>添加</Button>
+          <Button size="sm" onClick={() => void addSensitive()}>
+            添加
+          </Button>
         </div>
         {sensitive.length > 0 && (
           <div className="flex flex-wrap gap-1">
             {sensitive.map((p) => (
               <Badge key={p} variant="outline" className="gap-1 font-mono text-[11px]">
                 {p}
-                <button type="button" onClick={() => void removeSensitive(p)} aria-label={`移除 ${p}`} className="text-muted-foreground hover:text-destructive">×</button>
+                <button
+                  type="button"
+                  onClick={() => void removeSensitive(p)}
+                  aria-label={`移除 ${p}`}
+                  className="text-muted-foreground hover:text-destructive"
+                >
+                  ×
+                </button>
               </Badge>
             ))}
           </div>
@@ -203,7 +300,9 @@ export function PermissionsPage() {
           <CollapsibleContent>
             <div className="mt-1 flex flex-wrap gap-1">
               {DEFAULT_SENSITIVE_PATTERNS.map((p) => (
-                <Badge key={p} variant="secondary" className="font-mono text-[11px]">{p}</Badge>
+                <Badge key={p} variant="secondary" className="font-mono text-[11px]">
+                  {p}
+                </Badge>
               ))}
             </div>
           </CollapsibleContent>

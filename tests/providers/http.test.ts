@@ -17,7 +17,9 @@ describe('normalizeHttpError (docs/03 §7)', () => {
   });
 
   it('detects context_too_long from a 400 body', () => {
-    expect(normalizeHttpError(400, 'This model maximum context length is 8192 tokens').kind).toBe('context_too_long');
+    expect(normalizeHttpError(400, 'This model maximum context length is 8192 tokens').kind).toBe(
+      'context_too_long',
+    );
     expect(normalizeHttpError(400, 'invalid field foo').kind).toBe('protocol');
   });
 
@@ -50,7 +52,9 @@ describe('key failover (docs/03 §8, sticky + failover)', () => {
   it('throws auth error when ALL keys fail (user must fix)', async () => {
     const keys = createKeyRing(['a', 'b']);
     const attempt = vi.fn().mockRejectedValue(new ProviderError('auth', '401'));
-    await expect(withRetry(keys, attempt, { sleep: noSleep })).rejects.toMatchObject({ kind: 'auth' });
+    await expect(withRetry(keys, attempt, { sleep: noSleep })).rejects.toMatchObject({
+      kind: 'auth',
+    });
     expect(attempt).toHaveBeenCalledTimes(2);
   });
 
@@ -96,14 +100,34 @@ describe('key failover (docs/03 §8, sticky + failover)', () => {
   it('does not retry context_too_long (not a transient failure)', async () => {
     const keys = createKeyRing(['k']);
     const attempt = vi.fn().mockRejectedValue(new ProviderError('context_too_long', 'too long'));
-    await expect(withRetry(keys, attempt, { sleep: noSleep })).rejects.toMatchObject({ kind: 'context_too_long' });
+    await expect(withRetry(keys, attempt, { sleep: noSleep })).rejects.toMatchObject({
+      kind: 'context_too_long',
+    });
     expect(attempt).toHaveBeenCalledTimes(1);
   });
 
   it('gives up after maxAttempts', async () => {
     const keys = createKeyRing(['k']);
     const attempt = vi.fn().mockRejectedValue(new ProviderError('network', 'down'));
-    await expect(withRetry(keys, attempt, { maxAttempts: 3, sleep: noSleep })).rejects.toMatchObject({ kind: 'network' });
+    const sleep = vi.fn(noSleep);
+    await expect(withRetry(keys, attempt, { maxAttempts: 3, sleep })).rejects.toMatchObject({
+      kind: 'network',
+    });
     expect(attempt).toHaveBeenCalledTimes(3);
+    expect(sleep).toHaveBeenCalledTimes(2);
+  });
+
+  it('aborts while waiting between attempts', async () => {
+    const controller = new AbortController();
+    const keys = createKeyRing(['k']);
+    const attempt = vi.fn().mockRejectedValue(new ProviderError('network', 'down'));
+    const pending = withRetry(keys, attempt, {
+      signal: controller.signal,
+      baseDelayMs: 60_000,
+    });
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(attempt).toHaveBeenCalledTimes(1);
   });
 });

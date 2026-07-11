@@ -20,6 +20,7 @@ export interface AssembleOptions {
   /** Site-level prompts matching the current target tab (docs/08 §6). */
   sitePrompts?: { pattern: string; prompt: string }[];
   skillsIndex?: SkillIndexEntry[];
+  activeSkills?: { name: string; body: string }[];
   environment?: {
     date?: string;
     language?: string;
@@ -39,17 +40,25 @@ export function assembleSystemPrompt(opts: AssembleOptions = {}): string {
     layers.push(`# User instructions\n${opts.userGlobalPrompt.trim()}`);
   }
   if (opts.sitePrompts?.length) {
-    const site = opts.sitePrompts
-      .map((s) => `## ${s.pattern}\n${s.prompt.trim()}`)
-      .join('\n\n');
+    const site = opts.sitePrompts.map((s) => `## ${s.pattern}\n${s.prompt.trim()}`).join('\n\n');
     layers.push(`# Site instructions\n${site}`);
   }
   if (opts.skillsIndex?.length) {
     const index = opts.skillsIndex
-      .map((s) => `- ${s.name}: ${s.description}${s.sites?.length ? ` [sites: ${s.sites.join(', ')}]` : ''}`)
+      .map(
+        (s) =>
+          `- ${s.name}: ${s.description}${s.sites?.length ? ` [sites: ${s.sites.join(', ')}]` : ''}`,
+      )
       .join('\n');
     layers.push(
       `# Skills\nThe following skills are available. Call load_skill(name) before doing a matching task.\n${index}`,
+    );
+  }
+  if (opts.activeSkills?.length) {
+    layers.push(
+      opts.activeSkills
+        .map((skill) => `# Active Skill: ${skill.name}\n${skill.body.trim()}`)
+        .join('\n\n'),
     );
   }
   if (opts.environment) {

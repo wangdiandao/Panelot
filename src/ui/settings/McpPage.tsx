@@ -5,7 +5,7 @@
  * Built on shadcn/ui primitives; delete confirm uses AlertDialog.
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '../components/ui/button';
 import { Switch } from '../components/ui/switch';
@@ -22,9 +22,8 @@ import {
   AlertDialogTitle,
 } from '../components/ui/alert-dialog';
 import { parseMcpJson, type McpServerConfig } from '../../mcp/types';
-import { storageGet, storageSet } from '../../settings/store';
-
-const SERVERS_KEY = 'mcp_servers';
+import { listMcpServers, saveMcpServers } from '../../mcp/store';
+import { hostPermissionBroker } from '../../permissions/hostPermissionBroker';
 
 export function McpPage() {
   const [servers, setServers] = useState<McpServerConfig[]>([]);
@@ -32,13 +31,32 @@ export function McpPage() {
   const [error, setError] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [deleting, setDeleting] = useState<McpServerConfig | null>(null);
+  const [descriptions, setDescriptions] = useState<Record<string, McpDescription>>({});
 
-  const refresh = () => storageGet<McpServerConfig[]>(SERVERS_KEY, []).then(setServers);
-  useEffect(() => void refresh(), []);
+  const loadDescription = useCallback(async (id: string, connect = false) => {
+    const response = (await chrome.runtime.sendMessage({
+      type: connect ? 'panelot.mcpConnect' : 'panelot.mcpStatus',
+      id,
+    })) as { ok: boolean; error?: string; description?: McpDescription };
+    if (response.description) {
+      setDescriptions((current) => ({ ...current, [id]: response.description! }));
+    }
+    if (!response.ok && response.error) toast.error(response.error);
+  }, []);
+
+  const refresh = useCallback(
+    () =>
+      listMcpServers().then((list) => {
+        setServers(list);
+        for (const server of list) void loadDescription(server.id);
+      }),
+    [loadDescription],
+  );
+  useEffect(() => void refresh(), [refresh]);
 
   const save = async (list: McpServerConfig[]) => {
     setServers(list);
-    await storageSet(SERVERS_KEY, list);
+    await saveMcpServers(list);
   };
 
   const doImport = async () => {
@@ -51,6 +69,10 @@ export function McpPage() {
         disabledTools: [],
         connectOnStartup: false,
       }));
+      for (const server of added) {
+        const granted = await hostPermissionBroker.request(server.url);
+        if (!granted) throw new Error(`未授予 ${server.url} 的访问权限`);
+      }
       await save([...servers, ...added]);
       setImportText('');
       setImportOpen(false);
@@ -63,7 +85,7 @@ export function McpPage() {
 
   const requestHost = async (url: string) => {
     try {
-      await chrome.permissions.request({ origins: [`${new URL(url).origin}/*`] });
+      await hostPermissionBroker.request(url);
     } catch {
       /* non-extension env */
     }
@@ -86,12 +108,19 @@ export function McpPage() {
               value={importText}
               onChange={(e) => setImportText(e.target.value)}
               rows={6}
-              placeholder={'{\n  "mcpServers": {\n    "github": { "url": "https://…/mcp", "headers": { "Authorization": "Bearer …" } }\n  }\n}'}
+              placeholder={
+                '{\n  "mcpServers": {\n    "github": { "url": "https://…/mcp", "headers": { "Authorization": "Bearer …" } }\n  }\n}'
+              }
               className="font-mono text-[12px]"
             />
-            <div className="text-[11px] text-muted-foreground">兼容 Claude Code mcpServers / Cursor 配置片段（识别 url / type / headers.Authorization）。</div>
+            <div className="text-[11px] text-muted-foreground">
+              兼容 Claude Code mcpServers / Cursor 配置片段（识别 url / type /
+              headers.Authorization）。
+            </div>
             {error && <div className="text-[12px] text-destructive">{error}</div>}
-            <Button variant="outline" size="sm" onClick={() => void doImport()}>解析并添加</Button>
+            <Button variant="outline" size="sm" onClick={() => void doImport()}>
+              解析并添加
+            </Button>
           </div>
         </CollapsibleContent>
       </Collapsible>
@@ -101,40 +130,109 @@ export function McpPage() {
           还没有 MCP 服务器。粘贴一份配置片段即可接入远端工具。
         </div>
       ) : (
-        servers.map((s) => (
-          <div key={s.id} className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3">
-            <Switch
-              checked={s.enabled}
-              onCheckedChange={(on) => void save(servers.map((x) => (x.id === s.id ? { ...x, enabled: on } : x)))}
-              aria-label={`启用 ${s.name}`}
-            />
-            <div className="min-w-0">
-              <div className="text-[13px] font-medium">{s.name}</div>
-              <div className="truncate font-mono text-[11px] text-muted-foreground">
-                {s.url} · {s.auth.kind}
+        servers.map((s) => {
+          const description = descriptions[s.id];
+          return (
+            <div key={s.id} className="rounded-lg border border-border bg-card px-4 py-3">
+              <div className="flex items-center gap-3">
+                <Switch
+                  checked={s.enabled}
+                  onCheckedChange={(on) =>
+                    void save(servers.map((x) => (x.id === s.id ? { ...x, enabled: on } : x))).then(
+                      () => refresh(),
+                    )
+                  }
+                  aria-label={`启用 ${s.name}`}
+                />
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 text-[13px] font-medium">
+                    {s.name}
+                    <span
+                      className={`size-1.5 rounded-full ${description?.state.status === 'ready' ? 'bg-success' : description?.state.status === 'error' ? 'bg-destructive' : 'bg-muted-foreground'}`}
+                    />
+                    <span className="text-[10px] font-normal text-faint-foreground">
+                      {description?.state.status ?? 'disconnected'}
+                    </span>
+                  </div>
+                  <div className="truncate font-mono text-[11px] text-muted-foreground">
+                    {s.url} · {s.auth.kind}
+                  </div>
+                </div>
+                <div className="ml-auto flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void requestHost(s.url).then(() => loadDescription(s.id, true))}
+                    disabled={!s.enabled || description?.state.status === 'connecting'}
+                  >
+                    {description?.state.status === 'ready' ? '重新连接' : '连接测试'}
+                  </Button>
+                  {s.auth.kind === 'oauth' && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        void requestHost(s.url).then(() =>
+                          chrome.runtime.sendMessage({ type: 'panelot.mcpOauth', id: s.id }),
+                        )
+                      }
+                    >
+                      授权
+                    </Button>
+                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    onClick={() => setDeleting(s)}
+                  >
+                    删除
+                  </Button>
+                </div>
               </div>
-            </div>
-            <div className="ml-auto flex gap-2">
-              {s.auth.kind === 'oauth' && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void requestHost(s.url).then(() => chrome.runtime.sendMessage({ type: 'panelot.mcpOauth', id: s.id }))}
-                >
-                  授权
-                </Button>
+              {description?.state.status === 'error' && (
+                <div className="mt-2 rounded bg-destructive/10 px-2 py-1 text-[11px] text-destructive">
+                  {description.state.reason}
+                </div>
               )}
-              <Button
-                variant="outline"
-                size="sm"
-                className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                onClick={() => setDeleting(s)}
-              >
-                删除
-              </Button>
+              {description && (
+                <Collapsible>
+                  <CollapsibleTrigger className="mt-2 text-[11px] text-muted-foreground hover:text-foreground">
+                    工具 {description.tools.length} · Prompts {description.promptCount} · Resources{' '}
+                    {description.resourceCount}
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="mt-1 space-y-1 border-t border-border/40 pt-2">
+                    {description.tools.map((tool) => (
+                      <label key={tool.name} className="flex items-start gap-2 text-[11px]">
+                        <Switch
+                          checked={!s.disabledTools.includes(tool.name)}
+                          aria-label={`启用 MCP 工具 ${tool.name}`}
+                          onCheckedChange={(enabled) => {
+                            const disabledTools = enabled
+                              ? s.disabledTools.filter((name) => name !== tool.name)
+                              : [...new Set([...s.disabledTools, tool.name])];
+                            void save(
+                              servers.map((server) =>
+                                server.id === s.id ? { ...server, disabledTools } : server,
+                              ),
+                            ).then(() => refresh());
+                          }}
+                        />
+                        <span>
+                          <span className="font-mono text-foreground">{tool.name}</span>
+                          {tool.description ? ` — ${tool.description}` : ''}
+                        </span>
+                      </label>
+                    ))}
+                    {description.tools.length === 0 && (
+                      <div className="text-[11px] text-faint-foreground">连接后显示工具清单</div>
+                    )}
+                  </CollapsibleContent>
+                </Collapsible>
+              )}
             </div>
-          </div>
-        ))
+          );
+        })
       )}
 
       <AlertDialog open={deleting !== null} onOpenChange={(o) => !o && setDeleting(null)}>
@@ -162,4 +260,14 @@ export function McpPage() {
       </AlertDialog>
     </div>
   );
+}
+
+interface McpDescription {
+  state:
+    | { status: 'disconnected' | 'connecting' }
+    | { status: 'ready'; toolCount: number }
+    | { status: 'error'; reason: string };
+  tools: { name: string; description?: string; disabled: boolean }[];
+  promptCount: number;
+  resourceCount: number;
 }

@@ -85,7 +85,11 @@ export function ApprovalCard({ approval, queuePosition, onDecision }: Props) {
         <div className="flex items-center gap-2 text-[13px]">
           <span className="font-semibold text-warning">{t('approval.allow')}</span>
           <span className="font-medium">{request.label}</span>
-          {request.targetOrigin && <span className="font-mono text-[11px] text-muted-foreground">{request.targetOrigin}</span>}
+          {request.targetOrigin && (
+            <span className="font-mono text-[11px] text-muted-foreground">
+              {request.targetOrigin}
+            </span>
+          )}
           {queuePosition && queuePosition.total > 1 && (
             <span className="ml-auto text-[11px] text-muted-foreground">
               {queuePosition.index}/{queuePosition.total}
@@ -102,13 +106,27 @@ export function ApprovalCard({ approval, queuePosition, onDecision }: Props) {
           {JSON.stringify(request.params, null, 2)}
         </pre>
         <div className="flex gap-2">
-          <Button size="sm" className="h-7 px-3 text-[12px]" onClick={() => decide({ kind: 'accept' })}>
+          <Button
+            size="sm"
+            className="h-7 px-3 text-[12px]"
+            onClick={() => decide({ kind: 'accept' })}
+          >
             {t('approval.allowOnce')} <kbd className="opacity-60">Y</kbd>
           </Button>
-          <Button variant="secondary" size="sm" className="h-7 px-3 text-[12px]" onClick={() => decide({ kind: 'acceptForSession' })}>
+          <Button
+            variant="secondary"
+            size="sm"
+            className="h-7 px-3 text-[12px]"
+            onClick={() => decide({ kind: 'acceptForSession' })}
+          >
             {t('approval.allowSession')} <kbd className="opacity-60">S</kbd>
           </Button>
-          <Button variant="secondary" size="sm" className="h-7 px-3 text-[12px]" onClick={() => decide({ kind: 'acceptForSite' })}>
+          <Button
+            variant="secondary"
+            size="sm"
+            className="h-7 px-3 text-[12px]"
+            onClick={() => decide({ kind: 'acceptForSite' })}
+          >
             {t('approval.allowSite')} <kbd className="opacity-60">A</kbd>
           </Button>
           <Button

@@ -42,9 +42,13 @@ interface ModelEntry {
 }
 ```
 
-能力标注三来源，优先级递减：用户手改 > 内置已知模型表（打包一份常见模型的静态 JSON）> 保守默认（toolUse:true, vision:false）。
+能力标注来自 `src/providers/registry.ts` 内置前缀表或 Connection 的手动 ModelEntry JSON；未命中时保守默认 `toolUse:true, vision:false`。设置页可为自定义模型填写 capabilities 与可选 pricing。
+
+resolver 将 ModelEntry pricing 固化进 Run 环境，usage 与 Thread 统计同事务累计 `costUsd`；未配置价格时成本为 0。
 
 ### 1.3 ModelPreset —— 命名 Agent（OpenWebUI Models Workspace 的移植）
+
+数据类型、`chrome.storage.local` 访问层和独立 ModelPreset 管理页已经实现；支持新建、编辑、删除以及把 Plugin 只读 preset 复制为用户资产。
 
 ```ts
 interface ModelPreset {
@@ -58,7 +62,7 @@ interface ModelPreset {
 }
 ```
 
-同一底层模型可派生「翻译官」「比价助手」「纯聊天」多个预设；新会话选 preset 而非裸模型。文件夹可绑默认 preset（02 §2.1）。
+resolver 读取 Thread preset，消费 `base`、`params`、`systemPrompt`、`enabledToolLevels`、`defaultApprovalPolicy`、`defaultCapabilityScope`、`skills` 与 promptVersion，并把实际解析结果固化进 Run 环境。文件夹绑定仍未实现。
 
 ### 1.4 参数体系：两层合并，未设不发
 
@@ -74,17 +78,19 @@ interface GenParams {
 
 ### 1.5 Task Model —— 副任务路由
 
-全局设置一个「任务模型」（可指向任意 connection 的廉价模型）：标题生成、follow-up 建议全部走它。未配置时回退主对话模型并在设置页提示。
+Presets 设置页提供全局任务模型选择器（可指向任意 connection）；标题生成优先使用它，未配置时回退主对话模型。follow-up 建议尚未接入 UI。
 
 ## 2. 适配层接口
 
 ```ts
-// src/providers/adapter.ts
+// src/providers/types.ts
 interface ProviderAdapter {
   stream(req: {
     messages: UnifiedMessage[];          // 02 章定义的内部统一格式
+    system?: string;
     tools: ToolSchema[];                 // 由 AgentTool.parameters 生成的 JSON Schema
     params: GenParams;
+    model: string;
     signal: AbortSignal;
   }): AsyncIterable<StreamEvent> & { final(): Promise<FinalResult> };
   listModels?(): Promise<string[]>;      // GET /models（可选实现）
@@ -99,7 +105,8 @@ type StreamEvent =
 
 interface FinalResult {
   message: ContentBlock[];
-  toolCalls: { id: string; name: string; params: unknown }[];  // 已完成 JSON 拼接与解析
+  reasoning?: string;
+  toolCalls: { id: string; name: string; params: unknown; parseError?: string }[];
   usage: Usage;
   stopReason: 'end' | 'tool_use' | 'max_tokens' | 'content_filter';
 }
@@ -126,7 +133,7 @@ interface FinalResult {
 
 预置模板（一键填充 baseUrl+kind+已知 quirks，用户只填 key）：Anthropic 官方 / OpenAI 官方 / OpenRouter / DeepSeek / Moonshot / 智谱 / 阿里百炼 / Ollama 本地 / LM Studio 本地 / 自定义。
 
-添加自定义 baseUrl 时动态申请该 origin 的 host permission（`chrome.permissions.request`，见 DESIGN 12 章）。
+设置页点击 Verify 时动态申请该 origin 的 host permission（`chrome.permissions.request`）；仅保存表单不会申请。
 
 ## 5. Quirks 兼容表
 
@@ -146,8 +153,8 @@ interface QuirkFlags {
 
 ## 6. Verify 连接测试与模型拉取
 
-- **Verify**：依次 ① `GET /models`（3s 超时）② 最小 chat 请求（`max_tokens:1`）③ 带一个 echo 工具的请求探测 toolUse。产出结构化结果：可达性 / key 有效性 / 流式可用 / 工具可用，错误归因到「key 无效 / 域名不可达 / 需申请 host 权限 / 协议不符」。
-- **模型拉取**：所有 enabled 连接**并发**拉取，各自独立 `AbortController` + 4s 超时；失败连接单独标红，绝不阻塞模型选择器（OpenWebUI 串行等满超时的教训）。结果缓存 1h，选择器带手动刷新。
+- **Verify**：OpenAI 路径依次 ① `GET /models`（底层 4s 超时）② 最小 streaming chat 请求 ③ echo 工具探测；Anthropic 路径执行最小 streaming/tool 探测。产出可达性 / key / 流式 / 工具结构化结果，设置页在发请求前动态申请 endpoint host permission。
+- **模型拉取**：所有 enabled 连接并发拉取，adapter `listModels()` 各自使用 4s timeout；失败连接独立返回 error。ModelSelector 只在组件首次打开时拉取并缓存到该组件实例，当前没有 1h TTL 或手动刷新按钮。
 
 ## 7. 错误归一化与重试
 

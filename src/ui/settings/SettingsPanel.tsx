@@ -8,10 +8,14 @@
 
 import { useEffect, useState } from 'react';
 import {
+  Bot,
   Cog,
   Database,
+  Globe2,
   Info,
   Plug,
+  Package,
+  Paperclip,
   Search,
   Shield,
   Sparkles,
@@ -33,14 +37,22 @@ import { PermissionsPage } from './PermissionsPage';
 import { SkillsPage } from './SkillsPage';
 import { McpPage } from './McpPage';
 import { DataPage } from './DataPage';
+import { PluginsPage } from './PluginsPage';
+import { PresetsPage } from './PresetsPage';
+import { SiteInstructionsPage } from './SiteInstructionsPage';
+import { AttachmentsPage } from './AttachmentsPage';
 import { SettingsStore, type GlobalSettings } from '../../settings/store';
 import { setLang, t } from '../i18n';
 
 const SECTIONS = [
+  { id: 'attachments', label: 'Attachments', Icon: Paperclip },
+  { id: 'sites', label: 'Sites', Icon: Globe2 },
+  { id: 'presets', label: 'Presets', Icon: Bot },
   { id: 'general', label: '通用', Icon: Cog },
   { id: 'providers', label: '模型', Icon: Zap },
   { id: 'permissions', label: '浏览器权限', Icon: Shield },
   { id: 'skills', label: 'Skills', Icon: Sparkles },
+  { id: 'plugins', label: 'Plugins', Icon: Package },
   { id: 'mcp', label: 'MCP 服务器', Icon: Plug },
   { id: 'data', label: '数据', Icon: Database },
   { id: 'about', label: '关于', Icon: Info },
@@ -54,12 +66,72 @@ export type SettingsSectionId = (typeof SECTIONS)[number]['id'];
  * bilingual — '密钥' and 'key' both land on Providers.
  */
 const SECTION_KEYWORDS: Record<SettingsSectionId, string[]> = {
-  general: ['通用', 'general', '语言', 'language', '主题', 'theme', '暗色', 'dark', '指令', 'prompt', '自定义'],
-  providers: ['模型', 'model', 'provider', '连接', 'connection', '密钥', 'key', 'api', 'baseurl', 'endpoint', 'openai', 'anthropic', '验证', 'verify'],
-  permissions: ['权限', 'permission', '审批', 'approval', '黑名单', 'blacklist', '敏感', 'sensitive', '规则', 'rule', '安全', 'safety', '写操作', 'write'],
+  attachments: ['attachment', 'attachments', 'file', 'upload', 'screenshot', 'storage'],
+  sites: ['site', 'sites', 'domain', 'hostname', 'instruction', 'prompt'],
+  presets: ['preset', 'presets', 'agent', 'system prompt', 'temperature', 'tools', 'skills'],
+  general: [
+    '通用',
+    'general',
+    '语言',
+    'language',
+    '主题',
+    'theme',
+    '暗色',
+    'dark',
+    '指令',
+    'prompt',
+    '自定义',
+  ],
+  providers: [
+    '模型',
+    'model',
+    'provider',
+    '连接',
+    'connection',
+    '密钥',
+    'key',
+    'api',
+    'baseurl',
+    'endpoint',
+    'openai',
+    'anthropic',
+    '验证',
+    'verify',
+  ],
+  permissions: [
+    '权限',
+    'permission',
+    '审批',
+    'approval',
+    '黑名单',
+    'blacklist',
+    '敏感',
+    'sensitive',
+    '规则',
+    'rule',
+    '安全',
+    'safety',
+    '写操作',
+    'write',
+  ],
   skills: ['skill', 'skills', '技能', '命令', 'command', 'slash', '斜杠', '导入', 'import'],
+  plugins: ['plugin', 'plugins', '插件', 'zip', 'github', '安装', '卸载'],
   mcp: ['mcp', '服务器', 'server', 'oauth', '工具', 'tool', '集成', 'integration'],
-  data: ['数据', 'data', '导出', 'export', '导入', 'import', '备份', 'backup', '配额', 'quota', '存储', 'storage', '清理'],
+  data: [
+    '数据',
+    'data',
+    '导出',
+    'export',
+    '导入',
+    'import',
+    '备份',
+    'backup',
+    '配额',
+    'quota',
+    '存储',
+    'storage',
+    '清理',
+  ],
   about: ['关于', 'about', '版本', 'version', '帮助', 'help'],
 };
 
@@ -70,8 +142,9 @@ export function filterSections(query: string): SettingsSectionId[] {
   if (!q) return all;
   return all.filter(
     (id) =>
-      SECTIONS.find((s) => s.id === id)!.label.toLowerCase().includes(q) ||
-      SECTION_KEYWORDS[id].some((k) => k.toLowerCase().includes(q)),
+      SECTIONS.find((s) => s.id === id)!
+        .label.toLowerCase()
+        .includes(q) || SECTION_KEYWORDS[id].some((k) => k.toLowerCase().includes(q)),
   );
 }
 
@@ -116,7 +189,10 @@ export function SettingsPanel({ initialSection = 'providers', footer }: Props) {
             className="h-8 border-transparent bg-muted pl-8 text-[13px] shadow-none"
           />
         </div>
-        <TabsList variant="line" className="flex h-auto w-full flex-1 flex-col items-stretch justify-start gap-0.5 bg-transparent p-0">
+        <TabsList
+          variant="line"
+          className="flex h-auto w-full flex-1 flex-col items-stretch justify-start gap-0.5 overflow-y-auto bg-transparent p-0"
+        >
           {SECTIONS.filter(({ id }) => visible.includes(id)).map(({ id, label, Icon }) => (
             <TabsTrigger
               key={id}
@@ -134,13 +210,39 @@ export function SettingsPanel({ initialSection = 'providers', footer }: Props) {
         {footer && <div className="pt-2">{footer}</div>}
       </nav>
       <main className="min-w-0 flex-1 overflow-y-auto px-8 py-7">
-        <TabsContent value="general"><GeneralPage /></TabsContent>
-        <TabsContent value="providers"><ProvidersPage /></TabsContent>
-        <TabsContent value="permissions"><PermissionsPage /></TabsContent>
-        <TabsContent value="skills"><SkillsPage /></TabsContent>
-        <TabsContent value="mcp"><McpPage /></TabsContent>
-        <TabsContent value="data"><DataPage /></TabsContent>
-        <TabsContent value="about"><AboutPage /></TabsContent>
+        <TabsContent value="attachments">
+          <AttachmentsPage />
+        </TabsContent>
+        <TabsContent value="sites">
+          <SiteInstructionsPage />
+        </TabsContent>
+        <TabsContent value="presets">
+          <PresetsPage />
+        </TabsContent>
+        <TabsContent value="general">
+          <GeneralPage />
+        </TabsContent>
+        <TabsContent value="providers">
+          <ProvidersPage />
+        </TabsContent>
+        <TabsContent value="permissions">
+          <PermissionsPage />
+        </TabsContent>
+        <TabsContent value="skills">
+          <SkillsPage />
+        </TabsContent>
+        <TabsContent value="plugins">
+          <PluginsPage />
+        </TabsContent>
+        <TabsContent value="mcp">
+          <McpPage />
+        </TabsContent>
+        <TabsContent value="data">
+          <DataPage />
+        </TabsContent>
+        <TabsContent value="about">
+          <AboutPage />
+        </TabsContent>
       </main>
     </Tabs>
   );
@@ -164,7 +266,9 @@ function GeneralPage() {
     <div className="max-w-xl space-y-5">
       <h2 className="text-[15px] font-semibold">通用</h2>
       <div className="space-y-1.5">
-        <Label htmlFor="global-prompt" className="text-[12px] text-muted-foreground">全局自定义指令</Label>
+        <Label htmlFor="global-prompt" className="text-[12px] text-muted-foreground">
+          全局自定义指令
+        </Label>
         <Textarea
           id="global-prompt"
           rows={4}
@@ -172,7 +276,9 @@ function GeneralPage() {
           onChange={(e) => void update({ userGlobalPrompt: e.target.value })}
           placeholder="例如：回复保持简洁；表格优先。"
         />
-        <p className="text-[11px] text-faint-foreground">拼入 system prompt 的用户层，对所有会话生效。</p>
+        <p className="text-[11px] text-faint-foreground">
+          拼入 system prompt 的用户层，对所有会话生效。
+        </p>
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-1.5">
@@ -181,7 +287,9 @@ function GeneralPage() {
             value={settings.language ?? 'zh-CN'}
             onValueChange={(v) => void update({ language: v as GlobalSettings['language'] })}
           >
-            <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
             <SelectContent>
               <SelectItem value="zh-CN">中文</SelectItem>
               <SelectItem value="en">English</SelectItem>
@@ -194,7 +302,9 @@ function GeneralPage() {
             value={settings.theme ?? 'system'}
             onValueChange={(v) => void update({ theme: v as GlobalSettings['theme'] })}
           >
-            <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
             <SelectContent>
               <SelectItem value="system">跟随系统</SelectItem>
               <SelectItem value="dark">暗色</SelectItem>
@@ -210,13 +320,15 @@ function GeneralPage() {
 function AboutPage() {
   // Version comes from the manifest (single source: package.json → wxt build).
   // Guarded so the chrome-less preview server renders without it.
-  const version = typeof chrome !== 'undefined' && chrome.runtime?.getManifest
-    ? chrome.runtime.getManifest().version
-    : null;
+  const version =
+    typeof chrome !== 'undefined' && chrome.runtime?.getManifest
+      ? chrome.runtime.getManifest().version
+      : null;
   return (
     <div className="max-w-xl space-y-3 text-[13px] leading-relaxed text-muted-foreground">
       <h2 className="text-[15px] font-semibold text-foreground">
-        关于 Panelot{version && <span className="ml-2 font-normal text-faint-foreground">v{version}</span>}
+        关于 Panelot
+        {version && <span className="ml-2 font-normal text-faint-foreground">v{version}</span>}
       </h2>
       <p>浏览器原生 AI Agent — 模型自带（BYOK）、能力可扩展（Skills / MCP）、数据全本地。</p>
       <p>会话、配置与 API Key 全部存储在本机，仅发往你自己配置的模型端点。无遥测。</p>

@@ -52,6 +52,7 @@ export class ThreadTree {
       stats: { turns: 0, totalTokens: 0, costUsd: 0 },
       scopeOrigins: [],
       ...partial,
+      revision: partial?.revision ?? 0,
     };
     await this.db.threads.add(meta);
     return meta;
@@ -65,16 +66,28 @@ export class ThreadTree {
   }
 
   async updateThread(threadId: string, patch: Partial<ThreadMeta>): Promise<void> {
-    await this.db.threads.update(threadId, { ...patch, updatedAt: Date.now() });
+    await this.db.transaction('rw', this.db.threads, async () => {
+      const thread = await this.db.threads.get(threadId);
+      if (!thread) throw new Error(`thread ${threadId} not found`);
+      await this.db.threads.update(threadId, {
+        ...patch,
+        revision: thread.revision + 1,
+        updatedAt: Date.now(),
+      });
+    });
   }
 
   async deleteThread(threadId: string): Promise<void> {
-    await this.db.threads.update(threadId, { deleting: true });
-    await this.db.transaction('rw', [this.db.nodes, this.db.attachments, this.db.threads], async () => {
-      await this.db.nodes.where('threadId').equals(threadId).delete();
-      await this.db.attachments.where('threadId').equals(threadId).delete();
-      await this.db.threads.delete(threadId);
-    });
+    await this.updateThread(threadId, { deleting: true });
+    await this.db.transaction(
+      'rw',
+      [this.db.nodes, this.db.attachments, this.db.threads],
+      async () => {
+        await this.db.nodes.where('threadId').equals(threadId).delete();
+        await this.db.attachments.where('threadId').equals(threadId).delete();
+        await this.db.threads.delete(threadId);
+      },
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -96,7 +109,8 @@ export class ThreadTree {
         }
       }
 
-      const last = await this.db.nodes.where('[threadId+seq]')
+      const last = await this.db.nodes
+        .where('[threadId+seq]')
         .between([threadId, Dexie.minKey], [threadId, Dexie.maxKey])
         .last();
       const seq = (last?.seq ?? 0) + 1;
@@ -111,7 +125,11 @@ export class ThreadTree {
         payload: input.payload,
       };
       await this.db.nodes.add(node);
-      await this.db.threads.update(threadId, { leafId: node.id, updatedAt: Date.now() });
+      await this.db.threads.update(threadId, {
+        leafId: node.id,
+        revision: thread.revision + 1,
+        updatedAt: Date.now(),
+      });
       return node;
     });
   }
@@ -125,7 +143,11 @@ export class ThreadTree {
    * message (same parent) and move the cursor there. Regeneration is the same
    * operation with the assistant message's parent.
    */
-  async forkAt(threadId: string, siblingOfNodeId: string, input: AppendNodeInput): Promise<ThreadNode> {
+  async forkAt(
+    threadId: string,
+    siblingOfNodeId: string,
+    input: AppendNodeInput,
+  ): Promise<ThreadNode> {
     const anchor = await this.db.nodes.get(siblingOfNodeId);
     if (!anchor || anchor.threadId !== threadId) {
       throw new Error(`node ${siblingOfNodeId} not found in thread ${threadId}`);
@@ -151,11 +173,12 @@ export class ThreadTree {
     while (ancestorId !== null) {
       guard.step();
       const ancestor = await this.db.nodes.get(ancestorId);
-      if (!ancestor || ancestor.threadId !== threadId) throw new Error(`broken parent chain at ${ancestorId}`);
+      if (!ancestor || ancestor.threadId !== threadId)
+        throw new Error(`broken parent chain at ${ancestorId}`);
       if (ancestor.type !== 'turn_context') break;
       ancestorId = ancestor.parentId;
     }
-    await this.db.threads.update(threadId, { leafId: ancestorId, updatedAt: Date.now() });
+    await this.updateThread(threadId, { leafId: ancestorId });
   }
 
   /**
@@ -183,10 +206,15 @@ export class ThreadTree {
     }
 
     const liveChildren = async (parentId: string | null): Promise<ThreadNode[]> => {
-      const children = parentId === null
-        ? (await this.db.nodes.where('threadId').equals(threadId).toArray()).filter((n) => n.parentId === null)
-        : await this.db.nodes.where('parentId').equals(parentId).toArray();
-      return children.filter((n) => n.threadId === threadId && !n.deleted).sort((a, b) => a.seq - b.seq);
+      const children =
+        parentId === null
+          ? (await this.db.nodes.where('threadId').equals(threadId).toArray()).filter(
+              (n) => n.parentId === null,
+            )
+          : await this.db.nodes.where('parentId').equals(parentId).toArray();
+      return children
+        .filter((n) => n.threadId === threadId && !n.deleted)
+        .sort((a, b) => a.seq - b.seq);
     };
 
     const expand = async (nodes: ThreadNode[]): Promise<ThreadNode[]> => {
@@ -206,9 +234,12 @@ export class ThreadTree {
   async getSiblings(threadId: string, nodeId: string): Promise<ThreadNode[]> {
     const node = await this.db.nodes.get(nodeId);
     if (!node || node.threadId !== threadId) return [];
-    const siblings = node.parentId === null
-      ? (await this.db.nodes.where('threadId').equals(threadId).toArray()).filter((n) => n.parentId === null)
-      : await this.db.nodes.where('parentId').equals(node.parentId).toArray();
+    const siblings =
+      node.parentId === null
+        ? (await this.db.nodes.where('threadId').equals(threadId).toArray()).filter(
+            (n) => n.parentId === null,
+          )
+        : await this.db.nodes.where('parentId').equals(node.parentId).toArray();
     return siblings
       .filter((n) => n.threadId === threadId && !n.deleted)
       .sort((a, b) => a.seq - b.seq);
@@ -220,6 +251,10 @@ export class ThreadTree {
    * (docs/02 §3.2).
    */
   async switchToSibling(threadId: string, targetSiblingId: string): Promise<string> {
+    const target = await this.db.nodes.get(targetSiblingId);
+    if (!target || target.threadId !== threadId || target.deleted) {
+      throw new Error(`node ${targetSiblingId} not found in thread ${threadId}`);
+    }
     const total = await this.db.nodes.where('threadId').equals(threadId).count();
     const guard = new TraversalGuard(total);
 
@@ -232,7 +267,7 @@ export class ThreadTree {
       if (children.length === 0) break;
       currentId = children[children.length - 1]!.id;
     }
-    await this.db.threads.update(threadId, { leafId: currentId, updatedAt: Date.now() });
+    await this.updateThread(threadId, { leafId: currentId });
     return currentId;
   }
 
@@ -241,22 +276,31 @@ export class ThreadTree {
   // -------------------------------------------------------------------------
 
   async tombstone(threadId: string, nodeId: string): Promise<void> {
-    const node = await this.db.nodes.get(nodeId);
-    if (!node || node.threadId !== threadId) throw new Error(`node ${nodeId} not found`);
-    await this.db.nodes.update(nodeId, { deleted: true });
+    await this.db.transaction('rw', [this.db.nodes, this.db.threads], async () => {
+      const node = await this.db.nodes.get(nodeId);
+      if (!node || node.threadId !== threadId) throw new Error(`node ${nodeId} not found`);
+      const thread = await this.db.threads.get(threadId);
+      if (!thread) throw new Error(`thread ${threadId} not found`);
+      await this.db.nodes.update(nodeId, { deleted: true });
 
-    // If the cursor sat on the tombstone, walk it up to the nearest live ancestor.
-    const thread = await this.db.threads.get(threadId);
-    if (thread?.leafId === nodeId) {
-      const total = await this.db.nodes.where('threadId').equals(threadId).count();
-      const guard = new TraversalGuard(total);
-      let cur: ThreadNode | undefined = { ...node, deleted: true };
-      while (cur && cur.deleted) {
-        guard.step();
-        cur = cur.parentId === null ? undefined : await this.db.nodes.get(cur.parentId);
+      let leafId = thread.leafId;
+      if (leafId === nodeId) {
+        const total = await this.db.nodes.where('threadId').equals(threadId).count();
+        const guard = new TraversalGuard(total);
+        let current: ThreadNode | undefined = { ...node, deleted: true };
+        while (current?.deleted) {
+          guard.step();
+          current =
+            current.parentId === null ? undefined : await this.db.nodes.get(current.parentId);
+        }
+        leafId = current?.id ?? null;
       }
-      await this.db.threads.update(threadId, { leafId: cur?.id ?? null });
-    }
+      await this.db.threads.update(threadId, {
+        leafId,
+        revision: thread.revision + 1,
+        updatedAt: Date.now(),
+      });
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -306,11 +350,11 @@ export class ThreadTree {
       const candidates = all.filter((n) => !n.deleted).sort((a, b) => b.seq - a.seq);
       for (const candidate of candidates) {
         if (this.tracesToRoot(candidate, byId, all.length)) {
-          await this.db.threads.update(threadId, { leafId: candidate.id });
+          await this.updateThread(threadId, { leafId: candidate.id });
           return { leafId: candidate.id, repaired: true };
         }
       }
-      await this.db.threads.update(threadId, { leafId: null });
+      await this.updateThread(threadId, { leafId: null });
       return { leafId: null, repaired: true };
     }
   }

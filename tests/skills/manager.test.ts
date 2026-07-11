@@ -1,7 +1,8 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { PanelotDB } from '../../src/db/schema';
-import { SkillManager, createLoadSkillTool } from '../../src/skills/manager';
+import { SkillManager } from '../../src/skills/manager';
+import { createLoadSkillTool } from '../../src/skills/runtime';
 
 let db: PanelotDB;
 let manager: SkillManager;
@@ -18,7 +19,7 @@ const skill = (name: string, opts?: { sites?: string; suggest?: boolean }) =>
 describe('SkillManager storage & disclosure (docs/08 §2)', () => {
   it('imports and lists skills; re-import updates in place', async () => {
     await manager.importFromText(skill('alpha'));
-    await manager.importFromText(skill('alpha')); // same name → update
+    await manager.importFromText(skill('alpha'), 'imported', undefined, { conflict: 'overwrite' });
     const list = await manager.list();
     expect(list).toHaveLength(1);
     expect(list[0]!.name).toBe('alpha');
@@ -78,16 +79,28 @@ describe('load_skill tool (progressive disclosure, once per thread)', () => {
     await manager.importFromText(skill('helper'));
     const tool = createLoadSkillTool(manager, () => 'thread-1');
 
-    const first = await tool.execute('c1', { name: 'helper' } as never, new AbortController().signal);
+    const first = await tool.execute(
+      'c1',
+      { name: 'helper' } as never,
+      new AbortController().signal,
+    );
     expect((first.content[0] as { text: string }).text).toContain('helper 的正文指令');
 
-    const second = await tool.execute('c2', { name: 'helper' } as never, new AbortController().signal);
+    const second = await tool.execute(
+      'c2',
+      { name: 'helper' } as never,
+      new AbortController().signal,
+    );
     expect((second.content[0] as { text: string }).text).toContain('已加载');
   });
 
   it('reports unknown skills without throwing', async () => {
     const tool = createLoadSkillTool(manager, () => 't');
-    const result = await tool.execute('c1', { name: 'nope' } as never, new AbortController().signal);
+    const result = await tool.execute(
+      'c1',
+      { name: 'nope' } as never,
+      new AbortController().signal,
+    );
     expect((result.content[0] as { text: string }).text).toContain('未找到');
   });
 });

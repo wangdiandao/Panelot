@@ -5,21 +5,25 @@
  * visuals; the sidebar itself is src/ui/components/ThreadSidebar.tsx.
  */
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { PanelRight } from 'lucide-react';
 import type { ContextBlock } from '../../src/messaging/protocol';
 import { EngineSession } from '../../src/ui/engineClient';
 import { ThreadView, useEngineState } from '../../src/ui/components/ThreadView';
 import { ThreadSidebar } from '../../src/ui/components/ThreadSidebar';
-import { SettingsModal } from '../../src/ui/settings/SettingsModal';
 import type { SettingsSectionId } from '../../src/ui/settings/SettingsPanel';
 import { CommandPalette } from '../../src/ui/components/CommandPalette';
 import { ModelSelector } from '../../src/ui/components/ModelSelector';
 import { ShortcutHelp } from '../../src/ui/components/ShortcutHelp';
 import { TaskPanel } from '../../src/ui/components/TaskPanel';
-import { Toaster } from '../../src/ui/components/ui/sonner';
+import { LazyToaster } from '../../src/ui/components/LazyToaster';
 import { Button } from '../../src/ui/components/ui/button';
-import { Tooltip, TooltipProvider, TooltipContent, TooltipTrigger } from '../../src/ui/components/ui/tooltip';
+import {
+  Tooltip,
+  TooltipProvider,
+  TooltipContent,
+  TooltipTrigger,
+} from '../../src/ui/components/ui/tooltip';
 import { useTheme } from '../../src/ui/useTheme';
 import { t } from '../../src/ui/i18n';
 import { SettingsStore } from '../../src/settings/store';
@@ -30,6 +34,11 @@ import type { ThreadMeta } from '../../src/db/types';
 
 const db = new PanelotDB();
 const tree = new ThreadTree(db);
+const SettingsModal = lazy(() =>
+  import('../../src/ui/settings/SettingsModal').then((module) => ({
+    default: module.SettingsModal,
+  })),
+);
 
 export function App() {
   useTheme();
@@ -58,14 +67,21 @@ export function App() {
   useEffect(() => () => session.dispose(), [session]);
 
   const refreshThreads = () =>
-    db.threads.orderBy('updatedAt').reverse().limit(200).toArray().then((list) => {
-      // Only chats with content are listed (drafts never persist a row).
-      setThreads(list.filter((th) => !th.deleting && !th.archived && th.leafId !== null));
-    });
+    db.threads
+      .orderBy('updatedAt')
+      .reverse()
+      .limit(200)
+      .toArray()
+      .then((list) => {
+        // Only chats with content are listed (drafts never persist a row).
+        setThreads(list.filter((th) => !th.deleting && !th.archived && th.leafId !== null));
+      });
 
   const checkProvider = () =>
     void SettingsStore.connections.get().then((conns) => {
-      setProviderConfigured(conns.some((c) => c.enabled && (c.apiKeys.length > 0 || c.baseUrl.includes('localhost'))));
+      setProviderConfigured(
+        conns.some((c) => c.enabled && (c.apiKeys.length > 0 || c.baseUrl.includes('localhost'))),
+      );
     });
 
   // Mark the open thread as seen (unread indicator source, docs/09 §3.1).
@@ -95,7 +111,11 @@ export function App() {
         return;
       }
       if (fromUrl) history.replaceState(null, '', location.pathname);
-      const recent = await db.threads.orderBy('updatedAt').reverse().filter((th) => !th.deleting && th.leafId !== null).first();
+      const recent = await db.threads
+        .orderBy('updatedAt')
+        .reverse()
+        .filter((th) => !th.deleting && th.leafId !== null)
+        .first();
       if (recent) {
         session.openThread(recent.id);
         markSeen(recent.id);
@@ -156,125 +176,141 @@ export function App() {
 
   return (
     <TooltipProvider delayDuration={300}>
-    <div className="flex h-screen bg-background text-foreground">
-      <ThreadSidebar
-        threads={threads}
-        activeThreadId={state.threadId}
-        seen={seen}
-        activity={activity}
-        collapsed={sidebarCollapsed}
-        width={sidebarWidth}
-        onWidthChange={setSidebarWidth}
-        onWidthCommit={(px) => persistGlobal({ sidebarWidth: px })}
-        onToggleCollapsed={() =>
-          setSidebarCollapsed((v) => {
-            persistGlobal({ sidebarCollapsed: !v });
-            return !v;
-          })
-        }
-        onOpenThread={(id) => {
-          session.openThread(id);
-          markSeen(id);
-        }}
-        onNewThread={() => session.startDraft()}
-        onTogglePin={(th) => void tree.updateThread(th.id, { pinned: !th.pinned }).then(refreshThreads)}
-        onRename={(th, title) => void tree.updateThread(th.id, { title }).then(refreshThreads)}
-        onDelete={(th) =>
-          void tree.deleteThread(th.id).then(async () => {
-            await refreshThreads();
-            if (state.threadId === th.id) session.startDraft();
-          })
-        }
-        collapsedGroups={collapsedGroups}
-        onToggleGroup={(groupId) =>
-          setCollapsedGroups((prev) => {
-            const next = prev.includes(groupId) ? prev.filter((g) => g !== groupId) : [...prev, groupId];
-            void SettingsStore.global.get().then((g) => SettingsStore.global.set({ ...g, sidebarGroupsCollapsed: next }));
-            return next;
-          })
-        }
-        onOpenSettings={() => openSettingsAt(undefined)}
-        searchInputRef={searchRef}
-      />
+      <div className="flex h-screen bg-background text-foreground">
+        <ThreadSidebar
+          threads={threads}
+          activeThreadId={state.threadId}
+          seen={seen}
+          activity={activity}
+          collapsed={sidebarCollapsed}
+          width={sidebarWidth}
+          onWidthChange={setSidebarWidth}
+          onWidthCommit={(px) => persistGlobal({ sidebarWidth: px })}
+          onToggleCollapsed={() =>
+            setSidebarCollapsed((v) => {
+              persistGlobal({ sidebarCollapsed: !v });
+              return !v;
+            })
+          }
+          onOpenThread={(id) => {
+            session.openThread(id);
+            markSeen(id);
+          }}
+          onNewThread={() => session.startDraft()}
+          onTogglePin={(th) =>
+            void tree.updateThread(th.id, { pinned: !th.pinned }).then(refreshThreads)
+          }
+          onRename={(th, title) => void tree.updateThread(th.id, { title }).then(refreshThreads)}
+          onDelete={(th) =>
+            void tree.deleteThread(th.id).then(async () => {
+              await refreshThreads();
+              if (state.threadId === th.id) session.startDraft();
+            })
+          }
+          collapsedGroups={collapsedGroups}
+          onToggleGroup={(groupId) =>
+            setCollapsedGroups((prev) => {
+              const next = prev.includes(groupId)
+                ? prev.filter((g) => g !== groupId)
+                : [...prev, groupId];
+              void SettingsStore.global
+                .get()
+                .then((g) => SettingsStore.global.set({ ...g, sidebarGroupsCollapsed: next }));
+              return next;
+            })
+          }
+          onOpenSettings={() => openSettingsAt(undefined)}
+          searchInputRef={searchRef}
+        />
 
-      {/* Center: header + conversation (768px cap) */}
-      <main className="flex min-w-0 flex-1 flex-col">
-        <div className="flex items-center gap-2 border-b border-border-soft px-3 py-2">
-          <ModelSelector
-            variant="header"
-            value={state.pendingOverrides.model ?? null}
-            onSelect={(choice) =>
-              session.setOverrides({ model: choice ? { connectionId: choice.connectionId, modelId: choice.modelId } : undefined })
-            }
-            onOpenSettings={() => openSettingsAt('providers')}
-          />
-          <div className="min-w-0 flex-1 truncate text-center text-[13px] text-muted-foreground">
-            {state.loading ? (
-              <div className="mx-auto h-4 w-32 animate-pulse rounded bg-muted" />
-            ) : (
-              state.meta?.title || t('app.newChat')
-            )}
+        {/* Center: header + conversation (768px cap) */}
+        <main className="flex min-w-0 flex-1 flex-col">
+          <div className="flex items-center gap-2 border-b border-border-soft px-3 py-2">
+            <ModelSelector
+              variant="header"
+              value={state.pendingOverrides.model ?? null}
+              onSelect={(choice) =>
+                session.setOverrides({
+                  model: choice
+                    ? { connectionId: choice.connectionId, modelId: choice.modelId }
+                    : undefined,
+                })
+              }
+              onOpenSettings={() => openSettingsAt('providers')}
+            />
+            <div className="min-w-0 flex-1 truncate text-center text-[13px] text-muted-foreground">
+              {state.loading ? (
+                <div className="mx-auto h-4 w-32 animate-pulse rounded bg-muted" />
+              ) : (
+                state.meta?.title || t('app.newChat')
+              )}
+            </div>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-8 text-muted-foreground"
+                  onClick={() => setTaskPanelOpen((v) => !v)}
+                  aria-expanded={taskPanelOpen}
+                  aria-label={taskPanelOpen ? t('app.hideTaskPanel') : t('app.taskPanel')}
+                >
+                  <PanelRight className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {taskPanelOpen ? t('app.hideTaskPanel') : t('app.taskPanel')}
+              </TooltipContent>
+            </Tooltip>
           </div>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-8 text-muted-foreground"
-                onClick={() => setTaskPanelOpen((v) => !v)}
-                aria-expanded={taskPanelOpen}
-                aria-label={taskPanelOpen ? t('app.hideTaskPanel') : t('app.taskPanel')}
-              >
-                <PanelRight className="size-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>{taskPanelOpen ? t('app.hideTaskPanel') : t('app.taskPanel')}</TooltipContent>
-          </Tooltip>
-        </div>
-        {/* No max-width wrapper here: the stream's scroll container spans the
+          {/* No max-width wrapper here: the stream's scroll container spans the
             full center column so the scrollbar hugs the right edge (OpenWebUI
             layout); row content + composer are capped individually. */}
-        <ThreadView
-          session={session}
-          providerConfigured={providerConfigured}
-          onProviderConfigured={checkProvider}
-          onOpenSettings={() => openSettingsAt('providers')}
-          stagedContext={staged}
-          onRemoveStagedContext={(i) => setStaged((s) => s.filter((_, idx) => idx !== i))}
-          onAttachContext={(block) => setStaged((s) => [...s, block])}
-          modelSelectorInComposer={false}
-          contentMaxWidth={STREAM_MAX_W}
-          onPlanCommand={() => setTaskPanelOpen(true)}
+          <ThreadView
+            session={session}
+            providerConfigured={providerConfigured}
+            onProviderConfigured={checkProvider}
+            onOpenSettings={() => openSettingsAt('providers')}
+            stagedContext={staged}
+            onRemoveStagedContext={(i) => setStaged((s) => s.filter((_, idx) => idx !== i))}
+            onAttachContext={(block) => setStaged((s) => [...s, block])}
+            modelSelectorInComposer={false}
+            contentMaxWidth={STREAM_MAX_W}
+            onPlanCommand={() => setTaskPanelOpen(true)}
+          />
+        </main>
+
+        {/* Right: task panel */}
+        {taskPanelOpen && <TaskPanel state={state} />}
+
+        {settingsOpen && (
+          <Suspense fallback={null}>
+            <SettingsModal
+              open={settingsOpen}
+              onClose={() => {
+                setSettingsOpen(false);
+                setSettingsSection(undefined);
+                checkProvider();
+              }}
+              initialSection={settingsSection}
+            />
+          </Suspense>
+        )}
+
+        <CommandPalette
+          open={paletteOpen}
+          onOpenChange={setPaletteOpen}
+          onOpenThread={(id) => {
+            session.openThread(id);
+            markSeen(id);
+          }}
+          onNewThread={() => session.startDraft()}
+          onOpenSettings={() => openSettingsAt(undefined)}
         />
-      </main>
 
-      {/* Right: task panel */}
-      {taskPanelOpen && <TaskPanel state={state} />}
-
-      <SettingsModal
-        open={settingsOpen}
-        onClose={() => {
-          setSettingsOpen(false);
-          setSettingsSection(undefined);
-          checkProvider();
-        }}
-        initialSection={settingsSection}
-      />
-
-      <CommandPalette
-        open={paletteOpen}
-        onOpenChange={setPaletteOpen}
-        onOpenThread={(id) => {
-          session.openThread(id);
-          markSeen(id);
-        }}
-        onNewThread={() => session.startDraft()}
-        onOpenSettings={() => openSettingsAt(undefined)}
-      />
-
-      <ShortcutHelp />
-      <Toaster />
-    </div>
+        <ShortcutHelp />
+        <LazyToaster />
+      </div>
     </TooltipProvider>
   );
 }

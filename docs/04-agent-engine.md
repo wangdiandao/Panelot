@@ -9,46 +9,51 @@
 
 **Pi 的极简内核 + Codex 的安全外壳。** loop 本身保持最小——循环到模型不再调工具为止；复杂度全部推到外层（Gatekeeper、能力域、UI）。不加没有用例的旋钮：
 
-- ~~maxSteps 硬中断~~ → 分两级：25 步**软提醒**（向 UI 发 `system_notice` + 在下一次 LLM 调用注入"确认方向是否正确"），不打断任务；60 步**硬顶**（`HARD_STEP_LIMIT`）暂停 turn（`stopReason:'budget_pause'`，最后一次 LLM 调用不带工具、让模型写收尾总结），用户点继续再跑；
+- 步数分两级：25 步**软提醒**（落一条 `system_notice`，并在下一次 LLM 调用注入反思提示）；超过 60 次工具调用时直接暂停 turn，返回 `stopReason:'budget_pause'`。当前不会额外发起一次“禁用工具的收尾 LLM 调用”；继续需用户再次发送；
 - **token 预算**（可选配置）：超预算同样 `turn.complete{stopReason:'budget_pause'}`，可继续。
 
 ## 2. Agent Loop
 
 ```ts
-// src/agent/loop.ts —— 伪代码，目标 <300 行
+// src/agent/loop.ts —— 结构化伪代码；精确控制流以源码为准
 async function runTurn(thread: Thread, input: UserInput, overrides?: TurnOverrides) {
-  appendNode(turn_context);                         // 复原环境的锚点
-  appendNode(user_message);
+  transaction(turn_context + user_message + Run.streaming_model);
   emit('turn.start');
 
   while (true) {
-    const messages = buildSessionContext(thread.leafId);   // 02 §5
+    const messages = buildSessionContext(thread.leafId);   // 02 §4
 
     const stream = provider.stream(messages, tools, signal);   // 03 章适配层
     for await (const ev of stream) emitDelta(ev);              // 文本/推理增量转 item.delta
     const { message, toolCalls, usage } = await stream.final();
 
-    appendNode(assistant_message); emit('item.complete'); emit('token.usage');
+    transaction(assistant_message + usage/cost + stats + Run.stepCursor);
+    emit('item.complete'); emit('token.usage');
     consumeSteerQueue();                              // §3：插话在此注入
 
-    if (toolCalls.length === 0) break;                // ← 唯一的退出条件
+    if (toolCalls.length === 0) break;                // 正常完成条件
 
     for (const call of toolCalls) {
+      appendNode(tool_call);                          // 校验/审批失败也留下审计卡片
       const verdict = await gatekeeper.check(call, thread);      // 06 章
-      if (verdict === 'ask') await requestApproval(call);        // 双向 RPC，挂起等待
-      appendNode(tool_call);
+      if (verdict === 'ask') {
+        const decision = await requestApproval(call); // 双向 RPC，挂起等待
+        transaction(approval_decision + ApprovalRecord + Run.revision);
+      }
       try {
         const result = await tool.execute(call.id, call.params, signal, onUpdate);
-        appendNode(tool_result{ ok:true, contentForLlm: result.content, details: result.details });
+        transaction(tool_result{ ok:true, contentForLlm: result.content, details: result.details }
+                    + Run.streaming_model);
       } catch (e) {
         appendNode(tool_result{ ok:false, contentForLlm: [text(errorFor(e))] });  // 让模型自纠
       }
     }
   }
   emit('turn.complete', stopReason);
-  scheduleTaskModelJobs(thread);                      // 标题生成 / follow-up（轻量模型，不阻塞）
 }
 ```
+
+除“模型不再调用工具”外，interrupt、token budget、60 步上限和连续失败熔断也会退出 loop。标题生成由 `RealEngineCore.startTurn()` 在首轮开始时并行触发：先写首行 fallback，再 best-effort 调 task model；当前没有 follow-up 建议任务。
 
 行为规范：
 
@@ -60,7 +65,7 @@ async function runTurn(thread: Thread, input: UserInput, overrides?: TurnOverrid
 
 | 通路 | Op | 语义 | 约束 |
 |---|---|---|---|
-| **插话 steer** | `turn.steer{expectedTurnId}` | 注入**当前轮**：追加一条 user_message，在当前 LLM 调用结束后、下一次调用前生效 | `expectedTurnId` 不匹配报错；`steerable:false` 的轮（title）拒绝并建议排队 |
+| **插话 steer** | `turn.steer{expectedTurnId}` | 注入**当前轮**：追加一条 user_message，在当前 LLM 调用结束后、下一次调用前生效 | `expectedTurnId` 不匹配报错；协议保留 non-steerable turnKind，但当前标题生成不走 runTurn |
 | **排队 enqueue** | `turn.enqueue` | 当前轮跑完后作为**下一轮**执行 | 队列有界（8 条），UI 显示 `queue.updated` |
 | **打断 interrupt** | `turn.interrupt` | 立即停止当前轮 | 总是允许 |
 
@@ -75,8 +80,11 @@ interface AgentTool<P = unknown, D = unknown> {
   label: string;                 // UI 显示："点击元素"
   description: string;           // 给 LLM（文案见 10 §3）
   parameters: z.ZodType<P>;      // zod schema → 同时生成 JSON Schema 发给 LLM
+  inputSchema?: object;          // MCP 等远端工具的原始 JSON Schema，优先原样发给 Provider
   level: 'L0' | 'L1' | 'L2' | 'mcp' | 'builtin';
   effects: 'read' | 'write';     // Gatekeeper 默认裁决的依据（06）
+  recovery?: 'retry-safe' | 'inspect-first' | 'never-retry';
+  resolveTarget?(params: P): Promise<{ tabId?, frameId?, origin?, serverId? }>;
   execute(
     toolCallId: string,
     params: P,
@@ -97,7 +105,7 @@ interface ToolResult<D> {
 
 ## 5. 恢复语义
 
-恢复（SW 重启 / 重开会话）永远走 `buildSessionContext(leafId)` 重放：从 leaf 到根的线性历史，**与当时喂给模型的历史逐字一致**。
+每个 Thread 由 `ThreadActor` 串行调度，Run 使用固定状态机并持久化环境、步骤游标与 `PreparedToolCall`。SW 重启时：queued/preparing 自动继续；waiting_approval 从 approvals 表恢复；只读或 retry-safe 工具可重放；已开始且结果不明的写操作进入 `paused_uncertain`，只能由用户选择 retry / mark_done / fail；模型流中断进入 `interrupted`。`ResolvedRunEnvironment` 固化实际 connection/model、参数、Preset prompt、工具级别、审批策略、能力域、Skills、prompt version 与能力/价格元数据，恢复不重新解析可变设置。
 
 ## 6. 关键时序图
 
@@ -117,12 +125,13 @@ sequenceDiagram
   EN->>LLM: stream(messages, tools)
   LLM-->>EN: text delta… + tool_call(browser_click)
   EN-->>UI: item.delta… item.complete(assistant)
+  EN-->>UI: item.start(tool_call)
+  EN->>EN: 落库 tool_call（先形成审计卡片）
   EN->>GK: check(browser_click, thread)
   GK-->>EN: 'ask'
   EN-->>UI: approval.request{完整参数}
   UI->>EN: approval.response{acceptForSite}
   EN->>EN: 落库 approval_decision + 更新站点规则
-  EN-->>UI: item.start(tool_call)
   EN->>CS: execute click(ref)
   CS-->>EN: ToolResult{content, details:高亮坐标}
   EN->>EN: 落库 tool_call + tool_result
@@ -145,7 +154,7 @@ sequenceDiagram
   SW2->>DB: 读 ThreadMeta + buildSessionContext(leafId)
   SW2-->>UI: initialized{snapshot（含未完成 turn 标记）}
   UI->>UI: 全量渲染 + 显示「任务被中断，[继续]」
-  UI->>SW2: turn.enqueue("继续刚才的任务")
+  UI->>SW2: 用户发送“继续”或新的恢复指令
   Note over SW2: 历史含全部 tool_result checkpoint，模型自然续接
 ```
 

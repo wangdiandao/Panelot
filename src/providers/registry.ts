@@ -11,7 +11,10 @@ import type { Connection, ModelEntry, ProviderAdapter, QuirkFlags } from './type
 // URL normalization (docs/03 §4)
 // ---------------------------------------------------------------------------
 
-export function normalizeBaseUrl(raw: string, kind: Connection['kind']): { url: string; hint?: string } {
+export function normalizeBaseUrl(
+  raw: string,
+  kind: Connection['kind'],
+): { url: string; hint?: string } {
   let url = raw.trim();
   if (url === '') return { url };
 
@@ -54,11 +57,26 @@ export const CONNECTION_TEMPLATES: readonly ConnectionTemplate[] = [
     baseUrl: 'https://openrouter.ai/api/v1',
     note: 'Set HTTP-Referer/X-Title custom headers for app attribution.',
   },
-  { name: 'DeepSeek', kind: 'openai', baseUrl: 'https://api.deepseek.com/v1', quirks: { thinkTagReasoning: true } },
+  {
+    name: 'DeepSeek',
+    kind: 'openai',
+    baseUrl: 'https://api.deepseek.com/v1',
+    quirks: { thinkTagReasoning: true },
+  },
   { name: 'Moonshot (Kimi)', kind: 'openai', baseUrl: 'https://api.moonshot.cn/v1' },
   { name: '智谱 GLM', kind: 'openai', baseUrl: 'https://open.bigmodel.cn/api/paas/v4' },
-  { name: '阿里百炼 (DashScope)', kind: 'openai', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
-  { name: 'Ollama (local)', kind: 'openai', baseUrl: 'http://localhost:11434/v1', keyless: true, quirks: { noStreamOptions: true } },
+  {
+    name: '阿里百炼 (DashScope)',
+    kind: 'openai',
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  },
+  {
+    name: 'Ollama (local)',
+    kind: 'openai',
+    baseUrl: 'http://localhost:11434/v1',
+    keyless: true,
+    quirks: { noStreamOptions: true },
+  },
   { name: 'LM Studio (local)', kind: 'openai', baseUrl: 'http://localhost:1234/v1', keyless: true },
   { name: 'Custom', kind: 'openai', baseUrl: '' },
 ] as const;
@@ -84,7 +102,13 @@ const KNOWN_MODELS: readonly KnownModel[] = [
   { prefix: 'o3', toolUse: true, vision: true, reasoning: true, maxContext: 200_000 },
   { prefix: 'o4', toolUse: true, vision: true, reasoning: true, maxContext: 200_000 },
   { prefix: 'deepseek-chat', toolUse: true, vision: false, maxContext: 128_000 },
-  { prefix: 'deepseek-reasoner', toolUse: true, vision: false, reasoning: true, maxContext: 128_000 },
+  {
+    prefix: 'deepseek-reasoner',
+    toolUse: true,
+    vision: false,
+    reasoning: true,
+    maxContext: 128_000,
+  },
   { prefix: 'kimi-', toolUse: true, vision: true, maxContext: 128_000 },
   { prefix: 'glm-', toolUse: true, vision: false, maxContext: 128_000 },
   { prefix: 'qwen', toolUse: true, vision: false, maxContext: 131_072 },
@@ -150,7 +174,11 @@ export async function fetchAllModels(connections: Connection[]): Promise<ModelFe
           const ids = await adapter.listModels();
           return {
             connectionId: c.id,
-            models: ids.map((id) => ({ connectionId: c.id, id, capabilities: inferCapabilities(id) })),
+            models: ids.map((id) => ({
+              connectionId: c.id,
+              id,
+              capabilities: inferCapabilities(id),
+            })),
           };
         } catch (e) {
           return { connectionId: c.id, models: [], error: (e as Error).message };

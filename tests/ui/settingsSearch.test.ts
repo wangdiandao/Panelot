@@ -7,7 +7,18 @@ import { filterSections } from '../../src/ui/settings/SettingsPanel';
 
 describe('filterSections', () => {
   it('returns all sections for an empty query', () => {
-    expect(filterSections('')).toHaveLength(7);
+    expect(filterSections('')).toHaveLength(11);
+  });
+
+  it('routes preset and agent-profile terms to model presets', () => {
+    expect(filterSections('preset')).toContain('presets');
+    expect(filterSections('system prompt')).toContain('presets');
+  });
+  it('routes domain instructions to site settings', () => {
+    expect(filterSections('hostname')).toContain('sites');
+  });
+  it('routes upload and storage terms to attachments', () => {
+    expect(filterSections('upload')).toContain('attachments');
   });
   it("routes '密钥' and 'key' to providers", () => {
     expect(filterSections('密钥')).toContain('providers');

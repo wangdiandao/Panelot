@@ -11,7 +11,10 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "verbatimModuleSyntax": true
+    "verbatimModuleSyntax": true,
+    "paths": {
+      "@/*": ["./*"]
+    }
   },
   "exclude": ["dist", "node_modules", "e2e", "preview"]
 }

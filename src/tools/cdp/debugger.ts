@@ -33,7 +33,10 @@ export class CdpManager {
       }
     });
     // Keep the chain alive even if this call rejects.
-    this.queue = run.then(() => undefined, () => undefined);
+    this.queue = run.then(
+      () => undefined,
+      () => undefined,
+    );
     return run as Promise<T>;
   }
 
@@ -55,7 +58,11 @@ export class CdpManager {
 
   async send<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> {
     if (!this.attached) throw new Error('CDP not attached');
-    const result = await chrome.debugger.sendCommand({ tabId: this.attached.tabId }, method, params);
+    const result = await chrome.debugger.sendCommand(
+      { tabId: this.attached.tabId },
+      method,
+      params,
+    );
     return result as T;
   }
 
@@ -118,13 +125,22 @@ export class CdpManager {
         if (!name && !INTERESTING_ROLES.has(role)) continue;
         lines.push(`- ${role}${name ? ` "${name}"` : ''}`);
       }
-      if (lines.length === 1) throw new Error('AXTree 也为空（可能是纯 Canvas 页面）。可尝试 screenshot + vision。');
+      if (lines.length === 1)
+        throw new Error('AXTree 也为空（可能是纯 Canvas 页面）。可尝试 screenshot + vision。');
       return lines.slice(0, 400).join('\n');
     });
   }
 }
 
-const INTERESTING_ROLES = new Set(['button', 'link', 'textbox', 'checkbox', 'heading', 'image', 'combobox']);
+const INTERESTING_ROLES = new Set([
+  'button',
+  'link',
+  'textbox',
+  'checkbox',
+  'heading',
+  'image',
+  'combobox',
+]);
 
 interface AxNode {
   role?: { value?: string };

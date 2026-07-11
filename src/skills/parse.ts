@@ -5,6 +5,7 @@
  */
 
 import { z } from 'zod';
+import { CORE_SCHEMA, load } from 'js-yaml';
 
 export const VariableDef = z.object({
   key: z.string(),
@@ -18,18 +19,24 @@ export type VariableDef = z.infer<typeof VariableDef>;
 
 export const SkillFrontmatter = z
   .object({
-    name: z.string().regex(/^[a-z0-9-]+$/, 'name must be kebab-case').max(64),
+    name: z
+      .string()
+      .regex(/^[a-z0-9-]+$/, 'name must be kebab-case')
+      .max(64),
     description: z.string().min(1).max(500),
     panelot: z
       .object({
         sites: z.array(z.string()).optional(),
         auto_suggest: z.boolean().optional(),
-        command: z.string().regex(/^\/[a-z0-9:-]+$/).optional(),
+        command: z
+          .string()
+          .regex(/^\/[a-z0-9:-]+$/)
+          .optional(),
         variables: z.array(VariableDef).optional(),
       })
       .optional(),
   })
-  .passthrough(); // keep Claude Code's allowed-tools etc. (V1 ignores, doesn't error)
+  .passthrough(); // Unknown Claude Code keys are preserved even when Panelot does not consume them.
 
 export type SkillFrontmatter = z.infer<typeof SkillFrontmatter>;
 
@@ -39,13 +46,11 @@ export interface ParsedSkill {
 }
 
 /**
- * Parse a SKILL.md string. Minimal YAML frontmatter parser (flat keys +
- * one level of nesting + inline arrays) — avoids a YAML dependency for the
- * small, well-specified schema. Throws on malformed frontmatter or schema
- * violations (surfaced to the user at import time).
+ * Parse a SKILL.md string with YAML core types, then validate interoperable
+ * fields while preserving unknown frontmatter keys.
  */
 export function parseSkill(raw: string): ParsedSkill {
-  const match = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(raw.trim());
+  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(raw.trim());
   if (!match) throw new Error('SKILL.md 缺少 YAML frontmatter（--- 包裹的头部）');
 
   const fm = parseSimpleYaml(match[1]!);
@@ -57,105 +62,32 @@ export function parseSkill(raw: string): ParsedSkill {
   return { frontmatter: result.data, body: (match[2] ?? '').trim() };
 }
 
+export function listSkillFileDependencies(raw: string): string[] {
+  const { body } = parseSkill(raw);
+  const dependencies = new Set<string>();
+  for (const match of body.matchAll(/\]\((?!https?:|#|mailto:)([^)]+)\)/gi)) {
+    const path = match[1]?.split('#')[0]?.trim();
+    if (path) dependencies.add(path);
+  }
+  for (const match of body.matchAll(/(?:^|[\s`'"])((?:scripts|references|assets)\/[\w./-]+)/gim)) {
+    if (match[1]) dependencies.add(match[1]);
+  }
+  return [...dependencies].sort();
+}
+
 /**
- * Tiny YAML subset: `key: value`, nested blocks under a bare `key:`, inline
- * arrays `[a, b]`, and `- {k: v, ...}` list items. Enough for SKILL.md.
+ * Anchors and aliases are unnecessary here and are rejected so a small file
+ * cannot expand into an unexpectedly large object graph.
  */
 export function parseSimpleYaml(text: string): Record<string, unknown> {
-  const root: Record<string, unknown> = {};
-  const lines = text.split('\n').filter((l) => l.trim() !== '' && !l.trim().startsWith('#'));
-  let i = 0;
-
-  while (i < lines.length) {
-    const line = lines[i]!;
-    const indent = line.length - line.trimStart().length;
-    if (indent > 0) {
-      i++;
-      continue; // handled by the parent block below
-    }
-    const colon = line.indexOf(':');
-    if (colon === -1) {
-      i++;
-      continue;
-    }
-    const key = line.slice(0, colon).trim();
-    const rest = line.slice(colon + 1).trim();
-
-    if (rest === '') {
-      // Nested block: collect indented children.
-      const block: string[] = [];
-      i++;
-      while (i < lines.length && lines[i]!.length - lines[i]!.trimStart().length > 0) {
-        block.push(lines[i]!);
-        i++;
-      }
-      root[key] = parseBlock(block);
-    } else {
-      root[key] = parseScalar(rest);
-      i++;
-    }
+  if (/(?:^|\s)[&*][a-z0-9_-]+/im.test(text)) {
+    throw new Error('SKILL.md frontmatter 不允许 YAML anchors/aliases');
   }
-  return root;
-}
-
-function parseBlock(lines: string[]): unknown {
-  // List of objects: "- {k: v}" or "- key: val".
-  if (lines.every((l) => l.trim().startsWith('-'))) {
-    return lines.map((l) => {
-      const item = l.trim().slice(1).trim();
-      if (item.startsWith('{')) return parseInlineObject(item);
-      return parseScalar(item);
-    });
+  const value = load(text, { schema: CORE_SCHEMA, json: false, filename: 'SKILL.md' });
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('SKILL.md frontmatter 必须是 YAML mapping');
   }
-  // Nested map: reduce indent and recurse.
-  const minIndent = Math.min(...lines.map((l) => l.length - l.trimStart().length));
-  const dedented = lines.map((l) => l.slice(minIndent)).join('\n');
-  return parseSimpleYaml(dedented);
-}
-
-function parseInlineObject(text: string): Record<string, unknown> {
-  const inner = text.replace(/^\{|\}$/g, '').trim();
-  const obj: Record<string, unknown> = {};
-  for (const pair of splitTopLevel(inner)) {
-    const colon = pair.indexOf(':');
-    if (colon === -1) continue;
-    obj[pair.slice(0, colon).trim()] = parseScalar(pair.slice(colon + 1).trim());
-  }
-  return obj;
-}
-
-/** Split on commas not inside [] or {}. */
-function splitTopLevel(text: string): string[] {
-  const parts: string[] = [];
-  let depth = 0;
-  let current = '';
-  for (const ch of text) {
-    if (ch === '[' || ch === '{') depth++;
-    else if (ch === ']' || ch === '}') depth--;
-    if (ch === ',' && depth === 0) {
-      parts.push(current);
-      current = '';
-    } else {
-      current += ch;
-    }
-  }
-  if (current.trim()) parts.push(current);
-  return parts;
-}
-
-function parseScalar(value: string): unknown {
-  const v = value.trim();
-  if (v.startsWith('[') && v.endsWith(']')) {
-    const inner = v.slice(1, -1).trim();
-    if (!inner) return [];
-    return splitTopLevel(inner).map((x) => parseScalar(x));
-  }
-  if (v.startsWith('{') && v.endsWith('}')) return parseInlineObject(v);
-  if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) return v.slice(1, -1);
-  if (v === 'true') return true;
-  if (v === 'false') return false;
-  if (/^-?\d+(\.\d+)?$/.test(v)) return Number(v);
-  return v;
+  return value as Record<string, unknown>;
 }
 
 // ---------------------------------------------------------------------------

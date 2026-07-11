@@ -108,9 +108,11 @@ export function originMatches(pattern: string, origin: string): boolean {
   try {
     const p = new URL(pattern);
     const o = new URL(origin);
-    return p.protocol === o.protocol
-      && stripTrailingDots(p.hostname) === stripTrailingDots(o.hostname)
-      && p.port === o.port;
+    return (
+      p.protocol === o.protocol &&
+      stripTrailingDots(p.hostname) === stripTrailingDots(o.hostname) &&
+      p.port === o.port
+    );
   } catch {
     return pattern === host || pattern === origin;
   }
@@ -125,7 +127,8 @@ const SOURCE_PRIORITY: Record<PermissionRule['source'], number> = {
 /** Specificity score: exact tool+origin (4) > one wildcard/category (2-3) > both (0). */
 function specificity(rule: PermissionRule): number {
   let score = 0;
-  if (rule.tool !== '*' && !rule.tool.endsWith('*') && !rule.tool.startsWith('category:')) score += 2;
+  if (rule.tool !== '*' && !rule.tool.endsWith('*') && !rule.tool.startsWith('category:'))
+    score += 2;
   else if (rule.tool !== '*') score += 1;
   if (rule.origin !== '*' && !rule.origin.startsWith('*.')) score += 2;
   else if (rule.origin !== '*') score += 1;
@@ -144,7 +147,11 @@ const VERDICT_PRIORITY: Record<PermissionRule['verdict'], number> = {
  * deny > ask > allow at equal standing; higher specificity wins; higher
  * source priority breaks remaining ties.
  */
-export function matchRules(rules: PermissionRule[], tool: string, origin: string): PermissionRule | null {
+export function matchRules(
+  rules: PermissionRule[],
+  tool: string,
+  origin: string,
+): PermissionRule | null {
   const hits = rules.filter((r) => toolMatches(r.tool, tool) && originMatches(r.origin, origin));
   if (hits.length === 0) return null;
   hits.sort((a, b) => {
@@ -160,7 +167,11 @@ export function matchRules(rules: PermissionRule[], tool: string, origin: string
   // The most restrictive verdict wins over a same-specificity, same-source rival.
   const top = hits[0]!;
   const rival = hits.find(
-    (h) => h !== top && specificity(h) === specificity(top) && SOURCE_PRIORITY[h.source] === SOURCE_PRIORITY[top.source] && VERDICT_PRIORITY[h.verdict] > VERDICT_PRIORITY[top.verdict],
+    (h) =>
+      h !== top &&
+      specificity(h) === specificity(top) &&
+      SOURCE_PRIORITY[h.source] === SOURCE_PRIORITY[top.source] &&
+      VERDICT_PRIORITY[h.verdict] > VERDICT_PRIORITY[top.verdict],
   );
   return rival ?? top;
 }
@@ -173,20 +184,42 @@ export function matchRules(rules: PermissionRule[], tool: string, origin: string
 export const DEFAULT_SENSITIVE_PATTERNS: readonly string[] = [
   // Browser internal & extension stores (extension pages themselves are NOT
   // sensitive — the standalone chat page must be operable; owner decision)
-  'chrome://*', 'edge://*', 'about:*',
-  '*.chromewebstore.google.com', 'chromewebstore.google.com',
+  'chrome://*',
+  'edge://*',
+  'about:*',
+  '*.chromewebstore.google.com',
+  'chromewebstore.google.com',
   'microsoftedge.microsoft.com',
   // Payment networks
-  '*.paypal.com', '*.stripe.com', 'pay.google.com', '*.alipay.com', 'pay.weixin.qq.com',
-  '*.unionpay.com', '*.unionpayintl.com',
+  '*.paypal.com',
+  '*.stripe.com',
+  'pay.google.com',
+  '*.alipay.com',
+  'pay.weixin.qq.com',
+  '*.unionpay.com',
+  '*.unionpayintl.com',
   // Major banks (CN + intl, non-exhaustive seed)
-  '*.icbc.com.cn', '*.ccb.com', '*.abchina.com', '*.boc.cn', '*.bankcomm.com',
-  '*.cmbchina.com', '*.chase.com', '*.bankofamerica.com', '*.wellsfargo.com',
-  '*.citibank.com', '*.hsbc.com',
+  '*.icbc.com.cn',
+  '*.ccb.com',
+  '*.abchina.com',
+  '*.boc.cn',
+  '*.bankcomm.com',
+  '*.cmbchina.com',
+  '*.chase.com',
+  '*.bankofamerica.com',
+  '*.wellsfargo.com',
+  '*.citibank.com',
+  '*.hsbc.com',
   // Brokers
-  '*.fidelity.com', '*.schwab.com', '*.etrade.com', '*.futuhk.com', '*.tigerbrokers.com',
+  '*.fidelity.com',
+  '*.schwab.com',
+  '*.etrade.com',
+  '*.futuhk.com',
+  '*.tigerbrokers.com',
   // Government
-  '*.gov', '*.gov.cn', '*.gov.uk',
+  '*.gov',
+  '*.gov.cn',
+  '*.gov.uk',
 ] as const;
 
 export function isSensitiveOrigin(patterns: readonly string[], origin: string): boolean {

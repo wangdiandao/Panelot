@@ -30,7 +30,11 @@ export function makeSnippet(text: string, query: string, radius = 30): string | 
   return `${start > 0 ? '…' : ''}${text.slice(start, end).replace(/\s+/g, ' ')}${end < text.length ? '…' : ''}`;
 }
 
-export async function searchThreads(db: PanelotDB, query: string, scanLimit = 50): Promise<ThreadSearchHit[]> {
+export async function searchThreads(
+  db: PanelotDB,
+  query: string,
+  scanLimit = 50,
+): Promise<ThreadSearchHit[]> {
   const recent = (await db.threads.orderBy('updatedAt').reverse().limit(200).toArray()).filter(
     (t) => !t.deleting && !t.archived && t.leafId !== null,
   );
@@ -50,7 +54,8 @@ export async function searchThreads(db: PanelotDB, query: string, scanLimit = 50
     const nodes = await db.nodes.where('threadId').anyOf(scanIds).toArray();
     const matchedByThread = new Map<string, string>();
     for (const node of nodes) {
-      if (node.deleted || (node.type !== 'user_message' && node.type !== 'assistant_message')) continue;
+      if (node.deleted || (node.type !== 'user_message' && node.type !== 'assistant_message'))
+        continue;
       if (matchedByThread.has(node.threadId)) continue;
       const text = nodeText(node.payload);
       if (text.toLowerCase().includes(q)) {

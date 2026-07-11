@@ -54,7 +54,9 @@ describe('open shadow DOM', () => {
 
     const result = snap();
     // Host is interactive → has a ref.
-    const hostRef = [...result.refMap.values()].find((el) => el.tagName.toLowerCase() === 'my-button');
+    const hostRef = [...result.refMap.values()].find(
+      (el) => el.tagName.toLowerCase() === 'my-button',
+    );
     expect(hostRef).toBeDefined();
     // Shadow text is not lost.
     expect(result.yaml).toContain('提交订单');
@@ -78,7 +80,8 @@ describe('iframes', () => {
     const iframe = document.createElement('iframe');
     iframe.title = '登录框';
     document.body.appendChild(iframe);
-    iframe.contentDocument!.body.innerHTML = '<input type="password" placeholder="密码"><button>登录</button>';
+    iframe.contentDocument!.body.innerHTML =
+      '<input type="password" placeholder="密码"><button>登录</button>';
 
     const result = snap();
     expect(result.yaml).toContain('iframe "登录框"');

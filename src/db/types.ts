@@ -16,6 +16,8 @@ import type {
   ContentBlock,
   ContextBlock,
   ToolLevel,
+  TurnOverrides,
+  UserInput,
   Usage,
 } from '../messaging/protocol';
 
@@ -25,6 +27,7 @@ import type {
 
 export interface ThreadMeta {
   id: string;
+  revision: number;
   title: string;
   createdAt: number;
   updatedAt: number;
@@ -86,6 +89,9 @@ export interface ToolResultPayload {
   contentForLlm: ContentBlock[];
   /** UI-only rich channel; large blobs live in `attachments`, referenced by id. */
   details?: unknown;
+  trust?: 'trusted' | 'untrusted';
+  provenance?: 'user' | 'page' | 'mcp' | 'tool' | 'import' | 'plugin';
+  origin?: string;
 }
 
 export interface ApprovalDecisionPayload {
@@ -148,6 +154,12 @@ export interface Attachment {
   kind: 'image' | 'file' | 'page_snapshot' | 'screenshot' | 'page_text';
   mime: string;
   bytes: Blob;
+  /** Trust is evaluated by the prompt assembler, never by the rendering layer. */
+  trust?: 'trusted' | 'untrusted';
+  provenance?: 'user' | 'page' | 'mcp' | 'tool' | 'import' | 'plugin';
+  sourceRef?: string;
+  refs?: { nodeIds?: string[]; runIds?: string[]; pluginId?: string };
+  deleting?: boolean;
   meta?: { url?: string; title?: string; w?: number; h?: number };
 }
 
@@ -173,4 +185,127 @@ export interface MemoryRecord {
   key: string;
   value: string;
   updatedAt: number;
+}
+
+// ---------------------------------------------------------------------------
+// durable runtime
+// ---------------------------------------------------------------------------
+
+export type RunState =
+  | 'queued'
+  | 'preparing'
+  | 'streaming_model'
+  | 'waiting_approval'
+  | 'executing_tool'
+  | 'paused_budget'
+  | 'paused_uncertain'
+  | 'interrupted'
+  | 'failed'
+  | 'completed';
+
+export type ToolEffect = 'read' | 'write';
+export type ToolRecoveryPolicy = 'retry-safe' | 'inspect-first' | 'never-retry';
+
+export interface ResolvedRunEnvironment {
+  connectionId: string;
+  modelId: string;
+  modelParameters: Record<string, unknown>;
+  modelCapabilities?: import('../providers/types').ModelCapabilities;
+  pricing?: { input: number; output: number; cacheRead?: number };
+  presetId?: string;
+  presetPrompt?: string;
+  enabledToolLevels: Exclude<ToolLevel, 'builtin'>[];
+  approvalPolicy: ApprovalPolicy;
+  capabilityScope: CapabilityScope;
+  activeSkills: string[];
+  promptVersion: string;
+}
+
+export interface PendingToolExecution {
+  itemId: string;
+  toolName: string;
+  params: unknown;
+  target?: { tabId?: number; frameId?: number; origin?: string; serverId?: string };
+  effect: ToolEffect;
+  recovery: ToolRecoveryPolicy;
+  startedAt?: number;
+}
+
+export interface RunRecord {
+  id: string;
+  threadId: string;
+  turnId: string;
+  clientId: string;
+  submissionId: string;
+  input: UserInput;
+  overrides?: TurnOverrides;
+  state: RunState;
+  revision: number;
+  environment?: ResolvedRunEnvironment;
+  stepCursor: number;
+  pendingTool?: PendingToolExecution;
+  usage?: Usage;
+  costUsd?: number;
+  stopReason?: string;
+  error?: { code: string; message: string };
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type CommandReceiptResponse =
+  | { type: 'command.ack'; threadId?: string; runId?: string; revision?: number }
+  | {
+      type: 'command.rejected';
+      code: string;
+      message: string;
+      threadId?: string;
+      revision?: number;
+    };
+
+export interface CommandReceipt {
+  id: string;
+  clientId: string;
+  submissionId: string;
+  commandType: string;
+  status: 'processing' | 'acknowledged' | 'rejected';
+  response?: CommandReceiptResponse;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt: number;
+}
+
+export interface ApprovalRecord {
+  id: string;
+  threadId: string;
+  runId: string;
+  turnId: string;
+  request: ApprovalRequestPayload;
+  status: 'pending' | 'decided';
+  decision?: ApprovalDecision;
+  requestedAt: number;
+  decidedAt?: number;
+}
+
+export interface PluginRecord {
+  id: string;
+  name: string;
+  version: string;
+  description?: string;
+  source: { kind: 'zip' | 'github' | 'builtin'; ref?: string };
+  enabled: boolean;
+  manifest: unknown;
+  assetIds: string[];
+  installedAt: number;
+  updatedAt: number;
+}
+
+export interface PluginAssetRecord {
+  id: string;
+  pluginId: string;
+  path: string;
+  kind: 'skill' | 'preset' | 'site-instruction' | 'other';
+  mime: string;
+  bytes: Blob;
+  readOnly: true;
+  createdAt: number;
 }

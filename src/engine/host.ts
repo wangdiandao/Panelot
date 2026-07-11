@@ -4,14 +4,14 @@
  * This is the transport-facing shell of the engine. It owns:
  *  - client connections and per-thread subscription fan-out
  *  - the initialize handshake (protocol version + snapshot)
- *  - per-thread bounded Op queues with `overloaded` backpressure
+ *  - per-thread bounded Op queues with explicit rejection backpressure
  *  - 16ms delta coalescing before postMessage (docs/01 §3.5)
  *
  * The actual agent behavior lives behind `EngineCore`, so the shell is
  * testable in isolation with a stub core.
  */
 
-import { PROTOCOL_VERSION, isOp } from '../messaging/protocol';
+import { ENGINE_PROTOCOL, ENGINE_SCHEMA_HASH, isOp } from '../messaging/protocol';
 import type { AgentEvent, Op, ThreadSnapshot } from '../messaging/protocol';
 import type { ConnectionHandler, EngineConnection } from '../messaging/transport';
 
@@ -32,6 +32,7 @@ interface Client {
   conn: EngineConnection;
   subscribedThreadId: string | null;
   initialized: boolean;
+  clientId: string | null;
   /** Coalescing buffer: itemId → accumulated text/reasoning deltas. */
   pendingDeltas: Map<string, { threadId: string; text: string; reasoning: string }>;
   flushTimer: ReturnType<typeof setTimeout> | null;
@@ -60,6 +61,7 @@ export class EngineHost {
       conn,
       subscribedThreadId: null,
       initialized: false,
+      clientId: null,
       pendingDeltas: new Map(),
       flushTimer: null,
     };
@@ -127,8 +129,25 @@ export class EngineHost {
     client: Client,
     op: Extract<Op, { type: 'initialize' }>,
   ): Promise<void> {
+    if (
+      op.protocol !== ENGINE_PROTOCOL ||
+      op.schemaHash !== ENGINE_SCHEMA_HASH ||
+      typeof op.clientId !== 'string' ||
+      op.clientId.length === 0
+    ) {
+      client.conn.post({
+        type: 'fatal.reload_required',
+        submissionId: op.submissionId,
+        protocol: ENGINE_PROTOCOL,
+        schemaHash: ENGINE_SCHEMA_HASH,
+        message:
+          'The extension UI and background engine use different protocol schemas. Reload required.',
+      });
+      queueMicrotask(() => client.conn.close());
+      return;
+    }
     client.initialized = true;
-    // V1 policy (docs/01 §6): version mismatch warns, does not block.
+    client.clientId = op.clientId;
     let snapshot: ThreadSnapshot | undefined;
     if (op.subscribe) {
       // Subscribe BEFORE the async snapshot build: events broadcast while
@@ -142,7 +161,8 @@ export class EngineHost {
     client.conn.post({
       type: 'initialized',
       submissionId: op.submissionId,
-      protocolVersion: PROTOCOL_VERSION,
+      protocol: ENGINE_PROTOCOL,
+      schemaHash: ENGINE_SCHEMA_HASH,
       snapshot,
     });
   }
@@ -171,7 +191,8 @@ export class EngineHost {
     client.conn.post({
       type: 'initialized',
       submissionId: op.submissionId,
-      protocolVersion: PROTOCOL_VERSION,
+      protocol: ENGINE_PROTOCOL,
+      schemaHash: ENGINE_SCHEMA_HASH,
       snapshot: snap,
     });
   }
@@ -184,7 +205,12 @@ export class EngineHost {
       this.queues.set(key, queue);
     }
     if (queue.ops.length >= QUEUE_CAPACITY) {
-      client.conn.post({ type: 'overloaded', submissionId: op.submissionId });
+      client.conn.post({
+        type: 'command.rejected',
+        submissionId: op.submissionId,
+        code: 'overloaded',
+        message: 'Engine command queue is full. Retry after current work drains.',
+      });
       return;
     }
     queue.ops.push({ op, from: client });
@@ -198,15 +224,17 @@ export class EngineHost {
       while (queue.ops.length > 0) {
         const { op, from } = queue.ops.shift()!;
         try {
-          await this.core.handleOp(op, (ev) => this.emit(ev, from));
+          await this.core.handleOp(
+            { ...op, clientId: from.clientId ?? 'unidentified-client' } as Op,
+            (ev) => this.emit(ev, from),
+          );
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
           this.postToClient(from, {
-            type: 'error',
+            type: 'command.rejected',
             submissionId: op.submissionId,
             code: 'internal',
             message,
-            retryable: false,
           });
         }
       }
@@ -232,8 +260,15 @@ export class EngineHost {
   // ---- delta coalescing (docs/01 §3.5) --------------------------------------
 
   private postToClient(client: Client, ev: AgentEvent): void {
-    if (ev.type === 'item.delta' && (ev.delta.text !== undefined || ev.delta.reasoning !== undefined)) {
-      const buf = client.pendingDeltas.get(ev.itemId) ?? { threadId: ev.threadId, text: '', reasoning: '' };
+    if (
+      ev.type === 'item.delta' &&
+      (ev.delta.text !== undefined || ev.delta.reasoning !== undefined)
+    ) {
+      const buf = client.pendingDeltas.get(ev.itemId) ?? {
+        threadId: ev.threadId,
+        text: '',
+        reasoning: '',
+      };
       buf.text += ev.delta.text ?? '';
       buf.reasoning += ev.delta.reasoning ?? '';
       client.pendingDeltas.set(ev.itemId, buf);

@@ -1,7 +1,7 @@
 /**
  * docs/06 §4 anti-spoofing guard: the content script must never import
  * src/ui/ or any Radix-based component — approval UI renders ONLY inside
- * extension pages. This walks content.ts's static import graph.
+ * extension pages. This walks the on-demand page executor's static import graph.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -22,7 +22,9 @@ function collectImports(file: string, seen = new Set<string>()): Set<string> {
     .map((m) => m[1] ?? m[2]!)
     .filter((s) => s.startsWith('.') || s.startsWith('@/'));
   for (const spec of specs) {
-    const base = spec.startsWith('@/') ? resolve(ROOT, spec.slice(2)) : resolve(dirname(file), spec);
+    const base = spec.startsWith('@/')
+      ? resolve(ROOT, spec.slice(2))
+      : resolve(dirname(file), spec);
     for (const candidate of [base, `${base}.ts`, `${base}.tsx`, resolve(base, 'index.ts')]) {
       try {
         readFileSync(candidate, 'utf-8');
@@ -37,8 +39,8 @@ function collectImports(file: string, seen = new Set<string>()): Set<string> {
 }
 
 describe('content script isolation (docs/06 §4)', () => {
-  it('entrypoints/content.ts transitively imports no src/ui/ or radix modules', () => {
-    const graph = collectImports(resolve(ROOT, 'entrypoints/content.ts'));
+  it('the page executor transitively imports no src/ui/ or radix modules', () => {
+    const graph = collectImports(resolve(ROOT, 'entrypoints/page-executor.unlisted.ts'));
     const offenders = [...graph].filter((f) => /[\\/]src[\\/]ui[\\/]/.test(f));
     expect(offenders).toEqual([]);
 

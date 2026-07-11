@@ -62,7 +62,10 @@ export function ModelSelector({ value, onSelect, variant = 'composer', onOpenSet
       const stored: Connection[] = await SettingsStore.connections.get();
       // Keys are AES-GCM obfuscated at rest — decrypt before the live fetch.
       const connections = await Promise.all(
-        stored.map(async (c) => ({ ...c, apiKeys: await Promise.all(c.apiKeys.map(decryptSecret)) })),
+        stored.map(async (c) => ({
+          ...c,
+          apiKeys: await Promise.all(c.apiKeys.map(decryptSecret)),
+        })),
       );
       const results = await fetchAllModels(connections);
       const byId = new Map(connections.map((c) => [c.id, c]));
@@ -81,11 +84,14 @@ export function ModelSelector({ value, onSelect, variant = 'composer', onOpenSet
   }, [open, choices]);
 
   const current = value
-    ? choices?.find((c) => c.connectionId === value.connectionId && c.modelId === value.modelId)?.label ?? value.modelId
+    ? (choices?.find((c) => c.connectionId === value.connectionId && c.modelId === value.modelId)
+        ?.label ?? value.modelId)
     : t('model.default');
 
   const connNames = [...new Set((choices ?? []).map((c) => c.connectionName))];
-  const visible = connFilter ? (choices ?? []).filter((c) => c.connectionName === connFilter) : choices ?? [];
+  const visible = connFilter
+    ? (choices ?? []).filter((c) => c.connectionName === connFilter)
+    : (choices ?? []);
   const groups = new Map<string, ModelChoice[]>();
   for (const c of visible) {
     const g = groups.get(c.connectionName) ?? [];
@@ -150,9 +156,18 @@ export function ModelSelector({ value, onSelect, variant = 'composer', onOpenSet
             <CommandInput autoFocus placeholder={t('model.search')} />
             {connNames.length > 1 && (
               <div className="flex gap-1 overflow-x-auto border-b border-border-soft px-2 py-1.5 [scrollbar-width:none]">
-                <FilterPill label={t('model.all')} active={connFilter === null} onClick={() => setConnFilter(null)} />
+                <FilterPill
+                  label={t('model.all')}
+                  active={connFilter === null}
+                  onClick={() => setConnFilter(null)}
+                />
                 {connNames.map((name) => (
-                  <FilterPill key={name} label={name} active={connFilter === name} onClick={() => setConnFilter(name)} />
+                  <FilterPill
+                    key={name}
+                    label={name}
+                    active={connFilter === name}
+                    onClick={() => setConnFilter(name)}
+                  />
                 ))}
               </div>
             )}
@@ -169,14 +184,17 @@ export function ModelSelector({ value, onSelect, variant = 'composer', onOpenSet
                   <Check className={cn('size-4', value === null ? 'opacity-100' : 'opacity-0')} />
                   <div className="flex flex-col">
                     <span>{t('model.default')}</span>
-                    <span className="text-[11px] text-muted-foreground">{t('model.defaultHint')}</span>
+                    <span className="text-[11px] text-muted-foreground">
+                      {t('model.defaultHint')}
+                    </span>
                   </div>
                 </CommandItem>
               </CommandGroup>
               {[...groups.entries()].map(([connName, models]) => (
                 <CommandGroup key={connName} heading={connName}>
                   {models.map((m) => {
-                    const selected = value?.connectionId === m.connectionId && value?.modelId === m.modelId;
+                    const selected =
+                      value?.connectionId === m.connectionId && value?.modelId === m.modelId;
                     return (
                       <CommandItem
                         key={`${m.connectionId}:${m.modelId}`}
@@ -201,7 +219,15 @@ export function ModelSelector({ value, onSelect, variant = 'composer', onOpenSet
   );
 }
 
-function FilterPill({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+function FilterPill({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
   return (
     <button
       type="button"

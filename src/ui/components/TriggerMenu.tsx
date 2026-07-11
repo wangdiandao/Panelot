@@ -11,13 +11,7 @@
  * (via TriggerMenuHandle.handleKeyDown returning true = consumed).
  */
 
-import {
-  forwardRef,
-  useEffect,
-  useImperativeHandle,
-  useMemo,
-  useState,
-} from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from 'react';
 import { AppWindow, AtSign, Braces, Camera, FileText, Slash, TextCursor } from 'lucide-react';
 import { Command, CommandEmpty, CommandGroup, CommandItem, CommandList } from './ui/command';
 
@@ -48,8 +42,9 @@ export function detectTrigger(text: string, caret: number): TriggerState | null 
   const at = /(^|\s)@([^\s@]*)$/.exec(before);
   if (at) return { kind: '@', start: caret - (at[2]?.length ?? 0) - 1, query: at[2] ?? '' };
 
-  const slash = /(^|\s)\/([a-z0-9:-]*)$/.exec(before);
-  if (slash) return { kind: '/', start: caret - (slash[2]?.length ?? 0) - 1, query: slash[2] ?? '' };
+  const slash = /(^|\s)\/([a-z0-9:_.-]*)$/i.exec(before);
+  if (slash)
+    return { kind: '/', start: caret - (slash[2]?.length ?? 0) - 1, query: slash[2] ?? '' };
 
   return null;
 }
@@ -104,7 +99,9 @@ export const TriggerMenu = forwardRef<TriggerMenuHandle, Props>(function Trigger
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase();
-    return items.filter((i) => !q || i.label.toLowerCase().includes(q) || i.id.toLowerCase().includes(q));
+    return items.filter(
+      (i) => !q || i.label.toLowerCase().includes(q) || i.id.toLowerCase().includes(q),
+    );
   }, [items, query]);
 
   // Keep the selection on a visible item as the query narrows.
@@ -113,32 +110,37 @@ export const TriggerMenu = forwardRef<TriggerMenuHandle, Props>(function Trigger
     if (!filtered.some((i) => i.id === selected)) setSelected(filtered[0]!.id);
   }, [filtered, selected]);
 
-  useImperativeHandle(ref, () => ({
-    handleKeyDown(e: React.KeyboardEvent): boolean {
-      if (!open) return false;
-      if (e.key === 'Escape') {
-        onClose();
-        return true;
-      }
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-        const idx = filtered.findIndex((i) => i.id === selected);
-        const next = e.key === 'ArrowDown' ? Math.min(idx + 1, filtered.length - 1) : Math.max(idx - 1, 0);
-        if (filtered[next]) setSelected(filtered[next].id);
-        return true;
-      }
-      if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
-        const item = filtered.find((i) => i.id === selected) ?? filtered[0];
-        if (item) {
-          void item.action();
+  useImperativeHandle(
+    ref,
+    () => ({
+      handleKeyDown(e: React.KeyboardEvent): boolean {
+        if (!open) return false;
+        if (e.key === 'Escape') {
           onClose();
           return true;
         }
-        onClose();
-        return false; // nothing to confirm — let Enter send
-      }
-      return false;
-    },
-  }), [open, filtered, selected, onClose]);
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          const idx = filtered.findIndex((i) => i.id === selected);
+          const next =
+            e.key === 'ArrowDown' ? Math.min(idx + 1, filtered.length - 1) : Math.max(idx - 1, 0);
+          if (filtered[next]) setSelected(filtered[next].id);
+          return true;
+        }
+        if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+          const item = filtered.find((i) => i.id === selected) ?? filtered[0];
+          if (item) {
+            void item.action();
+            onClose();
+            return true;
+          }
+          onClose();
+          return false; // nothing to confirm — let Enter send
+        }
+        return false;
+      },
+    }),
+    [open, filtered, selected, onClose],
+  );
 
   if (!open) return null;
 
@@ -170,7 +172,11 @@ export const TriggerMenu = forwardRef<TriggerMenuHandle, Props>(function Trigger
                   >
                     <Icon className="size-3.5 text-muted-foreground" />
                     <span className="truncate">{item.label}</span>
-                    {item.hint && <span className="ml-auto truncate text-[11px] text-faint-foreground">{item.hint}</span>}
+                    {item.hint && (
+                      <span className="ml-auto truncate text-[11px] text-faint-foreground">
+                        {item.hint}
+                      </span>
+                    )}
                   </CommandItem>
                 );
               })}

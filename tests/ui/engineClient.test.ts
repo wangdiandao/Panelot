@@ -4,11 +4,13 @@
  * "thread ... not found" — the client resets and creates a fresh thread.
  */
 import 'fake-indexeddb/auto';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { PanelotDB } from '../../src/db/schema';
 import { RealEngineCore, type ProviderResolver } from '../../src/engine/core';
 import { EngineHost } from '../../src/engine/host';
-import { createDirectPair } from '../../src/messaging/transport';
+import { createDirectPair, type EngineTransport } from '../../src/messaging/transport';
+import { ENGINE_PROTOCOL, ENGINE_SCHEMA_HASH } from '../../src/messaging/protocol';
+import type { AgentEvent, Op } from '../../src/messaging/protocol';
 import { ToolRegistry } from '../../src/agent/tool';
 import type { GatekeeperCheck } from '../../src/agent/loop';
 import { EngineSession } from '../../src/ui/engineClient';
@@ -86,7 +88,9 @@ describe('optimistic user echo (ChatGPT semantics)', () => {
       session.submit({ text: 'hello there' });
       // No await: the echo must be in the store the instant submit returns.
       const live = session.store.getState().liveItems;
-      expect(live.some((it) => it.kind === 'user_message' && it.local && it.text === 'hello there')).toBe(true);
+      expect(
+        live.some((it) => it.kind === 'user_message' && it.local && it.text === 'hello there'),
+      ).toBe(true);
     } finally {
       session.dispose();
     }
@@ -123,7 +127,10 @@ describe('optimistic user echo (ChatGPT semantics)', () => {
       expect(session.store.getState().liveItems.filter((it) => it.local)).toHaveLength(2);
 
       // A retry re-submits lastInput — its bubble already exists.
-      session.store.setState({ lastError: { message: 'x', retryable: true }, lastInput: { text: 'same text' } });
+      session.store.setState({
+        lastError: { message: 'x', retryable: true },
+        lastInput: { text: 'same text' },
+      });
       session.retryLast();
       expect(session.store.getState().liveItems.filter((it) => it.local)).toHaveLength(2);
     } finally {
@@ -150,6 +157,71 @@ describe('thread.updated before snapshot (title race)', () => {
       await waitFor(() => session.store.getState().meta?.title === '生成的标题');
     } finally {
       session.dispose();
+    }
+  });
+});
+
+describe('session outbox', () => {
+  it('resends the same submission id after a disconnect until acked', async () => {
+    vi.useFakeTimers();
+    class FakeTransport implements EngineTransport {
+      sent: Op[] = [];
+      private eventHandler: (event: AgentEvent) => void = () => {};
+      private disconnectHandler: () => void = () => {};
+      send(op: Op): void {
+        this.sent.push(op);
+      }
+      onEvent(handler: (event: AgentEvent) => void): () => void {
+        this.eventHandler = handler;
+        return () => {};
+      }
+      onDisconnect(handler: () => void): () => void {
+        this.disconnectHandler = handler;
+        return () => {};
+      }
+      close(): void {}
+      emit(event: AgentEvent): void {
+        this.eventHandler(event);
+      }
+      disconnect(): void {
+        this.disconnectHandler();
+      }
+    }
+
+    const transports: FakeTransport[] = [];
+    const session = new EngineSession(() => {
+      const transport = new FakeTransport();
+      transports.push(transport);
+      return transport;
+    });
+    try {
+      const first = transports[0]!;
+      const init = first.sent[0]!;
+      first.emit({
+        type: 'initialized',
+        submissionId: init.submissionId,
+        protocol: ENGINE_PROTOCOL,
+        schemaHash: ENGINE_SCHEMA_HASH,
+      });
+      session.createThread();
+      const original = first.sent.find((op) => op.type === 'thread.create')!;
+
+      first.disconnect();
+      await vi.advanceTimersByTimeAsync(500);
+      const second = transports[1]!;
+      const reconnectInit = second.sent[0]!;
+      second.emit({
+        type: 'initialized',
+        submissionId: reconnectInit.submissionId,
+        protocol: ENGINE_PROTOCOL,
+        schemaHash: ENGINE_SCHEMA_HASH,
+      });
+
+      const replay = second.sent.find((op) => op.type === 'thread.create');
+      expect(replay?.submissionId).toBe(original.submissionId);
+    } finally {
+      session.dispose();
+      vi.useRealTimers();
     }
   });
 });

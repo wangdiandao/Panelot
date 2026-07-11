@@ -35,7 +35,11 @@ export function createKeyRing(keys: string[]): KeyRing {
   };
 }
 
-export function normalizeHttpError(status: number, bodyText: string, retryAfterHeader?: string | null): ProviderError {
+export function normalizeHttpError(
+  status: number,
+  bodyText: string,
+  retryAfterHeader?: string | null,
+): ProviderError {
   const retryAfterMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 || undefined : undefined;
   if (status === 401 || status === 403) {
     return new ProviderError('auth', `authentication failed (${status})`, undefined, bodyText);
@@ -44,7 +48,12 @@ export function normalizeHttpError(status: number, bodyText: string, retryAfterH
     return new ProviderError('rate_limit', 'rate limited (429)', retryAfterMs, bodyText);
   }
   if (status === 529 || status === 503) {
-    return new ProviderError('overloaded', `provider overloaded (${status})`, retryAfterMs, bodyText);
+    return new ProviderError(
+      'overloaded',
+      `provider overloaded (${status})`,
+      retryAfterMs,
+      bodyText,
+    );
   }
   // Context-length errors surface as 400 with a recognizable message on both protocols.
   if (status === 400 && /context|token|length|too long|maximum/i.test(bodyText)) {
@@ -60,10 +69,25 @@ export interface RetryOptions {
   capDelayMs?: number;
   signal?: AbortSignal;
   /** Injectable clock for tests. */
-  sleep?: (ms: number) => Promise<void>;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
 
-const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const defaultSleep = (ms: number, signal?: AbortSignal) =>
+  new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('aborted', 'AbortError'));
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        reject(new DOMException('aborted', 'AbortError'));
+      },
+      { once: true },
+    );
+  });
 
 /**
  * Run `attempt` with normalized retry semantics:
@@ -93,6 +117,7 @@ export async function withRetry<T>(
       lastError = e;
       if (e instanceof DOMException && e.name === 'AbortError') throw e;
       if (!(e instanceof ProviderError)) throw e;
+      if (i === maxAttempts - 1) throw e;
 
       switch (e.kind) {
         case 'auth': {
@@ -103,12 +128,12 @@ export async function withRetry<T>(
         case 'overloaded': {
           if (keys.advance()) continue; // failover first when multi-key
           const delay = e.retryAfterMs ?? Math.min(base * 2 ** i, cap);
-          await sleep(delay);
+          await sleep(delay, opts.signal);
           continue;
         }
         case 'network': {
           const delay = Math.min(base * 2 ** i, cap);
-          await sleep(delay);
+          await sleep(delay, opts.signal);
           continue;
         }
         default:

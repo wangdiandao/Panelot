@@ -6,6 +6,7 @@
  */
 
 import type { PanelotDB } from '../db/schema';
+import { AttachmentRepository } from './attachments';
 
 const ATTACHMENT_BUDGET_BYTES = 200 * 1024 * 1024;
 const WARN_THRESHOLD = 0.8;
@@ -26,17 +27,21 @@ export async function getQuotaStatus(): Promise<QuotaStatus> {
 }
 
 /** Evict oldest attachments over the budget, skipping the active thread. */
-export async function evictAttachmentsIfNeeded(db: PanelotDB, activeThreadId?: string): Promise<number> {
+export async function evictAttachmentsIfNeeded(
+  db: PanelotDB,
+  activeThreadId?: string,
+): Promise<number> {
   const attachments = await db.attachments.orderBy('createdAt').toArray();
   let total = attachments.reduce((sum, a) => sum + a.bytes.size, 0);
   if (total <= ATTACHMENT_BUDGET_BYTES) return 0;
 
   let evicted = 0;
+  const repository = new AttachmentRepository(db);
   for (const att of attachments) {
     if (total <= ATTACHMENT_BUDGET_BYTES) break;
     if (att.threadId === activeThreadId) continue; // never evict the live thread
     total -= att.bytes.size;
-    await db.attachments.delete(att.id);
+    await repository.remove(att.id);
     evicted++;
   }
   return evicted;

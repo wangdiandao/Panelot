@@ -66,7 +66,9 @@ export function CodeEditor({ value, onChange, placeholder, minHeight = '360px' }
 
     // Track theme flips (useTheme toggles .dark on <html>).
     const observer = new MutationObserver(() => {
-      view.dispatch({ effects: themeCompartment.current.reconfigure(isDark() ? darkExtensions : []) });
+      view.dispatch({
+        effects: themeCompartment.current.reconfigure(isDark() ? darkExtensions : []),
+      });
     });
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
 

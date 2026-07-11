@@ -9,15 +9,17 @@
 import { useEffect, useState } from 'react';
 import type { ContextBlock } from '../../messaging/protocol';
 import { attachSelection, attachTab, listAttachableTabs } from '../pageContext';
-import { PanelotDB } from '../../db/schema';
-import { SkillManager } from '../../skills/manager';
 import type { SkillFrontmatter, VariableDef } from '../../skills/parse';
 import type { TriggerItem, TriggerState } from './TriggerMenu';
+import { hostPermissionBroker } from '../../permissions/hostPermissionBroker';
 
-const db = new PanelotDB();
-const skillManager = new SkillManager(db);
-
-export const DYNAMIC_VARIABLES = ['PAGE_URL', 'PAGE_TITLE', 'SELECTION', 'CLIPBOARD', 'CURRENT_DATE'] as const;
+export const DYNAMIC_VARIABLES = [
+  'PAGE_URL',
+  'PAGE_TITLE',
+  'SELECTION',
+  'CLIPBOARD',
+  'CURRENT_DATE',
+] as const;
 
 /** Evaluate {{VAR}} placeholders at submit time (docs/09 §5). */
 export async function evaluateVariables(text: string): Promise<string> {
@@ -29,7 +31,9 @@ export async function evaluateVariables(text: string): Promise<string> {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       values.set('PAGE_URL', tab?.url ?? '');
       values.set('PAGE_TITLE', tab?.title ?? '');
-    } catch { /* non-extension env */ }
+    } catch {
+      /* non-extension env */
+    }
   }
   if (text.includes('{{SELECTION}}')) {
     const sel = await attachSelection();
@@ -43,7 +47,10 @@ export async function evaluateVariables(text: string): Promise<string> {
       values.set('CLIPBOARD', '');
     }
   }
-  return text.replace(/\{\{(PAGE_URL|PAGE_TITLE|SELECTION|CLIPBOARD|CURRENT_DATE)\}\}/g, (_, k: string) => values.get(k) ?? '');
+  return text.replace(
+    /\{\{(PAGE_URL|PAGE_TITLE|SELECTION|CLIPBOARD|CURRENT_DATE)\}\}/g,
+    (_, k: string) => values.get(k) ?? '',
+  );
 }
 
 export interface SkillCommand {
@@ -55,6 +62,11 @@ export interface SkillCommand {
 
 /** Enabled skills as slash commands (shared by TriggerMenu and the + menu). */
 export async function listSkillCommands(): Promise<SkillCommand[]> {
+  const [{ PanelotDB }, { SkillManager }] = await Promise.all([
+    import('../../db/schema'),
+    import('../../skills/manager'),
+  ]);
+  const skillManager = new SkillManager(new PanelotDB());
   const skills = await skillManager.list();
   const cmds: SkillCommand[] = [];
   for (const s of skills) {
@@ -68,6 +80,28 @@ export async function listSkillCommands(): Promise<SkillCommand[]> {
     });
   }
   return cmds;
+}
+
+interface McpCatalog {
+  ok: boolean;
+  prompts?: {
+    command: string;
+    serverId: string;
+    prompt: string;
+    args: { name: string; required?: boolean }[];
+  }[];
+  resources?: {
+    serverId: string;
+    uri: string;
+    name: string;
+    description?: string;
+    origin?: string;
+  }[];
+}
+
+async function listMcpCatalog(): Promise<McpCatalog> {
+  if (typeof chrome === 'undefined' || !chrome.runtime?.sendMessage) return { ok: true };
+  return chrome.runtime.sendMessage({ type: 'panelot.mcpCatalog' }) as Promise<McpCatalog>;
 }
 
 export interface BuiltinCommand {
@@ -90,16 +124,33 @@ interface Callbacks {
 export function useTriggerItems(trigger: TriggerState | null, cb: Callbacks): TriggerItem[] {
   const [tabs, setTabs] = useState<{ id: number; title: string; url: string }[]>([]);
   const [skillCommands, setSkillCommands] = useState<SkillCommand[]>([]);
+  const [mcpResources, setMcpResources] = useState<NonNullable<McpCatalog['resources']>>([]);
 
   useEffect(() => {
     if (trigger?.kind !== '@') return;
-    void listAttachableTabs().then(setTabs);
+    void Promise.all([listAttachableTabs(), listMcpCatalog()]).then(([nextTabs, catalog]) => {
+      setTabs(nextTabs);
+      setMcpResources(catalog.ok ? (catalog.resources ?? []) : []);
+    });
   }, [trigger?.kind]);
 
   useEffect(() => {
     if (trigger?.kind !== '/') return;
     // Every enabled Skill is a slash command; panelot.command only renames it.
-    void listSkillCommands().then(setSkillCommands);
+    void Promise.all([listSkillCommands(), listMcpCatalog()]).then(([skills, catalog]) => {
+      const prompts: SkillCommand[] = (catalog.ok ? (catalog.prompts ?? []) : []).map((prompt) => ({
+        command: prompt.command,
+        skillName: `${prompt.serverId}:${prompt.prompt}`,
+        description: `MCP Prompt · ${prompt.serverId}`,
+        variables: prompt.args.map((argument) => ({
+          key: argument.name,
+          label: argument.name,
+          type: 'text',
+          required: argument.required,
+        })),
+      }));
+      setSkillCommands([...skills, ...prompts]);
+    });
   }, [trigger?.kind]);
 
   if (!trigger) return [];
@@ -110,15 +161,35 @@ export function useTriggerItems(trigger: TriggerState | null, cb: Callbacks): Tr
       const block = await fn();
       if (block) cb.attachContext(block);
     };
-    return tabs.map((t) => ({
-      id: `tab-${t.id}`,
-      kind: '@' as const,
-      group: '打开的标签页',
-      label: t.title,
-      hint: new URL(t.url).hostname,
-      icon: 'tab' as const,
-      action: attach(() => attachTab(t.id, t.url)),
-    }));
+    return [
+      ...tabs.map((t) => ({
+        id: `tab-${t.id}`,
+        kind: '@' as const,
+        group: '打开的标签页',
+        label: t.title,
+        hint: new URL(t.url).hostname,
+        icon: 'tab' as const,
+        action: attach(() => attachTab(t.id, t.url)),
+      })),
+      ...mcpResources.map((resource) => ({
+        id: `mcp-${resource.serverId}-${resource.uri}`,
+        kind: '@' as const,
+        group: 'MCP Resources',
+        label: resource.name,
+        hint: resource.description ?? resource.uri,
+        icon: 'page' as const,
+        action: async () => {
+          cb.replaceTrigger('');
+          if (resource.origin && !(await hostPermissionBroker.request(resource.origin))) return;
+          const response = (await chrome.runtime.sendMessage({
+            type: 'panelot.mcpReadResource',
+            serverId: resource.serverId,
+            uri: resource.uri,
+          })) as { ok: boolean; context?: ContextBlock };
+          if (response.ok && response.context) cb.attachContext(response.context);
+        },
+      })),
+    ];
   }
 
   if (trigger.kind === '/') {

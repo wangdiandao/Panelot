@@ -9,14 +9,33 @@
  */
 
 import { memo, useEffect, useId, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
-import { codeToHtml } from 'shiki';
+import type { ComponentType } from 'react';
+import type { Options as ReactMarkdownOptions } from 'react-markdown';
 import { Check, Copy } from 'lucide-react';
 import { t } from '../i18n';
-import 'katex/dist/katex.min.css';
+
+type RemarkPlugin = NonNullable<ReactMarkdownOptions['remarkPlugins']>[number];
+type RehypePlugin = NonNullable<ReactMarkdownOptions['rehypePlugins']>[number];
+
+interface MarkdownRuntime {
+  ReactMarkdown: ComponentType<ReactMarkdownOptions>;
+  remarkGfm: RemarkPlugin;
+  remarkMath: RemarkPlugin;
+  rehypeKatex: RehypePlugin;
+}
+
+const markdownRuntime = Promise.all([
+  import('react-markdown'),
+  import('remark-gfm'),
+  import('remark-math'),
+  import('rehype-katex'),
+  import('katex/dist/katex.min.css'),
+]).then(([reactMarkdown, remarkGfm, remarkMath, rehypeKatex]) => ({
+  ReactMarkdown: reactMarkdown.default,
+  remarkGfm: remarkGfm.default,
+  remarkMath: remarkMath.default,
+  rehypeKatex: rehypeKatex.default,
+}));
 
 /** Count ``` fences to detect an unclosed trailing code block. */
 export function splitUnclosedFence(markdown: string): { closed: string; openTail: string | null } {
@@ -62,11 +81,8 @@ function ShikiBlock({ code, lang }: { code: string; lang: string }) {
     let alive = true;
     // Dual themes: tokens carry --shiki-light/dark variables; global.css picks
     // the active one via the .dark class, so code follows the app theme.
-    codeToHtml(code, {
-      lang: lang || 'text',
-      themes: { light: 'vitesse-light', dark: 'vitesse-dark' },
-      defaultColor: false,
-    })
+    import('../highlighter')
+      .then(({ highlightCode }) => highlightCode(code, lang || 'text'))
       .then((h) => alive && setHtml(h))
       .catch(() => alive && setHtml(null));
     return () => {
@@ -83,7 +99,10 @@ function ShikiBlock({ code, lang }: { code: string; lang: string }) {
       ) : (
         // Shiki inlines the theme background — force the token surface instead
         // so highlighted and fallback blocks sit on the same bg-muted.
-        <div className="shiki-block overflow-x-auto text-xs [&>pre]:!bg-muted [&>pre]:p-3 [&>pre]:pt-1.5" dangerouslySetInnerHTML={{ __html: html }} />
+        <div
+          className="shiki-block overflow-x-auto text-xs [&>pre]:!bg-muted [&>pre]:p-3 [&>pre]:pt-1.5"
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
       )}
     </div>
   );
@@ -95,11 +114,9 @@ function MermaidBlock({ code }: { code: string }) {
   const [failed, setFailed] = useState(false);
   useEffect(() => {
     let alive = true;
-    void import('mermaid').then(async ({ default: mermaid }) => {
+    void import('../mermaidRuntime').then(({ renderMermaid }) => {
       try {
-        const dark = document.documentElement.classList.contains('dark');
-        mermaid.initialize({ startOnLoad: false, theme: dark ? 'dark' : 'default', securityLevel: 'strict' });
-        const { svg } = await mermaid.render(`m${id}`, code);
+        const svg = renderMermaid(`m${id}`, code);
         if (alive && ref.current) ref.current.innerHTML = svg;
       } catch {
         if (alive) setFailed(true);
@@ -122,13 +139,29 @@ interface MarkdownProps {
 }
 
 export const Markdown = memo(function Markdown({ content, streaming }: MarkdownProps) {
-  const { closed, openTail } = streaming ? splitUnclosedFence(content) : { closed: content, openTail: null };
+  const [runtime, setRuntime] = useState<MarkdownRuntime | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void markdownRuntime.then((loaded) => {
+      if (alive) setRuntime(loaded);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const { closed, openTail } = streaming
+    ? splitUnclosedFence(content)
+    : { closed: content, openTail: null };
+  if (!runtime) {
+    return <div className="whitespace-pre-wrap text-[14.5px] leading-[1.7]">{content}</div>;
+  }
+  const ReactMarkdown = runtime.ReactMarkdown;
 
   return (
     <div className="markdown-body text-[14.5px] leading-[1.7] [&>*+*]:mt-3 [&_h1]:mt-4 [&_h1]:text-[18px] [&_h1]:font-semibold [&_h2]:mt-4 [&_h2]:text-[16px] [&_h2]:font-semibold [&_h3]:mt-3 [&_h3]:text-[15px] [&_h3]:font-semibold [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5 [&_li]:my-0.5 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeKatex]}
+        remarkPlugins={[runtime.remarkGfm, runtime.remarkMath]}
+        rehypePlugins={[runtime.rehypeKatex]}
         components={{
           code({ className, children, ...props }) {
             const match = /language-(\w+)/.exec(className ?? '');
@@ -145,7 +178,12 @@ export const Markdown = memo(function Markdown({ content, streaming }: MarkdownP
           },
           a({ href, children }) {
             return (
-              <a href={href} target="_blank" rel="noreferrer" className="text-primary underline decoration-primary/40 hover:decoration-primary">
+              <a
+                href={href}
+                target="_blank"
+                rel="noreferrer"
+                className="text-primary underline decoration-primary/40 hover:decoration-primary"
+              >
                 {children}
               </a>
             );

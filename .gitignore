@@ -8,6 +8,8 @@ stats-*.json
 .DS_Store
 test-results/
 playwright-report/
+output/playwright/
+coverage/
 scratch/
 *.pem
 *.crx

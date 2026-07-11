@@ -40,10 +40,31 @@ export interface SnapshotResult {
 // Interactive detection (docs/05 §1.2)
 // ---------------------------------------------------------------------------
 
-const INTERACTIVE_TAGS = new Set(['a', 'button', 'input', 'select', 'textarea', 'summary', 'option']);
+const INTERACTIVE_TAGS = new Set([
+  'a',
+  'button',
+  'input',
+  'select',
+  'textarea',
+  'summary',
+  'option',
+]);
 const INTERACTIVE_ROLES = new Set([
-  'button', 'link', 'checkbox', 'menuitem', 'menuitemcheckbox', 'menuitemradio',
-  'tab', 'option', 'switch', 'combobox', 'slider', 'radio', 'searchbox', 'textbox', 'spinbutton',
+  'button',
+  'link',
+  'checkbox',
+  'menuitem',
+  'menuitemcheckbox',
+  'menuitemradio',
+  'tab',
+  'option',
+  'switch',
+  'combobox',
+  'slider',
+  'radio',
+  'searchbox',
+  'textbox',
+  'spinbutton',
 ]);
 
 export function isInteractive(el: Element, win: Window): boolean {
@@ -84,7 +105,8 @@ function isInnermostTarget(el: Element, win: Window): boolean {
   return !hasInteractiveDescendant(el, win);
 }
 
-const INTERACTIVE_SELECTOR = 'a,button,input,select,textarea,summary,[role],[tabindex],[contenteditable]';
+const INTERACTIVE_SELECTOR =
+  'a,button,input,select,textarea,summary,[role],[tabindex],[contenteditable]';
 
 function hasInteractiveDescendant(el: Element, win: Window): boolean {
   for (const child of el.querySelectorAll(INTERACTIVE_SELECTOR)) {
@@ -103,16 +125,40 @@ function hasInteractiveDescendant(el: Element, win: Window): boolean {
 // ---------------------------------------------------------------------------
 
 const TAG_ROLE: Record<string, string> = {
-  a: 'link', button: 'button', select: 'combobox', textarea: 'textbox',
-  summary: 'button', option: 'option', h1: 'heading', h2: 'heading', h3: 'heading',
-  h4: 'heading', h5: 'heading', h6: 'heading', img: 'img', nav: 'navigation',
-  main: 'main', form: 'form', table: 'table', ul: 'list', ol: 'list', li: 'listitem',
-  dialog: 'dialog', label: 'label',
+  a: 'link',
+  button: 'button',
+  select: 'combobox',
+  textarea: 'textbox',
+  summary: 'button',
+  option: 'option',
+  h1: 'heading',
+  h2: 'heading',
+  h3: 'heading',
+  h4: 'heading',
+  h5: 'heading',
+  h6: 'heading',
+  img: 'img',
+  nav: 'navigation',
+  main: 'main',
+  form: 'form',
+  table: 'table',
+  ul: 'list',
+  ol: 'list',
+  li: 'listitem',
+  dialog: 'dialog',
+  label: 'label',
 };
 
 const INPUT_TYPE_ROLE: Record<string, string> = {
-  checkbox: 'checkbox', radio: 'radio', range: 'slider', number: 'spinbutton',
-  search: 'searchbox', button: 'button', submit: 'button', reset: 'button', file: 'button',
+  checkbox: 'checkbox',
+  radio: 'radio',
+  range: 'slider',
+  number: 'spinbutton',
+  search: 'searchbox',
+  button: 'button',
+  submit: 'button',
+  reset: 'button',
+  file: 'button',
 };
 
 export function computeRole(el: Element): string {
@@ -136,7 +182,12 @@ export function computeName(el: Element, win: Window): string {
   if (labelledBy) {
     const parts = labelledBy
       .split(/\s+/)
-      .map((id) => root.getElementById?.(id)?.textContent?.trim() ?? root.querySelector?.(`#${CSS.escape(id)}`)?.textContent?.trim() ?? '')
+      .map(
+        (id) =>
+          root.getElementById?.(id)?.textContent?.trim() ??
+          root.querySelector?.(`#${CSS.escape(id)}`)?.textContent?.trim() ??
+          '',
+      )
       .filter(Boolean);
     if (parts.length) return parts.join(' ');
   }
@@ -187,13 +238,17 @@ export function computeAttrs(el: Element): string[] {
     if (type === 'checkbox' || type === 'radio') {
       if (input.checked) attrs.push('checked');
     } else if (input.value) {
-      attrs.push(`value="${input.value.length > 40 ? `${input.value.slice(0, 37)}…` : input.value}"`);
+      attrs.push(
+        `value="${input.value.length > 40 ? `${input.value.slice(0, 37)}…` : input.value}"`,
+      );
     }
   }
-  if (el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true') attrs.push('disabled');
+  if (el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true')
+    attrs.push('disabled');
   const expanded = el.getAttribute('aria-expanded');
   if (expanded !== null) attrs.push(expanded === 'true' ? 'expanded' : 'collapsed');
-  if (el.getAttribute('aria-selected') === 'true' || (el as HTMLOptionElement).selected === true) attrs.push('selected');
+  if (el.getAttribute('aria-selected') === 'true' || (el as HTMLOptionElement).selected === true)
+    attrs.push('selected');
   if (el.getAttribute('aria-checked') === 'true') attrs.push('checked');
   if (el.getAttribute('aria-invalid') === 'true') attrs.push('invalid');
   if (el.getAttribute('aria-current')) attrs.push('current');
@@ -204,10 +259,30 @@ export function computeAttrs(el: Element): string[] {
 // Tree building
 // ---------------------------------------------------------------------------
 
-const SKIP_TAGS = new Set(['script', 'style', 'noscript', 'template', 'meta', 'link', 'head', 'svg', 'path']);
+const SKIP_TAGS = new Set([
+  'script',
+  'style',
+  'noscript',
+  'template',
+  'meta',
+  'link',
+  'head',
+  'svg',
+  'path',
+]);
 
 /** Structural roles kept even when non-interactive (context for the model). */
-const STRUCTURAL_ROLES = new Set(['heading', 'navigation', 'main', 'form', 'table', 'list', 'listitem', 'dialog', 'img']);
+const STRUCTURAL_ROLES = new Set([
+  'heading',
+  'navigation',
+  'main',
+  'form',
+  'table',
+  'list',
+  'listitem',
+  'dialog',
+  'img',
+]);
 
 function isHidden(el: Element, win: Window): boolean {
   if (el.getAttribute('aria-hidden') === 'true') return true;
@@ -312,7 +387,11 @@ export function buildSnapshot(win: Window, opts: BuildOptions): SnapshotResult {
       // Structural/containers: descend for children. A shadow host that is
       // ALSO interactive (custom element with role=button) must still descend
       // into its shadow root — its label/content lives there, not in light DOM.
-      if (!interactive || el.shadowRoot || ['form', 'combobox', 'list', 'table', 'dialog', 'navigation'].includes(role)) {
+      if (
+        !interactive ||
+        el.shadowRoot ||
+        ['form', 'combobox', 'list', 'table', 'dialog', 'navigation'].includes(role)
+      ) {
         node.children.push(...childrenOf(el));
       }
       return [node];

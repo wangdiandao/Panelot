@@ -7,11 +7,13 @@ import { defineConfig } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './e2e',
+  outputDir: './output/playwright/test-results',
   testMatch: '**/*.spec.ts',
   fullyParallel: true,
   timeout: 30_000,
   use: {
     headless: true,
   },
-  projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],
+  reporter: [['list']],
+  projects: [{ name: 'chromium', use: { browserName: 'chromium', channel: 'chromium' } }],
 });

@@ -46,7 +46,10 @@ function blocksToAnthropic(blocks: ContentBlock[]): AnthropicContent[] {
   return blocks.map((b) =>
     b.type === 'text'
       ? { type: 'text' as const, text: b.text }
-      : { type: 'image' as const, source: { type: 'base64' as const, media_type: b.mime, data: b.data } },
+      : {
+          type: 'image' as const,
+          source: { type: 'base64' as const, media_type: b.mime, data: b.data },
+        },
   );
 }
 
@@ -69,7 +72,9 @@ export function toAnthropicMessages(messages: UnifiedMessage[]): AnthropicMessag
         const resultBlock: AnthropicContent = {
           type: 'tool_result',
           tool_use_id: m.toolCallId,
-          content: m.content.map((b) => (b.type === 'text' ? b.text : '[image omitted]')).join('\n'),
+          content: m.content
+            .map((b) => (b.type === 'text' ? b.text : '[image omitted]'))
+            .join('\n'),
           ...(m.isError ? { is_error: true } : {}),
         };
         // Anthropic requires tool_result inside a user message; consecutive
@@ -137,7 +142,13 @@ export class AnthropicAdapter implements ProviderAdapter {
       // Map reasoning effort to a thinking budget (docs/03 §1.4 leaves the
       // mapping to the adapter; unset → no thinking block).
       const budgets = { low: 2048, medium: 8192, high: 16384 } as const;
-      body.thinking = { type: 'enabled', budget_tokens: budgets[p.reasoningEffort] };
+      const maxTokens = body.max_tokens as number;
+      if (maxTokens > 1024) {
+        body.thinking = {
+          type: 'enabled',
+          budget_tokens: Math.min(budgets[p.reasoningEffort], maxTokens - 1),
+        };
+      }
     }
 
     const url = `${this.connection.baseUrl}/v1/messages`;
@@ -167,7 +178,11 @@ export class AnthropicAdapter implements ProviderAdapter {
             throw new ProviderError('network', `fetch failed: ${(e as Error).message}`);
           }
           if (!res.ok) {
-            throw normalizeHttpError(res.status, await res.text().catch(() => ''), res.headers.get('retry-after'));
+            throw normalizeHttpError(
+              res.status,
+              await res.text().catch(() => ''),
+              res.headers.get('retry-after'),
+            );
           }
           if (!res.body) throw new ProviderError('protocol', 'response has no body');
           return res;
@@ -207,7 +222,11 @@ export class AnthropicAdapter implements ProviderAdapter {
           case 'message_start': {
             const u = ev.message?.usage;
             if (u) {
-              usage = { input: u.input_tokens ?? 0, output: 0, cacheRead: u.cache_read_input_tokens };
+              usage = {
+                input: u.input_tokens ?? 0,
+                output: 0,
+                cacheRead: u.cache_read_input_tokens,
+              };
             }
             break;
           }
@@ -237,7 +256,11 @@ export class AnthropicAdapter implements ProviderAdapter {
             } else if (d.type === 'thinking_delta' && d.thinking) {
               reasoningParts.push(d.thinking);
               yield { type: 'reasoning', delta: d.thinking };
-            } else if (d.type === 'input_json_delta' && d.partial_json !== undefined && ev.index !== undefined) {
+            } else if (
+              d.type === 'input_json_delta' &&
+              d.partial_json !== undefined &&
+              ev.index !== undefined
+            ) {
               const block = partialBlocks.get(ev.index);
               if (block) block.json += d.partial_json;
               yield { type: 'tool_call_partial', index: ev.index, argsDelta: d.partial_json };
@@ -295,7 +318,13 @@ export class AnthropicAdapter implements ProviderAdapter {
         const text = textParts.join('');
         if (text) message.push({ type: 'text', text });
         const reasoning = reasoningParts.join('');
-        return { message, reasoning: reasoning || undefined, toolCalls, usage, stopReason: finalStop };
+        return {
+          message,
+          reasoning: reasoning || undefined,
+          toolCalls,
+          usage,
+          stopReason: finalStop,
+        };
       },
     };
   }

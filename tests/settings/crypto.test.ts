@@ -20,7 +20,7 @@ describe('API key encryption (DESIGN §7)', () => {
   it('round-trips a secret through AES-GCM', async () => {
     const secret = 'sk-proj-abc123XYZ';
     const encrypted = await encryptSecret(secret);
-    expect(encrypted).toMatch(/^enc:/);
+    expect(encrypted).toMatch(/^secret:v1:/);
     expect(encrypted).not.toContain(secret);
     expect(await decryptSecret(encrypted)).toBe(secret);
   });
@@ -45,5 +45,6 @@ describe('API key encryption (DESIGN §7)', () => {
     expect(await decryptSecret('plain-key')).toBe('plain-key');
     expect(isEncrypted('plain-key')).toBe(false);
     expect(isEncrypted('enc:xxx')).toBe(true);
+    expect(isEncrypted('secret:v1:iv:ciphertext')).toBe(true);
   });
 });

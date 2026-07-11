@@ -60,7 +60,8 @@ export function redirectUri(): string {
 // ---- Dynamic client registration (DCR) -------------------------------------
 
 export async function registerClient(meta: AuthServerMetadata): Promise<string> {
-  if (!meta.registration_endpoint) throw new Error('授权服务器不支持动态客户端注册，需手动配置 clientId');
+  if (!meta.registration_endpoint)
+    throw new Error('授权服务器不支持动态客户端注册，需手动配置 clientId');
   const res = await fetch(meta.registration_endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -94,7 +95,10 @@ export async function authorize(
   authUrl.searchParams.set('state', state);
   if (scopes?.length) authUrl.searchParams.set('scope', scopes.join(' '));
 
-  const redirect = await chrome.identity.launchWebAuthFlow({ url: authUrl.toString(), interactive: true });
+  const redirect = await chrome.identity.launchWebAuthFlow({
+    url: authUrl.toString(),
+    interactive: true,
+  });
   if (!redirect) throw new Error('授权流程被取消');
 
   const params = new URL(redirect).searchParams;
@@ -105,7 +109,12 @@ export async function authorize(
   return exchangeCode(meta, clientId, code, verifier);
 }
 
-async function exchangeCode(meta: AuthServerMetadata, clientId: string, code: string, verifier: string): Promise<OAuthTokens> {
+async function exchangeCode(
+  meta: AuthServerMetadata,
+  clientId: string,
+  code: string,
+  verifier: string,
+): Promise<OAuthTokens> {
   const res = await fetch(meta.token_endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -121,11 +130,19 @@ async function exchangeCode(meta: AuthServerMetadata, clientId: string, code: st
   return toTokens(await res.json());
 }
 
-export async function refreshTokens(tokenEndpoint: string, clientId: string, refresh: string): Promise<OAuthTokens> {
+export async function refreshTokens(
+  tokenEndpoint: string,
+  clientId: string,
+  refresh: string,
+): Promise<OAuthTokens> {
   const res = await fetch(tokenEndpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refresh, client_id: clientId }),
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: refresh,
+      client_id: clientId,
+    }),
   });
   if (!res.ok) throw new Error(`token 刷新失败: ${res.status}`);
   return toTokens(await res.json());

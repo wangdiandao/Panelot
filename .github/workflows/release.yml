@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.12.2
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Read package version
+        run: echo "VERSION=$(node -p \"require('./package.json').version\")" >> "$GITHUB_ENV"
+      - name: Verify tag matches package version
+        run: test "${GITHUB_REF_NAME}" = "v${VERSION}"
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm compile
+      - run: pnpm test
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm e2e
+      - run: pnpm zip
+      - run: pnpm budget
+      - run: pnpm zip:edge
+      - run: pnpm zip:smoke -- "dist/panelot-${VERSION}-chrome.zip" "dist/panelot-${VERSION}-edge.zip"
+      - name: Collect packages and checksums
+        run: |
+          mkdir release
+          cp "dist/panelot-${VERSION}-chrome.zip" release/
+          cp "dist/panelot-${VERSION}-edge.zip" release/
+          cd release
+          sha256sum *.zip > SHA256SUMS.txt
+      - uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: release/panelot-${{ env.VERSION }}.cdx.json
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release/* --verify-tag --generate-notes --title "Panelot $GITHUB_REF_NAME"

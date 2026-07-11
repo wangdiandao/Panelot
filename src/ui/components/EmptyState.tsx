@@ -30,15 +30,21 @@ export function greetingKey(hour: number): string {
 /** Page-type heuristics for the side panel (cheap URL sniffing, OB-3). */
 export function pageSuggestion(url: string | undefined): Suggestion {
   const u = (url ?? '').toLowerCase();
-  if (/youtube\.com\/watch|bilibili\.com\/video/.test(u)) return { title: t('empty.sugVideo'), text: t('empty.sugVideo') };
+  if (/youtube\.com\/watch|bilibili\.com\/video/.test(u))
+    return { title: t('empty.sugVideo'), text: t('empty.sugVideo') };
   if (/\.pdf(\?|#|$)/.test(u)) return { title: t('empty.sugPdf'), text: t('empty.sugPdf') };
-  if (/github\.com\/[^/]+\/[^/]+/.test(u)) return { title: t('empty.sugRepo'), text: t('empty.sugRepo') };
+  if (/github\.com\/[^/]+\/[^/]+/.test(u))
+    return { title: t('empty.sugRepo'), text: t('empty.sugRepo') };
   return { title: t('empty.sugPage'), text: t('empty.sugPage') };
 }
 
 function builtinSuggestions(): Suggestion[] {
   return [
-    { title: t('empty.sugSummarize'), hint: t('empty.sugSummarizeHint'), text: t('empty.sugSummarize') },
+    {
+      title: t('empty.sugSummarize'),
+      hint: t('empty.sugSummarizeHint'),
+      text: t('empty.sugSummarize'),
+    },
     { title: t('empty.sugCompare'), hint: t('empty.sugCompareHint'), text: t('empty.sugCompare') },
     { title: t('empty.sugForm'), hint: t('empty.sugFormHint'), text: t('empty.sugForm') },
     { title: t('empty.sugExtract'), hint: t('empty.sugExtractHint'), text: t('empty.sugExtract') },
@@ -66,11 +72,15 @@ export function EmptyState({ variant, onPick, pageUrl }: Props) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-4 px-4 py-6">
       <div className="flex flex-col items-center gap-2 text-center">
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/15 text-[22px] text-primary">✦</div>
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/15 text-[22px] text-primary">
+          ✦
+        </div>
         <div className="text-[22px] font-medium leading-tight">
           {t(greetingKey(new Date().getHours()))}
         </div>
-        <div className="max-w-xs text-[13px] leading-relaxed text-faint-foreground">{t('empty.hint')}</div>
+        <div className="max-w-xs text-[13px] leading-relaxed text-faint-foreground">
+          {t('empty.hint')}
+        </div>
       </div>
       <div className="w-full max-w-md">
         {suggestions.map((s, i) => (

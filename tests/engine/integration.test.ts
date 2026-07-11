@@ -8,12 +8,21 @@ import { z } from 'zod';
 import { PanelotDB } from '../../src/db/schema';
 import { ThreadTree } from '../../src/db/tree';
 import { RealEngineCore, type ProviderResolver } from '../../src/engine/core';
+import { RunRepository } from '../../src/engine/runRepository';
+import { ApprovalRepository } from '../../src/engine/approvalRepository';
 import { EngineHost } from '../../src/engine/host';
 import { createDirectPair } from '../../src/messaging/transport';
-import { ToolRegistry, type AgentTool } from '../../src/agent/tool';
+import { ToolRegistry } from '../../src/agent/tool';
 import type { GatekeeperCheck } from '../../src/agent/loop';
-import type { AgentEvent, Op, ThreadSnapshot } from '../../src/messaging/protocol';
-import type { FinalResult, ProviderAdapter, ProviderStream, StreamEvent, StreamRequest } from '../../src/providers/types';
+import { ENGINE_PROTOCOL, ENGINE_SCHEMA_HASH } from '../../src/messaging/protocol';
+import type { AgentEvent, Op, ThreadSnapshot, TurnOverrides } from '../../src/messaging/protocol';
+import type {
+  FinalResult,
+  ProviderAdapter,
+  ProviderStream,
+  StreamEvent,
+  StreamRequest,
+} from '../../src/providers/types';
 
 // ---------------------------------------------------------------------------
 
@@ -47,7 +56,9 @@ class MockProvider implements ProviderAdapter {
       [Symbol.asyncIterator]: () => it,
       final: async () => {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        for await (const _ of it) { /* drain */ }
+        for await (const _ of it) {
+          /* drain */
+        }
         return final;
       },
     };
@@ -59,7 +70,8 @@ class MockProvider implements ProviderAdapter {
 
 class TestClient {
   events: AgentEvent[] = [];
-  private waiters: { predicate: (ev: AgentEvent) => boolean; resolve: (ev: AgentEvent) => void }[] = [];
+  private waiters: { predicate: (ev: AgentEvent) => boolean; resolve: (ev: AgentEvent) => void }[] =
+    [];
   constructor(private send: (op: Op) => void) {}
 
   receive(ev: AgentEvent): void {
@@ -75,15 +87,36 @@ class TestClient {
 
   post(op: DistributiveOmit<Op, 'submissionId'> & { submissionId?: string }): string {
     const submissionId = op.submissionId ?? crypto.randomUUID();
-    this.send({ ...op, submissionId } as Op);
+    this.send({
+      ...op,
+      submissionId,
+      ...(op.type === 'initialize'
+        ? {
+            protocol: ENGINE_PROTOCOL,
+            schemaHash: ENGINE_SCHEMA_HASH,
+            clientId: 'integration-client',
+          }
+        : {}),
+    } as Op);
     return submissionId;
   }
 
-  waitFor<T extends AgentEvent['type']>(type: T, timeoutMs = 3000): Promise<Extract<AgentEvent, { type: T }>> {
+  waitFor<T extends AgentEvent['type']>(
+    type: T,
+    timeoutMs = 3000,
+  ): Promise<Extract<AgentEvent, { type: T }>> {
     const existing = this.events.find((e) => e.type === type);
     if (existing) return Promise.resolve(existing as Extract<AgentEvent, { type: T }>);
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`timeout waiting for ${type}; got: ${this.events.map((e) => e.type).join(',')}`)), timeoutMs);
+      const timer = setTimeout(
+        () =>
+          reject(
+            new Error(
+              `timeout waiting for ${type}; got: ${this.events.map((e) => e.type).join(',')}`,
+            ),
+          ),
+        timeoutMs,
+      );
       this.waiters.push({
         predicate: (ev) => ev.type === type,
         resolve: (ev) => {
@@ -104,14 +137,23 @@ let n = 0;
 
 const allowAll: GatekeeperCheck = { check: async () => ({ verdict: 'allow' }) };
 
-function buildEngine(dbInstance?: PanelotDB) {
+function buildEngine(
+  dbInstance?: PanelotDB,
+  resolverOverride?: ProviderResolver,
+  gatekeeperOverride?: GatekeeperCheck,
+) {
   db = dbInstance ?? new PanelotDB(`int-test-${Date.now()}-${n++}`);
   provider = provider ?? new MockProvider();
   tools = new ToolRegistry();
   const resolver: ProviderResolver = {
     resolve: async () => ({ provider, model: 'mock', params: {} }),
   };
-  const core = new RealEngineCore(db, tools, allowAll, resolver);
+  const core = new RealEngineCore(
+    db,
+    tools,
+    gatekeeperOverride ?? allowAll,
+    resolverOverride ?? resolver,
+  );
   const host = new EngineHost(core);
   core.onBroadcast = (ev) => host.broadcast(ev);
   return { core, host };
@@ -129,6 +171,14 @@ beforeEach(() => {
   provider = new MockProvider();
 });
 
+async function waitForEvent(events: AgentEvent[], type: AgentEvent['type']): Promise<void> {
+  const started = Date.now();
+  while (!events.some((event) => event.type === type)) {
+    if (Date.now() - started > 3_000) throw new Error(`timeout waiting for ${type}`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
 async function initThread(client: TestClient): Promise<string> {
   client.post({ type: 'initialize', protocolVersion: 1 });
   await client.waitFor('initialized');
@@ -141,7 +191,9 @@ async function initThread(client: TestClient): Promise<string> {
   client.post({ type: 'thread.subscribe', threadId: created.threadId });
   await new Promise<void>((resolve) => {
     const check = () =>
-      client.events.filter((e) => e.type === 'initialized').length >= 2 ? resolve() : setTimeout(check, 5);
+      client.events.filter((e) => e.type === 'initialized').length >= 2
+        ? resolve()
+        : setTimeout(check, 5);
     check();
   });
   return created.threadId;
@@ -162,7 +214,10 @@ describe('engine integration (Op → events → DB)', () => {
     // Deltas were coalesced (16ms window) but content is intact. The user
     // message renders via the client-side optimistic echo — the engine emits
     // no user item (that echoed the message twice).
-    const starts = client.events.filter((e) => e.type === 'item.start') as { itemId: string; kind: string }[];
+    const starts = client.events.filter((e) => e.type === 'item.start') as {
+      itemId: string;
+      kind: string;
+    }[];
     expect(starts.map((s) => s.kind)).toEqual(['assistant_message']);
     const deltas = client.events.filter((e) => e.type === 'item.delta');
     const text = deltas.map((d) => (d as { delta: { text?: string } }).delta.text ?? '').join('');
@@ -171,6 +226,99 @@ describe('engine integration (Op → events → DB)', () => {
     const snapshot = await core.getSnapshot(threadId);
     expect(snapshot!.items.map((i) => i.kind)).toEqual(['user_message', 'assistant_message']);
     expect(snapshot!.activeTurn).toBeNull();
+  });
+
+  it('persists the resolved run environment and terminal state', async () => {
+    const resolver: ProviderResolver = {
+      resolve: async () => ({
+        provider,
+        model: 'model-c',
+        params: { temperature: 0.2 },
+        connectionId: 'connection-b',
+        presetId: 'preset-a',
+        presetPrompt: 'Be precise.',
+        enabledToolLevels: ['L0'],
+        approvalPolicy: 'always',
+        capabilityScope: 'read-only',
+        activeSkills: ['skill-a'],
+        promptVersion: 'kernel-a',
+      }),
+    };
+    const { core, host } = buildEngine(undefined, resolver);
+    const permissionConfigs: unknown[] = [];
+    core.onPermissionOverride = (_threadId, config) => permissionConfigs.push(config);
+    const client = connect(host);
+    const threadId = await initThread(client);
+    const now = Date.now();
+    await db.skills.add({
+      id: 'skill-a',
+      name: 'skill-a',
+      raw: '---\nname: skill-a\ndescription: Test skill.\n---\nBe precise.',
+      frontmatter: { name: 'skill-a', description: 'Test skill.' },
+      body: 'Be precise.',
+      enabled: true,
+      source: 'user',
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    provider.queue({ streamText: ['done'] });
+    client.post({ type: 'turn.submit', threadId, input: { text: 'persist me' } });
+    await client.waitFor('turn.complete');
+
+    const run = await db.runs.where('threadId').equals(threadId).first();
+    expect(run).toMatchObject({
+      state: 'completed',
+      input: { text: 'persist me' },
+      environment: {
+        connectionId: 'connection-b',
+        modelId: 'model-c',
+        modelParameters: { temperature: 0.2 },
+        presetId: 'preset-a',
+        presetPrompt: 'Be precise.',
+        enabledToolLevels: ['L0'],
+        approvalPolicy: 'always',
+        capabilityScope: 'read-only',
+        activeSkills: ['skill-a'],
+        promptVersion: 'kernel-a',
+      },
+    });
+    expect(run?.revision).toBeGreaterThan(0);
+    expect(permissionConfigs).toContainEqual({
+      approvalPolicy: 'always',
+      capabilityScope: 'read-only',
+    });
+  });
+
+  it('deduplicates repeated submissions from the same client', async () => {
+    const { host } = buildEngine();
+    const client = connect(host);
+    const threadId = await initThread(client);
+    provider.queue({ streamText: ['once'] }, { streamText: ['must not run'] });
+
+    const submissionId = 'same-submission';
+    client.post({
+      type: 'turn.submit',
+      submissionId,
+      threadId,
+      input: { text: 'execute once' },
+    });
+    client.post({
+      type: 'turn.submit',
+      submissionId,
+      threadId,
+      input: { text: 'execute once' },
+    });
+    await client.waitFor('turn.complete');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(provider.requests).toHaveLength(1);
+    expect(await db.runs.where('submissionId').equals(submissionId).count()).toBe(1);
+    expect(
+      client.events.filter(
+        (event) => event.type === 'command.ack' && event.submissionId === submissionId,
+      ),
+    ).toHaveLength(2);
   });
 
   it('approval RPC round-trip: approval.request → response → tool runs', async () => {
@@ -199,7 +347,61 @@ describe('engine integration (Op → events → DB)', () => {
     // tool ran straight through.
     await client.waitFor('turn.complete');
     const resultMsg = provider.requests[1]!.messages.find((m) => m.role === 'tool_result')!;
-    expect((resultMsg.content[0] as { text: string }).text).toBe('poked');
+    const fencedResult = (resultMsg.content[0] as { text: string }).text;
+    expect(fencedResult).toMatch(/^<<<web_content_[a-f0-9]+ /);
+    expect(fencedResult).toContain('\npoked\n');
+    expect(fencedResult).toMatch(/<<<end_web_content_[a-f0-9]+>>>$/);
+  });
+
+  it('persists pending approvals and their decisions', async () => {
+    const ask: GatekeeperCheck = {
+      check: async () => ({
+        verdict: 'ask',
+        request: {
+          tool: 'poke',
+          label: 'Poke',
+          params: {},
+          targetOrigin: 'https://example.test',
+          flags: [],
+        },
+      }),
+    };
+    const { host } = buildEngine(undefined, undefined, ask);
+    tools.register({
+      name: 'poke',
+      label: 'Poke',
+      description: 'poke',
+      parameters: z.object({}),
+      level: 'L1',
+      effects: 'write',
+      recovery: 'never-retry',
+      execute: async () => ({ content: [{ type: 'text', text: 'poked' }] }),
+    });
+    const client = connect(host);
+    const threadId = await initThread(client);
+    provider.queue(
+      { toolCalls: [{ id: 'c1', name: 'poke', params: {} }] },
+      { streamText: ['done'] },
+    );
+
+    client.post({ type: 'turn.submit', threadId, input: { text: 'poke it' } });
+    const request = await client.waitFor('approval.request');
+    expect(await db.approvals.get(request.approvalId)).toMatchObject({
+      threadId,
+      status: 'pending',
+      request: { tool: 'poke', targetOrigin: 'https://example.test' },
+    });
+
+    client.post({
+      type: 'approval.response',
+      approvalId: request.approvalId,
+      decision: { kind: 'accept' },
+    });
+    await client.waitFor('turn.complete');
+    expect(await db.approvals.get(request.approvalId)).toMatchObject({
+      status: 'decided',
+      decision: { kind: 'accept' },
+    });
   });
 
   it('turn.steer with wrong expectedTurnId errors; correct id injects', async () => {
@@ -235,12 +437,18 @@ describe('engine integration (Op → events → DB)', () => {
     expect(err.code).toBe('turn_mismatch');
 
     // Correct id → injected after current call.
-    client.post({ type: 'turn.steer', threadId, expectedTurnId: turnStart.turnId, input: { text: 'also do B' } });
+    client.post({
+      type: 'turn.steer',
+      threadId,
+      expectedTurnId: turnStart.turnId,
+      input: { text: 'also do B' },
+    });
     releaseTool!();
     await client.waitFor('turn.complete');
 
     const lastReq = provider.requests[1]!;
-    const userTexts = lastReq.messages.filter((m) => m.role === 'user')
+    const userTexts = lastReq.messages
+      .filter((m) => m.role === 'user')
       .flatMap((m) => m.content.map((c) => (c.type === 'text' ? c.text : '')));
     expect(userTexts).toContain('also do B');
   });
@@ -255,7 +463,9 @@ describe('engine integration (Op → events → DB)', () => {
       level: 'builtin',
       effects: 'read',
       execute: (_id, _p, signal) =>
-        new Promise((_, reject) => signal.addEventListener('abort', () => reject(new DOMException('x', 'AbortError')))),
+        new Promise((_, reject) =>
+          signal.addEventListener('abort', () => reject(new DOMException('x', 'AbortError'))),
+        ),
     });
 
     const client = connect(host);
@@ -292,6 +502,33 @@ describe('engine integration (Op → events → DB)', () => {
     expect(client.events.some((e) => e.type === 'queue.updated')).toBe(true);
   });
 
+  it('persists and applies queued turn overrides', async () => {
+    const seen: ({ connectionId: string; modelId: string } | undefined)[] = [];
+    const resolver: ProviderResolver = {
+      resolve: async (_threadId, override) => {
+        seen.push(override);
+        return { provider, model: override?.modelId ?? 'mock', params: {} };
+      },
+    };
+    const { host } = buildEngine(undefined, resolver);
+    const client = connect(host);
+    const threadId = await initThread(client);
+
+    provider.queue({ streamText: ['queued answer'] });
+    client.post({
+      type: 'turn.enqueue',
+      threadId,
+      input: { text: 'queued' },
+      overrides: { model: { connectionId: 'connection-b', modelId: 'model-c' } },
+    } as DistributiveOmit<
+      Extract<Op, { type: 'turn.enqueue' }> & { overrides: TurnOverrides },
+      'submissionId'
+    >);
+    await client.waitFor('turn.complete');
+
+    expect(seen.at(-1)).toEqual({ connectionId: 'connection-b', modelId: 'model-c' });
+  });
+
   it('SW-kill recovery: new engine over the same DB rebuilds the snapshot and continues', async () => {
     // Engine instance 1: run a full turn with a tool call.
     const dbName = `int-recovery-${Date.now()}`;
@@ -304,7 +541,9 @@ describe('engine integration (Op → events → DB)', () => {
       parameters: z.object({ text: z.string() }),
       level: 'builtin',
       effects: 'read',
-      execute: async (_id, p: { text: string }) => ({ content: [{ type: 'text', text: `echo:${p.text}` }] }),
+      execute: async (_id, p: { text: string }) => ({
+        content: [{ type: 'text', text: `echo:${p.text}` }],
+      }),
     });
     const client1 = connect(host1);
     const threadId = await initThread(client1);
@@ -326,7 +565,11 @@ describe('engine integration (Op → events → DB)', () => {
 
     // Replay reconstructed the full history from checkpoints.
     expect(snapshot.items.map((i) => i.kind)).toEqual([
-      'user_message', 'assistant_message', 'tool_call', 'tool_result', 'assistant_message',
+      'user_message',
+      'assistant_message',
+      'tool_call',
+      'tool_result',
+      'assistant_message',
     ]);
     expect(snapshot.activeTurn).toBeNull();
 
@@ -338,6 +581,297 @@ describe('engine integration (Op → events → DB)', () => {
     const req = provider2.requests[0]!;
     const resultMsg = req.messages.find((m) => m.role === 'tool_result')!;
     expect((resultMsg.content[0] as { text: string }).text).toBe('echo:checkpoint');
+  });
+
+  it('restarts durable queued runs when a new service worker boots', async () => {
+    const sharedDb = new PanelotDB(`queued-recovery-${Date.now()}`);
+    const tree = new ThreadTree(sharedDb);
+    const thread = await tree.createThread({ title: 'queued-recovery' });
+    await new RunRepository(sharedDb).enqueue({
+      threadId: thread.id,
+      clientId: 'recovery-client',
+      submissionId: 'queued-before-kill',
+      input: { text: 'resume after restart' },
+      overrides: { model: { connectionId: 'connection-b', modelId: 'model-c' } },
+    });
+
+    const recoveryResolver: ProviderResolver = {
+      resolve: async (_threadId, override) => ({
+        provider,
+        model: override?.modelId ?? 'mock',
+        params: {},
+        connectionId: override?.connectionId,
+      }),
+    };
+    const { core } = buildEngine(sharedDb, recoveryResolver);
+    const events: AgentEvent[] = [];
+    core.onBroadcast = (event) => events.push(event);
+    provider.queue({ streamText: ['recovered'] });
+
+    await core.recover();
+    await waitForEvent(events, 'turn.complete');
+
+    expect(provider.requests).toHaveLength(1);
+    expect(provider.requests[0]?.model).toBe('model-c');
+    expect(
+      (await sharedDb.runs.where('submissionId').equals('queued-before-kill').first())?.state,
+    ).toBe('completed');
+  });
+
+  it('continues an accepted approval that was committed before a service worker restart', async () => {
+    const sharedDb = new PanelotDB(`approval-recovery-${Date.now()}`);
+    const tree = new ThreadTree(sharedDb);
+    const thread = await tree.createThread({ title: 'approval recovery' });
+    await tree.appendNode(thread.id, {
+      type: 'turn_context',
+      payload: {
+        turnId: 'turn-approved',
+        model: { connectionId: 'connection', modelId: 'mock' },
+        approvalPolicy: 'untrusted',
+        capabilityScope: 'full',
+        activeSkills: [],
+      },
+    });
+    await tree.appendNode(thread.id, {
+      type: 'user_message',
+      payload: { content: [{ type: 'text', text: 'approve once' }] },
+    });
+    await tree.appendNode(thread.id, {
+      type: 'tool_call',
+      payload: { itemId: 'approved-call', toolName: 'approved_write', params: {}, level: 'L1' },
+    });
+    const runs = new RunRepository(sharedDb);
+    const run = await runs.enqueue({
+      threadId: thread.id,
+      clientId: 'recovery-client',
+      submissionId: 'approval-before-kill',
+      input: { text: 'approve once' },
+    });
+    await runs.prepare(run.id, {
+      connectionId: 'connection',
+      modelId: 'mock',
+      modelParameters: {},
+      enabledToolLevels: ['L0', 'L1', 'L2', 'mcp'],
+      approvalPolicy: 'untrusted',
+      capabilityScope: 'full',
+      activeSkills: [],
+      promptVersion: 'kernel',
+    });
+    await runs.transition(run.id, 'waiting_approval', {
+      pendingTool: {
+        itemId: 'approved-call',
+        toolName: 'approved_write',
+        params: {},
+        effect: 'write',
+        recovery: 'never-retry',
+      },
+    });
+    const approvals = new ApprovalRepository(sharedDb);
+    await approvals.create({
+      id: 'approved-decision',
+      threadId: thread.id,
+      runId: run.id,
+      turnId: run.turnId,
+      request: {
+        tool: 'approved_write',
+        label: 'Approved write',
+        params: {},
+        targetOrigin: 'https://example.test',
+        flags: [],
+      },
+    });
+    await approvals.decide('approved-decision', { kind: 'accept' });
+
+    const { core } = buildEngine(sharedDb);
+    let executionCount = 0;
+    tools.register({
+      name: 'approved_write',
+      label: 'Approved write',
+      description: 'Write after approval.',
+      parameters: z.object({}),
+      level: 'L1',
+      effects: 'write',
+      recovery: 'never-retry',
+      execute: async () => {
+        executionCount++;
+        return { content: [{ type: 'text', text: 'approved result' }] };
+      },
+    });
+    const events: AgentEvent[] = [];
+    core.onBroadcast = (event) => events.push(event);
+    provider.queue({ streamText: ['continued'] });
+
+    await core.recover();
+    await waitForEvent(events, 'turn.complete');
+
+    expect(executionCount).toBe(1);
+    expect((await sharedDb.runs.get(run.id))?.state).toBe('completed');
+  });
+
+  it('replays a prepared read after restart without duplicating the user node', async () => {
+    const sharedDb = new PanelotDB(`safe-tool-recovery-${Date.now()}`);
+    const tree = new ThreadTree(sharedDb);
+    const thread = await tree.createThread({ title: 'safe recovery' });
+    await tree.appendNode(thread.id, {
+      type: 'turn_context',
+      payload: {
+        turnId: 'turn-safe',
+        model: { connectionId: 'connection', modelId: 'mock' },
+        approvalPolicy: 'untrusted',
+        capabilityScope: 'full',
+        activeSkills: [],
+      },
+    });
+    await tree.appendNode(thread.id, {
+      type: 'user_message',
+      payload: { content: [{ type: 'text', text: 'inspect once' }] },
+    });
+    await tree.appendNode(thread.id, {
+      type: 'tool_call',
+      payload: { itemId: 'safe-call', toolName: 'safe_read', params: {}, level: 'builtin' },
+    });
+    const runs = new RunRepository(sharedDb);
+    const run = await runs.enqueue({
+      threadId: thread.id,
+      clientId: 'recovery-client',
+      submissionId: 'safe-before-kill',
+      input: { text: 'inspect once' },
+    });
+    await runs.prepare(run.id, {
+      connectionId: 'connection',
+      modelId: 'mock',
+      modelParameters: {},
+      enabledToolLevels: ['L0', 'L1', 'L2', 'mcp'],
+      approvalPolicy: 'untrusted',
+      capabilityScope: 'full',
+      activeSkills: [],
+      promptVersion: 'kernel',
+    });
+    await runs.transition(run.id, 'executing_tool', {
+      pendingTool: {
+        itemId: 'safe-call',
+        toolName: 'safe_read',
+        params: {},
+        effect: 'read',
+        recovery: 'inspect-first',
+      },
+    });
+
+    const { core } = buildEngine(sharedDb);
+    let executionCount = 0;
+    tools.register({
+      name: 'safe_read',
+      label: 'Safe read',
+      description: 'Read safely.',
+      parameters: z.object({}),
+      level: 'builtin',
+      effects: 'read',
+      recovery: 'inspect-first',
+      execute: async () => {
+        executionCount++;
+        return { content: [{ type: 'text', text: 'safe result' }] };
+      },
+    });
+    const events: AgentEvent[] = [];
+    core.onBroadcast = (event) => events.push(event);
+    provider.queue({ streamText: ['continued'] });
+
+    await core.recover();
+    await waitForEvent(events, 'turn.complete');
+
+    expect(executionCount).toBe(1);
+    const nodes = await sharedDb.nodes.where('threadId').equals(thread.id).toArray();
+    expect(nodes.filter((node) => node.type === 'user_message')).toHaveLength(1);
+    expect((await sharedDb.runs.get(run.id))?.state).toBe('completed');
+  });
+
+  it('pauses an uncertain write until the user explicitly chooses retry', async () => {
+    const sharedDb = new PanelotDB(`uncertain-tool-recovery-${Date.now()}`);
+    const tree = new ThreadTree(sharedDb);
+    const thread = await tree.createThread({ title: 'uncertain recovery' });
+    await tree.appendNode(thread.id, {
+      type: 'turn_context',
+      payload: {
+        turnId: 'turn-unsafe',
+        model: { connectionId: 'connection', modelId: 'mock' },
+        approvalPolicy: 'untrusted',
+        capabilityScope: 'full',
+        activeSkills: [],
+      },
+    });
+    await tree.appendNode(thread.id, {
+      type: 'user_message',
+      payload: { content: [{ type: 'text', text: 'submit once' }] },
+    });
+    await tree.appendNode(thread.id, {
+      type: 'tool_call',
+      payload: { itemId: 'unsafe-call', toolName: 'unsafe_write', params: {}, level: 'L1' },
+    });
+    const runs = new RunRepository(sharedDb);
+    const run = await runs.enqueue({
+      threadId: thread.id,
+      clientId: 'recovery-client',
+      submissionId: 'unsafe-before-kill',
+      input: { text: 'submit once' },
+    });
+    await runs.prepare(run.id, {
+      connectionId: 'connection',
+      modelId: 'mock',
+      modelParameters: {},
+      enabledToolLevels: ['L0', 'L1', 'L2', 'mcp'],
+      approvalPolicy: 'untrusted',
+      capabilityScope: 'full',
+      activeSkills: [],
+      promptVersion: 'kernel',
+    });
+    await runs.transition(run.id, 'executing_tool', {
+      pendingTool: {
+        itemId: 'unsafe-call',
+        toolName: 'unsafe_write',
+        params: {},
+        effect: 'write',
+        recovery: 'never-retry',
+      },
+    });
+
+    const { core } = buildEngine(sharedDb);
+    let executionCount = 0;
+    tools.register({
+      name: 'unsafe_write',
+      label: 'Unsafe write',
+      description: 'Write once.',
+      parameters: z.object({}),
+      level: 'L1',
+      effects: 'write',
+      recovery: 'never-retry',
+      execute: async () => {
+        executionCount++;
+        return { content: [{ type: 'text', text: 'written' }] };
+      },
+    });
+    const events: AgentEvent[] = [];
+    core.onBroadcast = (event) => events.push(event);
+
+    await core.recover();
+    expect(executionCount).toBe(0);
+    expect((await sharedDb.runs.get(run.id))?.state).toBe('paused_uncertain');
+    expect(events).toContainEqual(expect.objectContaining({ type: 'run.recovery_required' }));
+
+    provider.queue({ streamText: ['continued after confirmation'] });
+    await core.handleOp(
+      {
+        type: 'run.resolveUncertain',
+        submissionId: 'resolve-unsafe',
+        threadId: thread.id,
+        runId: run.id,
+        resolution: 'retry',
+      },
+      (event) => events.push(event),
+    );
+    await waitForEvent(events, 'turn.complete');
+
+    expect(executionCount).toBe(1);
+    expect((await sharedDb.runs.get(run.id))?.state).toBe('completed');
   });
 
   it('thread.selectBranch moves leafId to the sibling branch (docs/09 §2)', async () => {
@@ -416,7 +950,11 @@ describe('engine integration (Op → events → DB)', () => {
       { toolCalls: [{ id: 'c1', name: 'slow', params: {} }] },
       { streamText: ['answer'] },
     );
-    client.post({ type: 'turn.submit', threadId: created.threadId, input: { text: '帮我写一份周报' } });
+    client.post({
+      type: 'turn.submit',
+      threadId: created.threadId,
+      input: { text: '帮我写一份周报' },
+    });
 
     // Two-stage titling, both landing while the turn is still blocked on the
     // slow tool: instant truncated fallback, then the LLM title.
@@ -426,8 +964,12 @@ describe('engine integration (Op → events → DB)', () => {
         .map((e) => (e as { patch: { title?: string } }).patch.title)
         .filter((t): t is string => t !== undefined);
     await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`timeout; titles: ${titleUpdates().join(',')}`)), 3000);
-      const check = () => (titleUpdates().length >= 2 ? (clearTimeout(timer), resolve()) : setTimeout(check, 5));
+      const timer = setTimeout(
+        () => reject(new Error(`timeout; titles: ${titleUpdates().join(',')}`)),
+        3000,
+      );
+      const check = () =>
+        titleUpdates().length >= 2 ? (clearTimeout(timer), resolve()) : setTimeout(check, 5);
       check();
     });
     expect(titleUpdates()).toEqual(['帮我写一份周报', '帮我写周报']);
@@ -456,7 +998,12 @@ describe('engine integration (Op → events → DB)', () => {
 
     provider.queue({ streamText: ['ok1'] }, { streamText: ['ok2'] });
     // Pure-chat turn: no tool levels enabled → provider sees zero tools.
-    client.post({ type: 'turn.submit', threadId, input: { text: 'chat only' }, overrides: { enabledToolLevels: [] } });
+    client.post({
+      type: 'turn.submit',
+      threadId,
+      input: { text: 'chat only' },
+      overrides: { enabledToolLevels: [] },
+    });
     await client.waitFor('turn.complete');
     expect(provider.requests[0]!.tools).toHaveLength(0);
 
@@ -464,7 +1011,9 @@ describe('engine integration (Op → events → DB)', () => {
     client.post({ type: 'turn.submit', threadId, input: { text: 'full' } });
     await new Promise<void>((resolve) => {
       const check = () =>
-        client.events.filter((e) => e.type === 'turn.complete').length >= 2 ? resolve() : setTimeout(check, 5);
+        client.events.filter((e) => e.type === 'turn.complete').length >= 2
+          ? resolve()
+          : setTimeout(check, 5);
       check();
     });
     expect(provider.requests[1]!.tools.map((t) => t.name)).toContain('l2_probe');

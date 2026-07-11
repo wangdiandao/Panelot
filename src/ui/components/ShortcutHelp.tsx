@@ -5,12 +5,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from './ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import { shortcutsByScope } from '../shortcuts';
 import { t } from '../i18n';
 
@@ -22,7 +17,11 @@ export function ShortcutHelp() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== '?' || e.ctrlKey || e.metaKey || e.altKey) return;
       const target = e.target as HTMLElement | null;
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+      if (
+        target &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+      )
+        return;
       e.preventDefault();
       setOpen((v) => !v);
     };
@@ -34,7 +33,10 @@ export function ShortcutHelp() {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md" aria-describedby={undefined}>
+      <DialogContent
+        className="max-h-[85vh] overflow-y-auto sm:max-w-md"
+        aria-describedby={undefined}
+      >
         <DialogHeader>
           <DialogTitle>{t('keys.title')}</DialogTitle>
         </DialogHeader>
@@ -48,7 +50,9 @@ export function ShortcutHelp() {
                 {defs.map((s) => (
                   <tr key={s.id} className="border-b border-border/40 last:border-0">
                     <td className="w-40 py-1.5">
-                      <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">{s.keys}</kbd>
+                      <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">
+                        {s.keys}
+                      </kbd>
                     </td>
                     <td>{t(s.labelKey)}</td>
                   </tr>

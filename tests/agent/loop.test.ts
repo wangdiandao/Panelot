@@ -7,7 +7,13 @@ import { buildSessionContext } from '../../src/db/sessionContext';
 import { runTurn, type GatekeeperCheck, type TurnEnv } from '../../src/agent/loop';
 import { ToolRegistry, type AgentTool } from '../../src/agent/tool';
 import type { AgentEvent, ApprovalDecision } from '../../src/messaging/protocol';
-import type { FinalResult, ProviderAdapter, ProviderStream, StreamEvent, StreamRequest } from '../../src/providers/types';
+import type {
+  FinalResult,
+  ProviderAdapter,
+  ProviderStream,
+  StreamEvent,
+  StreamRequest,
+} from '../../src/providers/types';
 
 // ---------------------------------------------------------------------------
 // Mock provider: scripted responses, records every request it receives.
@@ -27,12 +33,16 @@ class MockProvider implements ProviderAdapter {
   stream(req: StreamRequest): ProviderStream {
     this.requests.push(req);
     const scripted = this.script[this.callIndex++] ?? {};
-    const events: StreamEvent[] = (scripted.streamText ?? []).map((t) => ({ type: 'text', delta: t }));
+    const events: StreamEvent[] = (scripted.streamText ?? []).map((t) => ({
+      type: 'text',
+      delta: t,
+    }));
     const final: FinalResult = {
       message: scripted.message ?? [{ type: 'text', text: (scripted.streamText ?? []).join('') }],
       toolCalls: scripted.toolCalls ?? [],
       usage: scripted.usage ?? { input: 100, output: 20 },
-      stopReason: scripted.stopReason ?? ((scripted.toolCalls?.length ?? 0) > 0 ? 'tool_use' : 'end'),
+      stopReason:
+        scripted.stopReason ?? ((scripted.toolCalls?.length ?? 0) > 0 ? 'tool_use' : 'end'),
       reasoning: scripted.reasoning,
     };
     async function* gen(): AsyncGenerator<StreamEvent> {
@@ -48,7 +58,9 @@ class MockProvider implements ProviderAdapter {
         if (req.signal.aborted) throw new DOMException('aborted', 'AbortError');
         // drain
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        for await (const _ of iterator) { /* drain */ }
+        for await (const _ of iterator) {
+          /* drain */
+        }
         return final;
       },
     };
@@ -65,7 +77,9 @@ class MockProvider implements ProviderAdapter {
 
 const allowAll: GatekeeperCheck = { check: async () => ({ verdict: 'allow' }) };
 
-function makeEchoTool(overrides?: Partial<AgentTool<{ text: string }, unknown>>): AgentTool<{ text: string }, unknown> {
+function makeEchoTool(
+  overrides?: Partial<AgentTool<{ text: string }, unknown>>,
+): AgentTool<{ text: string }, unknown> {
   return {
     name: 'echo',
     label: 'Echo',
@@ -124,7 +138,13 @@ describe('agent loop (docs/04 §2)', () => {
     // No engine-side user echo: the optimistic client echo is the single
     // visible rendering of the user message (double-display regression).
     expect(eventTypes()).toEqual([
-      'turn.start', 'item.start', 'item.delta', 'item.delta', 'item.complete', 'token.usage', 'turn.complete',
+      'turn.start',
+      'item.start',
+      'item.delta',
+      'item.delta',
+      'item.complete',
+      'token.usage',
+      'turn.complete',
     ]);
     const firstItem = events.find((e) => e.type === 'item.start') as { kind: string };
     expect(firstItem.kind).toBe('assistant_message');
@@ -155,11 +175,13 @@ describe('agent loop (docs/04 §2)', () => {
   });
 
   it('feeds tool errors back to the model for self-correction instead of crashing', async () => {
-    tools.register(makeEchoTool({
-      execute: async () => {
-        throw new Error('element not found');
-      },
-    }));
+    tools.register(
+      makeEchoTool({
+        execute: async () => {
+          throw new Error('element not found');
+        },
+      }),
+    );
     const thread = await tree.createThread({});
     provider.queue(
       { toolCalls: [{ id: 'c1', name: 'echo', params: { text: 'x' } }] },
@@ -175,11 +197,13 @@ describe('agent loop (docs/04 §2)', () => {
   });
 
   it('circuit breaker: 3 consecutive failures inject a reminder, 5 stop the turn', async () => {
-    tools.register(makeEchoTool({
-      execute: async () => {
-        throw new Error('element not found');
-      },
-    }));
+    tools.register(
+      makeEchoTool({
+        execute: async () => {
+          throw new Error('element not found');
+        },
+      }),
+    );
     const thread = await tree.createThread({});
     // Each LLM round returns one failing tool call; round 4 should carry the
     // failure reminder; after 5 failures the turn stops as 'error'.
@@ -192,7 +216,14 @@ describe('agent loop (docs/04 §2)', () => {
 
     // The reminder appears exactly once, in the request AFTER the 3rd failure.
     const reminderRounds = provider.requests
-      .map((req, i) => ({ i, hit: req.messages.some((m) => m.role === 'user' && m.content.some((c) => c.type === 'text' && c.text.includes('ALL failed'))) }))
+      .map((req, i) => ({
+        i,
+        hit: req.messages.some(
+          (m) =>
+            m.role === 'user' &&
+            m.content.some((c) => c.type === 'text' && c.text.includes('ALL failed')),
+        ),
+      }))
       .filter((r) => r.hit);
     expect(reminderRounds).toHaveLength(1);
     expect(reminderRounds[0]!.i).toBe(3);
@@ -211,7 +242,10 @@ describe('agent loop (docs/04 §2)', () => {
     // A write tool that always ASKs; the user declines every time.
     tools.register(makeEchoTool({ effects: 'write' }));
     const askGate: GatekeeperCheck = {
-      check: async () => ({ verdict: 'ask', request: { tool: 'echo', label: 'echo', params: {}, targetOrigin: '', flags: [] } }),
+      check: async () => ({
+        verdict: 'ask',
+        request: { tool: 'echo', label: 'echo', params: {}, targetOrigin: '', flags: [] },
+      }),
     };
     const thread = await tree.createThread({});
     // 6 declined rounds + a final text round: if declines counted, the turn
@@ -230,18 +264,24 @@ describe('agent loop (docs/04 §2)', () => {
     // No auto-stop notice was written.
     const meta = await tree.getThread(thread.id);
     const ctx = await buildSessionContext(tree, thread.id, meta!.leafId!);
-    expect(ctx.path.some((n) => n.type === 'system_notice' && /连续 5 次/.test((n.payload as { text: string }).text))).toBe(false);
+    expect(
+      ctx.path.some(
+        (n) => n.type === 'system_notice' && /连续 5 次/.test((n.payload as { text: string }).text),
+      ),
+    ).toBe(false);
   });
 
   it('a success between failures resets the circuit breaker', async () => {
     let calls = 0;
-    tools.register(makeEchoTool({
-      execute: async (_id, p: { text: string }) => {
-        calls++;
-        if (calls === 3) return { content: [{ type: 'text', text: `echo: ${p.text}` }] };
-        throw new Error('flaky');
-      },
-    }));
+    tools.register(
+      makeEchoTool({
+        execute: async (_id, p: { text: string }) => {
+          calls++;
+          if (calls === 3) return { content: [{ type: 'text', text: `echo: ${p.text}` }] };
+          throw new Error('flaky');
+        },
+      }),
+    );
     const thread = await tree.createThread({});
     for (let i = 0; i < 4; i++) {
       provider.queue({ toolCalls: [{ id: `c${i}`, name: 'echo', params: { text: 'x' } }] });
@@ -269,10 +309,17 @@ describe('agent loop (docs/04 §2)', () => {
   it('handles unknown tools and JSON parse errors gracefully', async () => {
     const thread = await tree.createThread({});
     provider.queue(
-      { toolCalls: [
-        { id: 'c1', name: 'nonexistent', params: {} },
-        { id: 'c2', name: 'echo', params: '{broken', parseError: 'tool call arguments were not valid JSON' },
-      ] },
+      {
+        toolCalls: [
+          { id: 'c1', name: 'nonexistent', params: {} },
+          {
+            id: 'c2',
+            name: 'echo',
+            params: '{broken',
+            parseError: 'tool call arguments were not valid JSON',
+          },
+        ],
+      },
       { streamText: ['ok'] },
     );
 
@@ -300,22 +347,32 @@ describe('gatekeeper integration', () => {
     const stop = await runTurn(makeEnv({ gatekeeper }), thread.id, { text: 'go' }).done;
     expect(stop).toBe('done');
     const resultMsg = provider.requests[1]!.messages.find((m) => m.role === 'tool_result')!;
-    expect((resultMsg.content[0] as { text: string }).text).toMatch(/denied by policy: blocked origin/);
+    expect((resultMsg.content[0] as { text: string }).text).toMatch(
+      /denied by policy: blocked origin/,
+    );
   });
 
   it('ask → approval accepted → tool executes; decision persisted', async () => {
     const executed = vi.fn();
-    tools.register(makeEchoTool({
-      effects: 'write',
-      execute: async (_id, params) => {
-        executed(params);
-        return { content: [{ type: 'text', text: 'done' }] };
-      },
-    }));
+    tools.register(
+      makeEchoTool({
+        effects: 'write',
+        execute: async (_id, params) => {
+          executed(params);
+          return { content: [{ type: 'text', text: 'done' }] };
+        },
+      }),
+    );
     const gatekeeper: GatekeeperCheck = {
       check: async () => ({
         verdict: 'ask',
-        request: { tool: 'echo', label: 'Echo', params: { text: 'x' }, targetOrigin: 'https://x.com', flags: [] },
+        request: {
+          tool: 'echo',
+          label: 'Echo',
+          params: { text: 'x' },
+          targetOrigin: 'https://x.com',
+          flags: [],
+        },
       }),
     };
     const thread = await tree.createThread({});
@@ -335,17 +392,25 @@ describe('gatekeeper integration', () => {
 
   it('ask → declined with note → note reaches the model, tool NOT executed', async () => {
     const executed = vi.fn();
-    tools.register(makeEchoTool({
-      effects: 'write',
-      execute: async () => {
-        executed();
-        return { content: [] };
-      },
-    }));
+    tools.register(
+      makeEchoTool({
+        effects: 'write',
+        execute: async () => {
+          executed();
+          return { content: [] };
+        },
+      }),
+    );
     const gatekeeper: GatekeeperCheck = {
       check: async () => ({
         verdict: 'ask',
-        request: { tool: 'echo', label: 'Echo', params: {}, targetOrigin: 'https://x.com', flags: [] },
+        request: {
+          tool: 'echo',
+          label: 'Echo',
+          params: {},
+          targetOrigin: 'https://x.com',
+          flags: [],
+        },
       }),
     };
     const decline: ApprovalDecision = { kind: 'decline', note: '换个方式' };
@@ -355,7 +420,9 @@ describe('gatekeeper integration', () => {
       { streamText: ['ok I will adapt'] },
     );
 
-    await runTurn(makeEnv({ gatekeeper, requestApproval: async () => decline }), thread.id, { text: 'go' }).done;
+    await runTurn(makeEnv({ gatekeeper, requestApproval: async () => decline }), thread.id, {
+      text: 'go',
+    }).done;
     expect(executed).not.toHaveBeenCalled();
     const resultMsg = provider.requests[1]!.messages.find((m) => m.role === 'tool_result')!;
     expect((resultMsg.content[0] as { text: string }).text).toMatch(/declined.*换个方式/s);
@@ -366,7 +433,13 @@ describe('gatekeeper integration', () => {
     const gatekeeper: GatekeeperCheck = {
       check: async () => ({
         verdict: 'ask',
-        request: { tool: 'echo', label: 'Echo', params: {}, targetOrigin: 'https://x.com', flags: [] },
+        request: {
+          tool: 'echo',
+          label: 'Echo',
+          params: {},
+          targetOrigin: 'https://x.com',
+          flags: [],
+        },
       }),
     };
     const thread = await tree.createThread({});
@@ -402,12 +475,16 @@ describe('steering & interrupt (docs/04 §3)', () => {
   });
 
   it('interrupt aborts promptly with stopReason interrupted', async () => {
-    tools.register(makeEchoTool({
-      execute: (_id, _params, signal) =>
-        new Promise((_, reject) => {
-          signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
-        }),
-    }));
+    tools.register(
+      makeEchoTool({
+        execute: (_id, _params, signal) =>
+          new Promise((_, reject) => {
+            signal.addEventListener('abort', () =>
+              reject(new DOMException('aborted', 'AbortError')),
+            );
+          }),
+      }),
+    );
     const thread = await tree.createThread({});
     provider.queue({ toolCalls: [{ id: 'c1', name: 'echo', params: { text: 'x' } }] });
 
@@ -437,7 +514,13 @@ describe('soft step limit & token budget (docs/04 §1)', () => {
     const thread = await tree.createThread({});
     // 25 calls in one response → reminder pending → next request carries it.
     provider.queue(
-      { toolCalls: Array.from({ length: 25 }, (_, i) => ({ id: `c${i}`, name: 'echo', params: { text: `${i}` } })) },
+      {
+        toolCalls: Array.from({ length: 25 }, (_, i) => ({
+          id: `c${i}`,
+          name: 'echo',
+          params: { text: `${i}` },
+        })),
+      },
       { streamText: ['continuing'] },
     );
 
@@ -452,7 +535,10 @@ describe('soft step limit & token budget (docs/04 §1)', () => {
     tools.register(makeEchoTool());
     const thread = await tree.createThread({});
     provider.queue(
-      { toolCalls: [{ id: 'c1', name: 'echo', params: { text: 'x' } }], usage: { input: 900, output: 200 } },
+      {
+        toolCalls: [{ id: 'c1', name: 'echo', params: { text: 'x' } }],
+        usage: { input: 900, output: 200 },
+      },
       { streamText: ['never reached'] },
     );
 
@@ -463,6 +549,22 @@ describe('soft step limit & token budget (docs/04 §1)', () => {
 });
 
 describe('recovery invariants (docs/04 §5.3)', () => {
+  it('resumes from the persisted leaf without appending the user input twice', async () => {
+    const thread = await tree.createThread({});
+    provider.queue({ streamText: ['partial'] }, { streamText: ['continued'] });
+
+    await runTurn(makeEnv(), thread.id, { text: 'run once' }).done;
+    await runTurn(makeEnv({ turnId: 'persisted-turn' }), thread.id, { text: 'run once' }, 'user', {
+      resumeExisting: true,
+      initialStepCursor: 1,
+    }).done;
+
+    const nodes = await db.nodes.where('threadId').equals(thread.id).toArray();
+    expect(nodes.filter((node) => node.type === 'turn_context')).toHaveLength(1);
+    expect(nodes.filter((node) => node.type === 'user_message')).toHaveLength(1);
+    expect(nodes.filter((node) => node.type === 'assistant_message')).toHaveLength(2);
+  });
+
   it('every completed item is persisted before turn.complete (checkpoint replay)', async () => {
     tools.register(makeEchoTool());
     const thread = await tree.createThread({});
@@ -476,7 +578,12 @@ describe('recovery invariants (docs/04 §5.3)', () => {
     // Replay from DB: full history is reconstructible.
     const meta = await tree.getThread(thread.id);
     const ctx = await buildSessionContext(tree, thread.id, meta!.leafId!);
-    expect(ctx.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'tool_result', 'assistant']);
+    expect(ctx.messages.map((m) => m.role)).toEqual([
+      'user',
+      'assistant',
+      'tool_result',
+      'assistant',
+    ]);
     expect(ctx.turnContext).not.toBeNull();
   });
 });

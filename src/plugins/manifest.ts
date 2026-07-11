@@ -45,7 +45,10 @@ export interface InstallPlan {
  * pure — it computes what WILL be written so the UI can display it; nothing is
  * persisted here.
  */
-export function buildInstallPlan(contents: PluginContents, parseSkillName: (raw: string) => string): InstallPlan {
+export function buildInstallPlan(
+  contents: PluginContents,
+  parseSkillName: (raw: string) => string,
+): InstallPlan {
   return {
     manifest: contents.manifest,
     skillNames: contents.skills.map(parseSkillName),

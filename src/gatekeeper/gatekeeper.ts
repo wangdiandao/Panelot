@@ -147,7 +147,10 @@ export function checkGate(call: GatekeeperCall, ctx: GatekeeperContext): Gatekee
   if (origin) {
     const sensitive = detectSensitivePayload(call.params);
     const thirdParty = !ctx.scopeOrigins.includes(origin);
-    if (sensitive.length > 0 && (thirdParty || sensitive.includes('card_number') || sensitive.includes('credential_field'))) {
+    if (
+      sensitive.length > 0 &&
+      (thirdParty || sensitive.includes('card_number') || sensitive.includes('credential_field'))
+    ) {
       flags.push('sensitive_payload');
     }
   }
@@ -182,7 +185,10 @@ export function checkGate(call: GatekeeperCall, ctx: GatekeeperContext): Gatekee
   // 'deny' rule cannot be silenced by a broad acceptForSession grant.
   const rule = matchRules(ctx.rules, call.toolName, origin);
   if (rule?.verdict === 'deny') {
-    return { verdict: 'deny', reason: `被权限规则拒绝（${rule.tool} @ ${rule.origin}，来源: ${rule.source}）。` };
+    return {
+      verdict: 'deny',
+      reason: `被权限规则拒绝（${rule.tool} @ ${rule.origin}，来源: ${rule.source}）。`,
+    };
   }
   if (rule?.verdict === 'ask') {
     // A confirmation requirement, not a default: under `never` it degrades to

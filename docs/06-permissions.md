@@ -13,9 +13,9 @@
 
 ```ts
 type ApprovalPolicy =
-  | 'always'       // 每次工具调用都问，读也问（唯一会门控读的档位；实现为 ask，绝不 deny）
+  | 'always'       // 浏览器/MCP 工具调用都问，读也问；todo_write/memory_read/load_skill 例外直放
   | 'untrusted'    // 读自动放行；写一律弹审批。默认档
-  | 'on-request'   // 读类自动放行；写类首个动作弹审批，同站点同工具本 turn 内后续放行
+  | 'on-request'   // 当前运行时默认裁决与 untrusted 相同；选择 acceptForSession 后同 Thread 放行
   | 'never'        // 从不弹窗。语义 = 「需要审批的动作直接拒绝并告知模型」，
                    //   绝不是「自动批准」（Codex 桌面端语义歧义的教训，在此写死）
   | 'granular'     // 完全按规则表裁决，规则未覆盖的按 'untrusted' 兜底
@@ -27,7 +27,7 @@ type ApprovalPolicy =
 
 > **只做黑名单，不做白名单；读操作永不拦截。**
 > Agent 有权读取任何页面（含黑名单站点、含 L2 截图）；一切拦截只作用于写操作。
-> 不设域名白名单机制（任务作用域 scopeOrigins 门控、cross_scope 强制审批）。
+> 不设域名白名单机制；`cross_scope` 强制审批已经废弃。`scopeOrigins` 仅辅助判断敏感 payload 是否正在发往此前未触达的第三方 origin，并保留审计痕迹。
 
 ```ts
 type CapabilityScope =
@@ -39,6 +39,10 @@ type CapabilityScope =
 
 默认组合 `untrusted × full`。会话可改，单轮可用 `TurnOverrides` 覆盖（对齐 Codex 的 per-turn 覆盖）。
 
+当前 `on-request` 没有“普通 accept 后自动记忆到本 turn”的独立缓存；只有用户显式选择 `acceptForSession` 才写入 Thread 级内存授权。设置页现有说明仍写“本轮同站同工具后续放行”，属于待统一的 UI 文案，不应据此推断运行时行为。
+
+`RealEngineCore.startTurn()` 在 Provider/Preset/单轮 override 全部解析后，把实际 approvalPolicy 与 capabilityScope 同步给 Gatekeeper，并固化进 `ResolvedRunEnvironment`；read-only 是执行硬闸，不只是审计字段。
+
 **语义唯一性**：两轴枚举及其裁决语义定义在 `src/messaging/protocol.ts` + 本文档，UI 文案只能翻译、不能重新解释。
 
 ## 2. Gatekeeper —— 唯一拦截点
@@ -47,8 +51,8 @@ type CapabilityScope =
 
 ```
 check(call, thread):
-  0. 读操作（effects:'read'，任何级别）→ ALLOW（读永不拦截；
-     唯一例外：approvalPolicy = 'always' 时读也 ask）
+  0. todo_write / memory_read / load_skill → ALLOW；其余读操作（effects:'read'，任何级别）
+     → ALLOW（唯一例外：approvalPolicy = 'always' 时读也 ask）
   —— 以下仅写操作 ——
   1. 黑名单：目标 origin ∈ 敏感站点黑名单 → DENY（不可被任何规则覆盖）
   2. 能力域：read-only → DENY（same-origin-write / cross-origin 为遗留值，等同 full）
@@ -97,7 +101,7 @@ interface PermissionRule {
 
 规则 `tool` 字段写 `category:eval` 即匹配整个类别，例如 `{ tool: 'category:fill', origin: '*', verdict: 'ask' }` = 所有表单填写动作强制确认。
 
-敏感站点黑名单单独存储（`sensitive_origins`），预置银行/支付/券商/政务/chrome::// /商店等模式；用户可增；删除预置项需二次确认并记录。
+敏感站点由代码中的 `DEFAULT_SENSITIVE_PATTERNS` 与 storage 的 `sensitive_origins` 合并。设置页可查看内置数量并添加/删除用户模式，不能删除内置项。
 
 ## 4. 审批 RPC
 
@@ -125,14 +129,16 @@ type ApprovalDecision =
 
 行为规范：
 
-- 挂起的审批有超时（默认 5 分钟）→ 超时按 decline 处理并 `system_notice`；
-- 审批期间 loop 挂起，checkpoint 已落库——SW 被杀恢复后待审批列表随 snapshot 重新弹出；
+- 挂起的审批有超时（默认 5 分钟）→ 超时解析为带说明的 decline，随后作为工具拒绝结果回给模型；当前不会另写一条 `system_notice`；
+- 审批期间 loop 挂起，tool_call 已落库；待审批请求本身只存在 SW 内存。SW 存活时重连 UI 会从 snapshot 取回 pending approval；若 SW 在审批期间被杀，只能按“轮次被中断”恢复，原审批请求不会重建；
 - **审批 UI 只出现在扩展自有页面**（侧边栏/全屏页），绝不在网页内渲染——网页仿冒的审批框对引擎无效（引擎只认 Port 上的 `approval.response`）；
-- 无 UI 连接时收到 ask：发系统通知（chrome.notifications）点击打开侧边栏。
+- ask 请求写入 `approvals` 表并随 ThreadSnapshot 恢复；无 UI 时不会丢失。当前仍没有 `chrome.notifications.create` 或点击直达审批卡片的实现。
 
-## 5. L1→L2 升级确认
+## 5. debugger / L2 提示语义
 
-升级确认是一种特殊审批（`approval.request` 带 flag `escalation_l2`）：文案必须说明「将出现"正在调试此浏览器"横幅」。批准后本 Thread 内对该 tab 不再重复询问；turn 结束/空闲 30s 自动 detach（见 01 §5）。
+当前 `escalation_l2` 是**审批展示 flag**，不是独立强制审批规则：当某个 L2 write 因 approvalPolicy 或规则表进入审批时，卡片会说明浏览器将显示 debugger 横幅；L2 read 在非 `always` 策略下直接放行，`auto` 策略下未命中安全底线的 L2 write 也不会仅因 L2 而弹窗。CDP 连接按 tab 单 target 串行化并在空闲 30s 后 detach；尚无 turn 结束立即 detach，也没有“批准一次后按 tab 记录升级许可”的单独状态。
+
+`press_key` 明确标为 L2，并使用 CDP trusted key；无 CDP 的测试/降级环境才使用合成事件并在结果中明确提示可能未触发原生行为。
 
 ## 6. Prompt Injection 防线小结
 
@@ -151,8 +157,8 @@ type ApprovalDecision =
 ## 7. 设置页权限矩阵（UI 规格见 09 §6）
 
 - 视图：规则表（工具 × 站点 × 裁决 allow/ask/deny 三态 × 来源），支持手动添加（工具名 / 前缀通配 / `category:` 类别）与删除；
-- 每条 `approval_persist` 规则可回溯（哪次审批产生的，链接到会话）；
-- 「重置为默认」「导出规则」入口。
+- 支持默认 approvalPolicy/capabilityScope 选择，以及用户自定义敏感站点模式；
+- 当前只展示规则 source 字段，没有从 `approval_persist` 规则跳回原会话、重置默认或单独导出规则的入口。
 
 ## 8. 已定事项
 

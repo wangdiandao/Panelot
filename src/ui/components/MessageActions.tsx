@@ -39,7 +39,16 @@ function fmt(n: number): string {
   return String(n);
 }
 
-export function MessageActions({ role, text, isLast, onRegenerate, onEdit, usage, model, align = 'start' }: MessageActionsProps) {
+export function MessageActions({
+  role,
+  text,
+  isLast,
+  onRegenerate,
+  onEdit,
+  usage,
+  model,
+  align = 'start',
+}: MessageActionsProps) {
   const [copied, setCopied] = useState(false);
 
   const copy = () => {
@@ -96,10 +105,19 @@ export function MessageActions({ role, text, isLast, onRegenerate, onEdit, usage
                   {model}
                 </div>
               )}
-              <div className="flex justify-between"><span>input</span><span>{fmt(usage.input)}</span></div>
-              <div className="flex justify-between"><span>output</span><span>{fmt(usage.output)}</span></div>
+              <div className="flex justify-between">
+                <span>input</span>
+                <span>{fmt(usage.input)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>output</span>
+                <span>{fmt(usage.output)}</span>
+              </div>
               {usage.cacheRead !== undefined && (
-                <div className="flex justify-between"><span>cache read</span><span>{fmt(usage.cacheRead)}</span></div>
+                <div className="flex justify-between">
+                  <span>cache read</span>
+                  <span>{fmt(usage.cacheRead)}</span>
+                </div>
               )}
             </div>
           </PopoverContent>
@@ -109,7 +127,15 @@ export function MessageActions({ role, text, isLast, onRegenerate, onEdit, usage
   );
 }
 
-function ActionButton({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
+function ActionButton({
+  label,
+  onClick,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>

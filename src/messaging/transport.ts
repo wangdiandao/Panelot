@@ -31,6 +31,7 @@ export interface EngineConnection {
   post(ev: AgentEvent): void;
   onOp(cb: (op: Op) => void): void;
   onClose(cb: () => void): void;
+  close(): void;
 }
 
 /** The engine implements this; transports call it for each new client. */
@@ -83,6 +84,9 @@ export function createDirectPair(): { transport: EngineTransport; connection: En
     },
     onClose(cb) {
       closeHandler = cb;
+    },
+    close() {
+      transport.close();
     },
   };
 
@@ -140,6 +144,9 @@ export function wrapPortConnection(port: chrome.runtime.Port): EngineConnection 
     },
     onClose(cb) {
       port.onDisconnect.addListener(() => cb());
+    },
+    close() {
+      port.disconnect();
     },
   };
 }
