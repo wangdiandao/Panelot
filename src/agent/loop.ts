@@ -129,8 +129,11 @@ export function runTurn(
   const abort = new AbortController();
   const steerQueue: UserInput[] = [];
 
-  async function consumeSteerQueue(): Promise<number> {
-    const pending = steerQueue.splice(0);
+  function takeSteerQueue(): UserInput[] {
+    return steerQueue.splice(0);
+  }
+
+  async function persistSteerInputs(pending: readonly UserInput[]): Promise<void> {
     for (const steerInput of pending) {
       await env.tree.appendNode(threadId, {
         type: 'user_message',
@@ -141,6 +144,11 @@ export function runTurn(
         },
       });
     }
+  }
+
+  async function consumeSteerQueue(): Promise<number> {
+    const pending = takeSteerQueue();
+    await persistSteerInputs(pending);
     return pending.length;
   }
 
@@ -215,7 +223,6 @@ export function runTurn(
       let consecutiveFailures = 0; // circuit breaker (browser-use max_failures)
       let turnTokens = 0;
       let stepCursor = options.initialStepCursor ?? 0;
-      let hasRequestedModel = false;
       // Stuck-loop detection (page-agent reflection pattern): track a rolling
       // window of the last N tool+params fingerprints. If the same call repeats
       // STUCK_REPEAT_THRESHOLD times consecutively, inject a reminder.
@@ -229,11 +236,17 @@ export function runTurn(
           break;
         }
 
-        if (hasRequestedModel) await consumeSteerQueue();
-
-        const thread = await env.tree.getThread(threadId);
-        const ctx = await buildSessionContext(env.tree, threadId, thread!.leafId!);
-        const messages = [...ctx.messages];
+        let messages;
+        for (;;) {
+          const thread = await env.tree.getThread(threadId);
+          const ctx = await buildSessionContext(env.tree, threadId, thread!.leafId!);
+          const pendingSteers = takeSteerQueue();
+          if (pendingSteers.length === 0) {
+            messages = [...ctx.messages];
+            break;
+          }
+          await persistSteerInputs(pendingSteers);
+        }
         if (stepReminderPending) {
           messages.push({ role: 'user', content: [{ type: 'text', text: STEP_REMINDER }] });
           stepReminderPending = false;
@@ -267,7 +280,6 @@ export function runTurn(
           model: env.model,
           signal: abort.signal,
         });
-        hasRequestedModel = true;
 
         let final;
         try {

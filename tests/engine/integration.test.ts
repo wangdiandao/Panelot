@@ -544,6 +544,70 @@ describe('engine integration (Op → events → DB)', () => {
     );
   });
 
+  it('includes an acknowledged steer accepted during context build in the imminent request', async () => {
+    const { core, host } = buildEngine();
+    tools.register({
+      name: 'context_step',
+      label: 'Context step',
+      description: 'advances to another model request',
+      parameters: z.object({}),
+      level: 'builtin',
+      effects: 'read',
+      execute: async () => ({ content: [{ type: 'text', text: 'step complete' }] }),
+    });
+    const client = connect(host);
+    const threadId = await initThread(client);
+
+    let contextSnapshotTaken: () => void;
+    let releaseContextBuild: () => void;
+    const snapshotTaken = new Promise<void>((resolve) => (contextSnapshotTaken = resolve));
+    const contextGate = new Promise<void>((resolve) => (releaseContextBuild = resolve));
+    const coreTree = (core as unknown as { tree: ThreadTree }).tree;
+    const getPath = coreTree.getPath.bind(coreTree);
+    let contextReadCount = 0;
+    coreTree.getPath = async (requestedThreadId, leafId) => {
+      const path = await getPath(requestedThreadId, leafId);
+      contextReadCount++;
+      if (contextReadCount === 2) {
+        contextSnapshotTaken!();
+        await contextGate;
+      }
+      return path;
+    };
+
+    provider.queue(
+      { toolCalls: [{ id: 'c1', name: 'context_step', params: {} }] },
+      { streamText: ['second response'] },
+      { streamText: ['must not need a third request'] },
+    );
+    client.post({ type: 'turn.submit', threadId, input: { text: 'start' } });
+    const turnStart = await client.waitFor('turn.start');
+    await snapshotTaken;
+
+    const steerSubmissionId = client.post({
+      type: 'turn.steer',
+      threadId,
+      expectedTurnId: turnStart.turnId,
+      input: { text: 'include in imminent request' },
+    });
+    await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
+        event.type === 'command.ack' && event.submissionId === steerSubmissionId,
+    );
+    releaseContextBuild!();
+    await client.waitFor('turn.complete');
+
+    expect(provider.requests).toHaveLength(2);
+    const imminentUserTexts = provider.requests[1]!.messages
+      .filter((message) => message.role === 'user')
+      .flatMap((message) =>
+        message.content.map((content) => (content.type === 'text' ? content.text : '')),
+      );
+    expect(imminentUserTexts.filter((text) => text === 'include in imminent request')).toHaveLength(
+      1,
+    );
+  });
+
   it('turn.steer rejects after loop termination while terminal persistence is pending', async () => {
     const { core, host } = buildEngine();
     let releaseTerminalState: () => void;
