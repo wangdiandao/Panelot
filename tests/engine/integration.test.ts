@@ -687,6 +687,75 @@ describe('engine integration (Op → events → DB)', () => {
     expect(JSON.stringify(path.at(-1)?.payload)).toContain('keep this interrupted steer');
   });
 
+  it('rejects steer after interrupt while tool cleanup is pending', async () => {
+    const { host } = buildEngine();
+    let toolStarted: () => void;
+    let abortObserved: () => void;
+    let releaseCleanup: () => void;
+    const toolEntered = new Promise<void>((resolve) => (toolStarted = resolve));
+    const abortEntered = new Promise<void>((resolve) => (abortObserved = resolve));
+    const cleanupGate = new Promise<void>((resolve) => (releaseCleanup = resolve));
+    tools.register({
+      name: 'cleanup_gate',
+      label: 'Cleanup gate',
+      description: 'waits for controlled abort cleanup',
+      parameters: z.object({}),
+      level: 'builtin',
+      effects: 'read',
+      execute: (_id, _params, signal) =>
+        new Promise((_, reject) => {
+          toolStarted!();
+          signal.addEventListener('abort', () => {
+            abortObserved!();
+            void cleanupGate.then(() => reject(new DOMException('aborted', 'AbortError')));
+          });
+        }),
+    });
+
+    const client = connect(host);
+    const threadId = await initThread(client);
+    provider.queue({ toolCalls: [{ id: 'c1', name: 'cleanup_gate', params: {} }] });
+    client.post({ type: 'turn.submit', threadId, input: { text: 'start' } });
+    const turnStart = await client.waitFor('turn.start');
+    await toolEntered;
+
+    const interruptSubmissionId = client.post({ type: 'turn.interrupt', threadId });
+    await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
+        event.type === 'command.ack' && event.submissionId === interruptSubmissionId,
+    );
+    await abortEntered;
+    const steerSubmissionId = client.post({
+      type: 'turn.steer',
+      threadId,
+      expectedTurnId: turnStart.turnId,
+      input: { text: 'too late after interrupt' },
+    });
+    const response = await client.waitForMatching(
+      (
+        event,
+      ): event is
+        | Extract<AgentEvent, { type: 'command.ack' }>
+        | Extract<AgentEvent, { type: 'error' }> =>
+        'submissionId' in event &&
+        event.submissionId === steerSubmissionId &&
+        (event.type === 'command.ack' || event.type === 'error'),
+    );
+    releaseCleanup!();
+    const complete = await client.waitFor('turn.complete');
+
+    expect(response).toMatchObject({ type: 'error', code: 'turn_not_steerable' });
+    expect(complete.stopReason).toBe('interrupted');
+    expect(provider.requests).toHaveLength(1);
+    const path = await new ThreadTree(db).getPath(
+      threadId,
+      (await db.threads.get(threadId))!.leafId!,
+    );
+    expect(JSON.stringify(path.map((node) => node.payload))).not.toContain(
+      'too late after interrupt',
+    );
+  });
+
   it('turn.interrupt stops the turn with stopReason interrupted', async () => {
     const { host } = buildEngine();
     tools.register({

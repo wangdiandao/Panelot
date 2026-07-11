@@ -154,7 +154,10 @@ export function runTurn(
       if (!acceptingSteer) throw new Error('turn is not steerable');
       steerQueue.push(steerInput);
     },
-    interrupt: () => abort.abort(),
+    interrupt: () => {
+      acceptingSteer = false;
+      abort.abort();
+    },
     done: execute(),
   };
 
