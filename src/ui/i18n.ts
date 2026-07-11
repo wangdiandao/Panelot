@@ -239,6 +239,7 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   'settings.noMatch': { 'zh-CN': '无匹配的设置项', en: 'No matching settings' },
 
   // Permission switch (composer autonomy tiers)
+  'perm.switch': { 'zh-CN': '权限模式', en: 'Permission mode' },
   'perm.plan': { 'zh-CN': '计划模式', en: 'Plan mode' },
   'perm.planHint': {
     'zh-CN': 'AI 先制定计划并等待确认，确认后再执行操作',
@@ -345,6 +346,7 @@ function detectLang(): Lang {
 
 export function setLang(lang: Lang): void {
   currentLang = lang;
+  if (typeof document !== 'undefined') document.documentElement.lang = lang;
 }
 
 export function getLang(): Lang {
