@@ -6,7 +6,79 @@
  * the model's domain (docs/03 §7).
  */
 
-import { ProviderError } from './types';
+import { ProviderError, type ProviderErrorDetails, type ProviderErrorReason } from './types';
+
+const MAX_UPSTREAM_TEXT = 2000;
+
+function sanitizeUpstreamText(value: string): string {
+  return value
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
+    .trim()
+    .slice(0, MAX_UPSTREAM_TEXT);
+}
+
+function readUpstreamDetails(bodyText: string): ProviderErrorDetails {
+  const raw = sanitizeUpstreamText(bodyText);
+  let value: unknown;
+  try {
+    value = JSON.parse(bodyText);
+  } catch {
+    return { raw, upstreamMessage: raw || undefined };
+  }
+
+  const root = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+  const nested =
+    root.error && typeof root.error === 'object' ? (root.error as Record<string, unknown>) : root;
+  const message = nested.message ?? root.message ?? root.detail;
+  const code = nested.code ?? nested.type ?? root.code;
+  return {
+    raw,
+    upstreamMessage:
+      typeof message === 'string' ? sanitizeUpstreamText(message) || undefined : undefined,
+    upstreamCode: typeof code === 'string' || typeof code === 'number' ? String(code) : undefined,
+  };
+}
+
+function classifyReason(status: number, searchableText: string): ProviderErrorReason | undefined {
+  if (status === 401) return 'invalid_key';
+  if (status === 403) return 'permission_denied';
+  if (isQuotaError(status, searchableText)) return 'quota_exceeded';
+  if (status === 404) return 'endpoint_not_found';
+  if (
+    /\bmodel[_\s-]*(?:not[_\s-]*(?:found|exist)|unknown)\b|\b(?:unknown|missing)[_\s-]+model\b|\bmodel\b.{0,24}\b(?:does not exist|not found)\b/i.test(
+      searchableText,
+    )
+  ) {
+    return 'model_not_found';
+  }
+  if (status === 400 || status === 409 || status === 422) return 'invalid_request';
+  if (status >= 500 && status <= 599) return 'upstream_error';
+  return undefined;
+}
+
+function isQuotaError(status: number, searchableText: string): boolean {
+  return (
+    status === 402 ||
+    /\b(?:quota|balance|credit|credits)\b|insufficient\s+(?:funds?|balance|credits?)/i.test(
+      searchableText,
+    )
+  );
+}
+
+function isContextLengthError(status: number, searchableText: string): boolean {
+  if (status !== 400 && status !== 413 && status !== 422) return false;
+  return (
+    /\bcontext(?:\s+window)?(?:\s+length)?\b.{0,32}\b(?:exceed|maximum|limit|too\s+long)/i.test(
+      searchableText,
+    ) ||
+    /\b(?:exceed|maximum|limit|length|too\s+(?:many|long))\b.{0,32}\btokens?\b/i.test(
+      searchableText,
+    ) ||
+    /\btokens?\b.{0,32}\b(?:exceed|maximum|limit|length|too\s+(?:many|long))\b/i.test(
+      searchableText,
+    )
+  );
+}
 
 export interface KeyRing {
   /** Returns the current sticky key (may be '' for keyless local endpoints). */
@@ -41,25 +113,43 @@ export function normalizeHttpError(
   retryAfterHeader?: string | null,
 ): ProviderError {
   const retryAfterMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 || undefined : undefined;
+  const details = readUpstreamDetails(bodyText);
+  const searchableText = [details.upstreamCode, details.upstreamMessage, details.raw]
+    .filter(Boolean)
+    .join(' ');
+
+  if (!isQuotaError(status, searchableText) && isContextLengthError(status, searchableText)) {
+    return new ProviderError('context_too_long', 'context window exceeded', undefined, {
+      ...details,
+      status,
+    });
+  }
+
+  const reason = classifyReason(status, searchableText);
+  const diagnosticDetails = { ...details, status, reason };
+
   if (status === 401 || status === 403) {
-    return new ProviderError('auth', `authentication failed (${status})`, undefined, bodyText);
-  }
-  if (status === 429) {
-    return new ProviderError('rate_limit', 'rate limited (429)', retryAfterMs, bodyText);
-  }
-  if (status === 529 || status === 503) {
     return new ProviderError(
-      'overloaded',
-      `provider overloaded (${status})`,
-      retryAfterMs,
-      bodyText,
+      'auth',
+      `authentication failed (${status})`,
+      undefined,
+      diagnosticDetails,
     );
   }
-  // Context-length errors surface as 400 with a recognizable message on both protocols.
-  if (status === 400 && /context|token|length|too long|maximum/i.test(bodyText)) {
-    return new ProviderError('context_too_long', 'context window exceeded', undefined, bodyText);
+  if (status === 429) {
+    return new ProviderError('rate_limit', 'rate limited (429)', retryAfterMs, diagnosticDetails);
   }
-  return new ProviderError('protocol', `unexpected HTTP ${status}`, undefined, bodyText);
+  if (status >= 500 && status <= 599) {
+    return new ProviderError(
+      'overloaded',
+      status === 503 || status === 529
+        ? `provider overloaded (${status})`
+        : `upstream server error (${status})`,
+      retryAfterMs,
+      diagnosticDetails,
+    );
+  }
+  return new ProviderError('protocol', `unexpected HTTP ${status}`, undefined, diagnosticDetails);
 }
 
 export interface RetryOptions {
