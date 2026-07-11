@@ -16,12 +16,13 @@ import { ToolRegistry } from '../../src/agent/tool';
 import type { GatekeeperCheck } from '../../src/agent/loop';
 import { ENGINE_PROTOCOL, ENGINE_SCHEMA_HASH } from '../../src/messaging/protocol';
 import type { AgentEvent, Op, ThreadSnapshot, TurnOverrides } from '../../src/messaging/protocol';
-import type {
-  FinalResult,
-  ProviderAdapter,
-  ProviderStream,
-  StreamEvent,
-  StreamRequest,
+import {
+  ProviderError,
+  type FinalResult,
+  type ProviderAdapter,
+  type ProviderStream,
+  type StreamEvent,
+  type StreamRequest,
 } from '../../src/providers/types';
 
 // ---------------------------------------------------------------------------
@@ -29,7 +30,13 @@ import type {
 /** Omit that distributes over union members (plain Omit collapses the union). */
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
 
-type Scripted = Partial<FinalResult> & { streamText?: string[] };
+type Scripted = Partial<FinalResult> & {
+  streamText?: string[];
+  onStreamStart?: () => void;
+  release?: Promise<void>;
+  streamError?: Error;
+  waitForAbort?: boolean;
+};
 
 class MockProvider implements ProviderAdapter {
   requests: StreamRequest[] = [];
@@ -49,6 +56,16 @@ class MockProvider implements ProviderAdapter {
       stopReason: s.stopReason ?? ((s.toolCalls?.length ?? 0) > 0 ? 'tool_use' : 'end'),
     };
     async function* gen() {
+      s.onStreamStart?.();
+      await s.release;
+      if (s.waitForAbort) {
+        await new Promise<void>((_resolve, reject) => {
+          req.signal.addEventListener('abort', () =>
+            reject(new DOMException('aborted', 'AbortError')),
+          );
+        });
+      }
+      if (s.streamError) throw s.streamError;
       for (const ev of events) yield ev;
     }
     const it = gen();
@@ -582,6 +599,92 @@ describe('engine integration (Op → events → DB)', () => {
           JSON.stringify((node.payload as { content: unknown }).content).includes('too late'),
       ),
     ).toBe(false);
+  });
+
+  it('persists an acknowledged steer exactly once when the provider stream errors', async () => {
+    const { host } = buildEngine();
+    let streamStarted: () => void;
+    let releaseStream: () => void;
+    const entered = new Promise<void>((resolve) => (streamStarted = resolve));
+    const release = new Promise<void>((resolve) => (releaseStream = resolve));
+    provider.queue({
+      onStreamStart: () => streamStarted!(),
+      release,
+      streamError: new ProviderError('network', 'stream failed'),
+    });
+
+    const client = connect(host);
+    const threadId = await initThread(client);
+    client.post({ type: 'turn.submit', threadId, input: { text: 'start' } });
+    const turnStart = await client.waitFor('turn.start');
+    await entered;
+    const steerSubmissionId = client.post({
+      type: 'turn.steer',
+      threadId,
+      expectedTurnId: turnStart.turnId,
+      input: { text: 'keep this error steer' },
+    });
+    await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
+        event.type === 'command.ack' && event.submissionId === steerSubmissionId,
+    );
+    releaseStream!();
+    const complete = await client.waitFor('turn.complete');
+
+    expect(complete.stopReason).toBe('error');
+    expect(provider.requests).toHaveLength(1);
+    const path = await new ThreadTree(db).getPath(
+      threadId,
+      (await db.threads.get(threadId))!.leafId!,
+    );
+    expect(
+      path.filter(
+        (node) =>
+          node.type === 'user_message' &&
+          (node.payload as { steered?: boolean }).steered === true,
+      ),
+    ).toHaveLength(1);
+    expect(JSON.stringify(path.at(-1)?.payload)).toContain('keep this error steer');
+  });
+
+  it('persists an acknowledged steer exactly once when the stream is interrupted', async () => {
+    const { host } = buildEngine();
+    let streamStarted: () => void;
+    const entered = new Promise<void>((resolve) => (streamStarted = resolve));
+    provider.queue({ onStreamStart: () => streamStarted!(), waitForAbort: true });
+
+    const client = connect(host);
+    const threadId = await initThread(client);
+    client.post({ type: 'turn.submit', threadId, input: { text: 'start' } });
+    const turnStart = await client.waitFor('turn.start');
+    await entered;
+    const steerSubmissionId = client.post({
+      type: 'turn.steer',
+      threadId,
+      expectedTurnId: turnStart.turnId,
+      input: { text: 'keep this interrupted steer' },
+    });
+    await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
+        event.type === 'command.ack' && event.submissionId === steerSubmissionId,
+    );
+    client.post({ type: 'turn.interrupt', threadId });
+    const complete = await client.waitFor('turn.complete');
+
+    expect(complete.stopReason).toBe('interrupted');
+    expect(provider.requests).toHaveLength(1);
+    const path = await new ThreadTree(db).getPath(
+      threadId,
+      (await db.threads.get(threadId))!.leafId!,
+    );
+    expect(
+      path.filter(
+        (node) =>
+          node.type === 'user_message' &&
+          (node.payload as { steered?: boolean }).steered === true,
+      ),
+    ).toHaveLength(1);
+    expect(JSON.stringify(path.at(-1)?.payload)).toContain('keep this interrupted steer');
   });
 
   it('turn.interrupt stops the turn with stopReason interrupted', async () => {

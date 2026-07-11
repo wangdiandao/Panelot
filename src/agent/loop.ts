@@ -577,6 +577,7 @@ export function runTurn(
             ? 'paused_budget'
             : 'failed';
     acceptingSteer = false;
+    await consumeSteerQueue();
     await env.setRunState?.(terminalState, { stopReason });
     env.emit({ type: 'turn.complete', threadId, turnId, stopReason });
     return stopReason;
