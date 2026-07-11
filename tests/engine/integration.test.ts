@@ -354,6 +354,8 @@ describe('engine integration (Op → events → DB)', () => {
   });
 
   it('persists pending approvals and their decisions', async () => {
+    let toolExecutionCount = 0;
+    let decisionPersistedBeforeExecution = false;
     const ask: GatekeeperCheck = {
       check: async () => ({
         verdict: 'ask',
@@ -375,7 +377,24 @@ describe('engine integration (Op → events → DB)', () => {
       level: 'L1',
       effects: 'write',
       recovery: 'never-retry',
-      execute: async () => ({ content: [{ type: 'text', text: 'poked' }] }),
+      execute: async () => {
+        const meta = await new ThreadTree(db).getThread(threadId);
+        const path = await new ThreadTree(db).getPath(threadId, meta!.leafId!);
+        const decisionNodes = path.filter((node) => node.type === 'approval_decision');
+        expect(decisionNodes).toHaveLength(1);
+        expect(decisionNodes[0]?.payload).toMatchObject({
+          approvalId: request.approvalId,
+          request: {
+            tool: 'poke',
+            params: {},
+            targetOrigin: 'https://example.test',
+          },
+          decision: { kind: 'accept' },
+        });
+        decisionPersistedBeforeExecution = true;
+        toolExecutionCount++;
+        return { content: [{ type: 'text', text: 'poked' }] };
+      },
     });
     const client = connect(host);
     const threadId = await initThread(client);
@@ -402,6 +421,21 @@ describe('engine integration (Op → events → DB)', () => {
       status: 'decided',
       decision: { kind: 'accept' },
     });
+    const meta = await new ThreadTree(db).getThread(threadId);
+    const path = await new ThreadTree(db).getPath(threadId, meta!.leafId!);
+    const decisionNodes = path.filter((node) => node.type === 'approval_decision');
+    expect(decisionNodes).toHaveLength(1);
+    expect(decisionNodes[0]?.payload).toMatchObject({
+      approvalId: request.approvalId,
+      request: {
+        tool: 'poke',
+        params: {},
+        targetOrigin: 'https://example.test',
+      },
+      decision: { kind: 'accept' },
+    });
+    expect(decisionPersistedBeforeExecution).toBe(true);
+    expect(toolExecutionCount).toBe(1);
   });
 
   it('turn.steer with wrong expectedTurnId errors; correct id injects', async () => {
