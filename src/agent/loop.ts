@@ -129,6 +129,21 @@ export function runTurn(
   const abort = new AbortController();
   const steerQueue: UserInput[] = [];
 
+  async function consumeSteerQueue(): Promise<number> {
+    const pending = steerQueue.splice(0);
+    for (const steerInput of pending) {
+      await env.tree.appendNode(threadId, {
+        type: 'user_message',
+        payload: {
+          content: [{ type: 'text', text: steerInput.text }],
+          attachedContext: steerInput.attachedContext,
+          steered: true,
+        },
+      });
+    }
+    return pending.length;
+  }
+
   const handle: TurnHandle = {
     turnId,
     turnKind,
@@ -195,6 +210,7 @@ export function runTurn(
       let consecutiveFailures = 0; // circuit breaker (browser-use max_failures)
       let turnTokens = 0;
       let stepCursor = options.initialStepCursor ?? 0;
+      let hasRequestedModel = false;
       // Stuck-loop detection (page-agent reflection pattern): track a rolling
       // window of the last N tool+params fingerprints. If the same call repeats
       // STUCK_REPEAT_THRESHOLD times consecutively, inject a reminder.
@@ -207,6 +223,8 @@ export function runTurn(
           stopReason = 'interrupted';
           break;
         }
+
+        if (hasRequestedModel) await consumeSteerQueue();
 
         const thread = await env.tree.getThread(threadId);
         const ctx = await buildSessionContext(env.tree, threadId, thread!.leafId!);
@@ -244,6 +262,7 @@ export function runTurn(
           model: env.model,
           signal: abort.signal,
         });
+        hasRequestedModel = true;
 
         let final;
         try {
@@ -291,17 +310,12 @@ export function runTurn(
         // The optimistic client echo is the single visible rendering until
         // the turn-complete snapshot supersedes it — no engine-side echo, or
         // the message would show twice.
-        for (const steerInput of steerQueue.splice(0)) {
-          await env.tree.appendNode(threadId, {
-            type: 'user_message',
-            payload: {
-              content: [{ type: 'text', text: steerInput.text }],
-              attachedContext: steerInput.attachedContext,
-            },
-          });
-        }
+        const steeredAfterModel = await consumeSteerQueue();
 
-        if (final.toolCalls.length === 0) break; // the only exit condition
+        if (final.toolCalls.length === 0) {
+          if (steeredAfterModel > 0 || steerQueue.length > 0) continue;
+          break;
+        }
 
         // Token budget is the ONLY hard gate (docs/04 §1).
         if (env.tokenBudget !== undefined && turnTokens > env.tokenBudget) {

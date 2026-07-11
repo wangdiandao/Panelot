@@ -126,6 +126,27 @@ class TestClient {
       });
     });
   }
+
+  waitForMatching<T extends AgentEvent>(
+    predicate: (event: AgentEvent) => event is T,
+    timeoutMs = 3000,
+  ): Promise<T> {
+    const existing = this.events.find(predicate);
+    if (existing) return Promise.resolve(existing);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error('timeout waiting for matching event')),
+        timeoutMs,
+      );
+      this.waiters.push({
+        predicate,
+        resolve: (event) => {
+          clearTimeout(timer);
+          resolve(event as T);
+        },
+      });
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -471,12 +492,16 @@ describe('engine integration (Op → events → DB)', () => {
     expect(err.code).toBe('turn_mismatch');
 
     // Correct id → injected after current call.
-    client.post({
+    const steerSubmissionId = client.post({
       type: 'turn.steer',
       threadId,
       expectedTurnId: turnStart.turnId,
       input: { text: 'also do B' },
     });
+    await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
+        event.type === 'command.ack' && event.submissionId === steerSubmissionId,
+    );
     releaseTool!();
     await client.waitFor('turn.complete');
 
@@ -484,7 +509,22 @@ describe('engine integration (Op → events → DB)', () => {
     const userTexts = lastReq.messages
       .filter((m) => m.role === 'user')
       .flatMap((m) => m.content.map((c) => (c.type === 'text' ? c.text : '')));
-    expect(userTexts).toContain('also do B');
+    expect(userTexts.filter((text) => text === 'also do B')).toHaveLength(1);
+
+    const meta = await db.threads.get(threadId);
+    const path = await new ThreadTree(db).getPath(threadId, meta!.leafId!);
+    const steered = path.filter(
+      (node) =>
+        node.type === 'user_message' &&
+        (node.payload as { steered?: boolean }).steered === true,
+    );
+    expect(steered).toHaveLength(1);
+    expect((steered[0]?.payload as { content: unknown }).content).toEqual([
+      { type: 'text', text: 'also do B' },
+    ]);
+    expect(path.findIndex((node) => node.id === steered[0]?.id)).toBeLessThan(
+      path.map((node) => node.type).lastIndexOf('assistant_message'),
+    );
   });
 
   it('turn.interrupt stops the turn with stopReason interrupted', async () => {
