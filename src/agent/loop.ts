@@ -139,11 +139,30 @@ export function runTurn(
   let acceptingSteer = turnKind === 'user';
   const abort = new AbortController();
   const steerOverlay: string[] = [...(env.initialPendingSteerIds ?? [])];
-  const pendingAdmissions = new Set<Promise<void>>();
+  const pendingAdmissions = new Map<string, Promise<void>>();
   const pendingSteerNodes = new Map<string, AppendNodeInput>();
 
   function takeSteerOverlay(): string[] {
     return [...new Set(steerOverlay.splice(0))];
+  }
+
+  async function takeSteerCutoff(): Promise<string[]> {
+    const cutoff = new Set(takeSteerOverlay());
+    const admissions = [...pendingAdmissions.entries()];
+    const results = await Promise.allSettled(admissions.map(([, admission]) => admission));
+    const admittedAtCutoff = new Set<string>();
+    for (let index = 0; index < admissions.length; index++) {
+      if (results[index]?.status === 'fulfilled') {
+        const nodeId = admissions[index]![0];
+        cutoff.add(nodeId);
+        admittedAtCutoff.add(nodeId);
+      }
+    }
+    if (admittedAtCutoff.size > 0) {
+      const afterCutoff = steerOverlay.filter((nodeId) => !admittedAtCutoff.has(nodeId));
+      steerOverlay.splice(0, steerOverlay.length, ...afterCutoff);
+    }
+    return [...cutoff];
   }
 
   function steerPayload(steerInput: UserInput): UserMessagePayload {
@@ -179,8 +198,10 @@ export function runTurn(
         : Promise.resolve()).then(() => {
         steerOverlay.push(nodeId);
       });
-      pendingAdmissions.add(persist);
-      void persist.finally(() => pendingAdmissions.delete(persist)).catch(() => undefined);
+      pendingAdmissions.set(nodeId, persist);
+      void persist
+        .finally(() => pendingAdmissions.delete(nodeId))
+        .catch(() => undefined);
       return persist;
     },
     interrupt: () => {
@@ -257,9 +278,7 @@ export function runTurn(
           break;
         }
 
-        const admissionCutoff = [...pendingAdmissions];
-        await Promise.allSettled(admissionCutoff);
-        const steerCutoff = takeSteerOverlay();
+        const steerCutoff = await takeSteerCutoff();
         if (steerCutoff.length > 0) {
           if (env.materializeSteers) await env.materializeSteers(steerCutoff);
           else {
@@ -350,7 +369,7 @@ export function runTurn(
 
         if (final.toolCalls.length === 0) {
           acceptingSteer = false;
-          await Promise.allSettled([...pendingAdmissions]);
+          await Promise.allSettled([...pendingAdmissions.values()]);
           if (steerOverlay.length > 0) {
             acceptingSteer = turnKind === 'user';
             continue;
@@ -616,7 +635,7 @@ export function runTurn(
             ? 'paused_budget'
             : 'failed';
     acceptingSteer = false;
-    await Promise.allSettled([...pendingAdmissions]);
+    await Promise.allSettled([...pendingAdmissions.values()]);
     const undeliveredSteers = takeSteerOverlay();
     if (undeliveredSteers.length > 0) {
       if (env.materializeSteers) await env.materializeSteers(undeliveredSteers);

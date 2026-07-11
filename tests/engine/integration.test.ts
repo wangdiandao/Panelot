@@ -886,6 +886,80 @@ describe('engine integration (Op → events → DB)', () => {
     expect(contextReadCount).toBe(3);
   });
 
+  it('freezes steer identities while waiting for an earlier cutoff admission', async () => {
+    const { core, host } = buildEngine();
+    const blocker = registerBlockingTool('frozen_cutoff_gate');
+    const runs = (core as unknown as { runs: RunRepository }).runs;
+    const acceptSteer = runs.acceptSteer.bind(runs);
+    let admissionAStarted: () => void;
+    let releaseAdmissionA: () => void;
+    let secondRequestStarted: () => void;
+    let releaseSecondRequest: () => void;
+    const admissionAEntered = new Promise<void>((resolve) => (admissionAStarted = resolve));
+    const admissionAGate = new Promise<void>((resolve) => (releaseAdmissionA = resolve));
+    const secondRequestEntered = new Promise<void>((resolve) => (secondRequestStarted = resolve));
+    const secondRequestGate = new Promise<void>((resolve) => (releaseSecondRequest = resolve));
+    runs.acceptSteer = async (...args) => {
+      if (JSON.stringify(args[1].payload).includes('cutoff A')) {
+        admissionAStarted!();
+        await admissionAGate;
+      }
+      return acceptSteer(...args);
+    };
+
+    provider.queue(
+      { toolCalls: [{ id: 'c1', name: 'frozen_cutoff_gate', params: {} }] },
+      {
+        onStreamStart: () => secondRequestStarted!(),
+        release: secondRequestGate,
+        streamText: ['second response'],
+      },
+      { streamText: ['third response'] },
+    );
+    const client = connect(host);
+    const threadId = await initThread(client);
+    client.post({ type: 'turn.submit', threadId, input: { text: 'start' } });
+    const turnStart = await client.waitFor('turn.start');
+    await blocker.entered;
+
+    const submissionA = client.post({
+      type: 'turn.steer',
+      threadId,
+      expectedTurnId: turnStart.turnId,
+      input: { text: 'cutoff A' },
+    });
+    await admissionAEntered;
+    blocker.release();
+    await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'item.complete' }> =>
+        event.type === 'item.complete' && event.itemId === 'c1',
+    );
+
+    const active = (
+      core as unknown as {
+        activeTurns: Map<string, { handle: { steer(input: { text: string }): Promise<void> } }>;
+      }
+    ).activeTurns.get(threadId)!;
+    await active.handle.steer({ text: 'cutoff B' });
+    releaseAdmissionA!();
+    await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
+        event.type === 'command.ack' && event.submissionId === submissionA,
+    );
+    await secondRequestEntered;
+
+    const secondMessages = JSON.stringify(provider.requests[1]!.messages);
+    expect(secondMessages.match(/cutoff A/g)).toHaveLength(1);
+    expect(secondMessages).not.toContain('cutoff B');
+    releaseSecondRequest!();
+    await client.waitFor('turn.complete');
+
+    expect(provider.requests).toHaveLength(3);
+    const thirdMessages = JSON.stringify(provider.requests[2]!.messages);
+    expect(thirdMessages.match(/cutoff A/g)).toHaveLength(1);
+    expect(thirdMessages.match(/cutoff B/g)).toHaveLength(1);
+  });
+
   it('turn.steer rejects after loop termination while terminal persistence is pending', async () => {
     const { core, host } = buildEngine();
     let releaseTerminalState: () => void;
