@@ -354,10 +354,17 @@ describe('gatekeeper integration', () => {
 
   it('ask → approval accepted → tool executes; decision persisted', async () => {
     const executed = vi.fn();
+    let decisionWasPersistedBeforeExecution = false;
     tools.register(
       makeEchoTool({
         effects: 'write',
         execute: async (_id, params) => {
+          const approvalNodes = await db.nodes
+            .where('threadId')
+            .equals(thread.id)
+            .filter((node) => node.type === 'approval_decision')
+            .toArray();
+          decisionWasPersistedBeforeExecution = approvalNodes.length === 1;
           executed(params);
           return { content: [{ type: 'text', text: 'done' }] };
         },
@@ -381,13 +388,39 @@ describe('gatekeeper integration', () => {
       { streamText: ['finished'] },
     );
 
-    await runTurn(makeEnv({ gatekeeper }), thread.id, { text: 'go' }).done;
+    await runTurn(
+      makeEnv({
+        gatekeeper,
+        requestApproval: async (_turnId, request) => {
+          const decision: ApprovalDecision = { kind: 'accept' };
+          const decidedAt = Date.now();
+          await tree.appendNode(thread.id, {
+            type: 'approval_decision',
+            ts: decidedAt,
+            payload: {
+              approvalId: 'approval-c1',
+              request,
+              decision,
+              decidedAt,
+            },
+          });
+          return decision;
+        },
+      }),
+      thread.id,
+      { text: 'go' },
+    ).done;
     expect(executed).toHaveBeenCalledWith({ text: 'x' });
+    expect(decisionWasPersistedBeforeExecution).toBe(true);
 
     const meta = await tree.getThread(thread.id);
     const ctx = await buildSessionContext(tree, thread.id, meta!.leafId!);
-    const approvalNode = ctx.path.find((p) => p.type === 'approval_decision');
-    expect(approvalNode).toBeDefined();
+    const approvalNodes = ctx.path.filter((node) => node.type === 'approval_decision');
+    expect(approvalNodes).toHaveLength(1);
+    expect(approvalNodes[0]?.payload).toMatchObject({
+      request: { tool: 'echo', params: { text: 'x' } },
+      decision: { kind: 'accept' },
+    });
   });
 
   it('ask → declined with note → note reaches the model, tool NOT executed', async () => {
