@@ -7,7 +7,12 @@
 
 import type { ThreadTree } from '../db/tree';
 import type { AppendNodeInput } from '../db/tree';
-import type { PendingToolExecution, ResolvedRunEnvironment, RunState } from '../db/types';
+import type {
+  PendingToolExecution,
+  ResolvedRunEnvironment,
+  RunState,
+  UserMessagePayload,
+} from '../db/types';
 import { buildSessionContext } from '../db/sessionContext';
 import type {
   UserInput,
@@ -99,6 +104,12 @@ export interface TurnEnv {
   ) => Promise<void>;
   commitUsage?: (usage: Usage) => Promise<void>;
   activateSkill?: (skillId: string) => Promise<void>;
+  persistSteer?: (
+    node: AppendNodeInput,
+    attachmentLink?: { attachmentIds: readonly string[]; nodeId: string },
+  ) => Promise<void>;
+  materializeSteers?: (nodeIds: readonly string[]) => Promise<void>;
+  initialPendingSteerIds?: readonly string[];
   /** Optional hard token budget for the turn (docs/04 §1). */
   tokenBudget?: number;
 }
@@ -107,8 +118,8 @@ export interface TurnHandle {
   turnId: string;
   turnKind: TurnKind;
   steerable: boolean;
-  /** Inject a steer message; applied after the current LLM call (docs/04 §3). */
-  steer(input: UserInput): void;
+  /** Durably accept a steer message for the next provider request (docs/04 §3). */
+  steer(input: UserInput): Promise<void>;
   interrupt(): void;
   done: Promise<StopReason>;
 }
@@ -127,29 +138,20 @@ export function runTurn(
   const turnId = env.turnId ?? crypto.randomUUID();
   let acceptingSteer = turnKind === 'user';
   const abort = new AbortController();
-  const steerQueue: UserInput[] = [];
+  const steerOverlay: string[] = [...(env.initialPendingSteerIds ?? [])];
+  const pendingAdmissions = new Set<Promise<void>>();
+  const pendingSteerNodes = new Map<string, AppendNodeInput>();
 
-  function takeSteerQueue(): UserInput[] {
-    return steerQueue.splice(0);
+  function takeSteerOverlay(): string[] {
+    return [...new Set(steerOverlay.splice(0))];
   }
 
-  async function persistSteerInputs(pending: readonly UserInput[]): Promise<void> {
-    for (const steerInput of pending) {
-      await env.tree.appendNode(threadId, {
-        type: 'user_message',
-        payload: {
-          content: [{ type: 'text', text: steerInput.text }],
-          attachedContext: steerInput.attachedContext,
-          steered: true,
-        },
-      });
-    }
-  }
-
-  async function consumeSteerQueue(): Promise<number> {
-    const pending = takeSteerQueue();
-    await persistSteerInputs(pending);
-    return pending.length;
+  function steerPayload(steerInput: UserInput): UserMessagePayload {
+    return {
+      content: [{ type: 'text', text: steerInput.text }],
+      attachedContext: steerInput.attachedContext,
+      steered: true,
+    };
   }
 
   const handle: TurnHandle = {
@@ -160,7 +162,26 @@ export function runTurn(
     },
     steer: (steerInput) => {
       if (!acceptingSteer) throw new Error('turn is not steerable');
-      steerQueue.push(steerInput);
+      const nodeId = crypto.randomUUID();
+      const node: AppendNodeInput = {
+        id: nodeId,
+        type: 'user_message',
+        payload: steerPayload(steerInput),
+      };
+      pendingSteerNodes.set(nodeId, node);
+      const persist = (env.persistSteer
+        ? env.persistSteer(
+            node,
+            steerInput.attachmentIds?.length
+              ? { attachmentIds: steerInput.attachmentIds, nodeId }
+              : undefined,
+          )
+        : Promise.resolve()).then(() => {
+        steerOverlay.push(nodeId);
+      });
+      pendingAdmissions.add(persist);
+      void persist.finally(() => pendingAdmissions.delete(persist)).catch(() => undefined);
+      return persist;
     },
     interrupt: () => {
       acceptingSteer = false;
@@ -236,17 +257,21 @@ export function runTurn(
           break;
         }
 
-        let messages;
-        for (;;) {
-          const thread = await env.tree.getThread(threadId);
-          const ctx = await buildSessionContext(env.tree, threadId, thread!.leafId!);
-          const pendingSteers = takeSteerQueue();
-          if (pendingSteers.length === 0) {
-            messages = [...ctx.messages];
-            break;
+        const admissionCutoff = [...pendingAdmissions];
+        await Promise.allSettled(admissionCutoff);
+        const steerCutoff = takeSteerOverlay();
+        if (steerCutoff.length > 0) {
+          if (env.materializeSteers) await env.materializeSteers(steerCutoff);
+          else {
+            for (const nodeId of steerCutoff) {
+              const node = pendingSteerNodes.get(nodeId);
+              if (node) await env.tree.appendNode(threadId, node);
+            }
           }
-          await persistSteerInputs(pendingSteers);
         }
+        const thread = await env.tree.getThread(threadId);
+        const ctx = await buildSessionContext(env.tree, threadId, thread!.leafId!);
+        const messages = [...ctx.messages];
         if (stepReminderPending) {
           messages.push({ role: 'user', content: [{ type: 'text', text: STEP_REMINDER }] });
           stepReminderPending = false;
@@ -323,14 +348,13 @@ export function runTurn(
         turnTokens += final.usage.input + final.usage.output;
         env.emit({ type: 'token.usage', threadId, turnId, usage: final.usage });
 
-        // Steering: consume queued interjections after the LLM call (docs/04 §3).
-        // The optimistic client echo is the single visible rendering until
-        // the turn-complete snapshot supersedes it — no engine-side echo, or
-        // the message would show twice.
-        const steeredAfterModel = await consumeSteerQueue();
-
         if (final.toolCalls.length === 0) {
-          if (steeredAfterModel > 0 || steerQueue.length > 0) continue;
+          acceptingSteer = false;
+          await Promise.allSettled([...pendingAdmissions]);
+          if (steerOverlay.length > 0) {
+            acceptingSteer = turnKind === 'user';
+            continue;
+          }
           break;
         }
 
@@ -491,7 +515,7 @@ export function runTurn(
               await fail(
                 `The user declined this action.${note} Do not retry it verbatim — adapt or ask.`,
                 false,
-                decision.kind === 'cancel' ? 'interrupted' : 'streaming_model',
+                'streaming_model',
               );
               if (decision.kind === 'cancel') {
                 stopReason = 'interrupted';
@@ -563,7 +587,7 @@ export function runTurn(
           } catch (e) {
             if (abort.signal.aborted) {
               stopReason = 'interrupted';
-              await fail('interrupted', false, 'interrupted');
+              await fail('interrupted', false, 'streaming_model');
               break loop;
             }
             // Tool errors go back to the model for self-correction (docs/04 §2).
@@ -592,7 +616,17 @@ export function runTurn(
             ? 'paused_budget'
             : 'failed';
     acceptingSteer = false;
-    await consumeSteerQueue();
+    await Promise.allSettled([...pendingAdmissions]);
+    const undeliveredSteers = takeSteerOverlay();
+    if (undeliveredSteers.length > 0) {
+      if (env.materializeSteers) await env.materializeSteers(undeliveredSteers);
+      else {
+        for (const nodeId of undeliveredSteers) {
+          const node = pendingSteerNodes.get(nodeId);
+          if (node) await env.tree.appendNode(threadId, node);
+        }
+      }
+    }
     await env.setRunState?.(terminalState, { stopReason });
     env.emit({ type: 'turn.complete', threadId, turnId, stopReason });
     return stopReason;

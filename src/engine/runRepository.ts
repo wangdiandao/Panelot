@@ -4,6 +4,7 @@ import type {
   ResolvedRunEnvironment,
   RunRecord,
   RunState,
+  UserMessagePayload,
 } from '../db/types';
 import type { TurnOverrides, Usage, UserInput } from '../messaging/protocol';
 import { ThreadTree, type AppendNodeInput } from '../db/tree';
@@ -50,6 +51,13 @@ export type RecoveredRun = RunRecord & {
 };
 
 const terminalStates: readonly RunState[] = ['failed', 'completed'];
+const closedSteerStates: readonly RunState[] = ['interrupted', 'failed', 'completed'];
+const steerableStates: readonly RunState[] = [
+  'preparing',
+  'streaming_model',
+  'waiting_approval',
+  'executing_tool',
+];
 
 export class RunRepository {
   private readonly now: () => number;
@@ -204,6 +212,87 @@ export class RunRepository {
     return this.appendNodesAndTransition(id, [node], state, patch, attachmentLink);
   }
 
+  async acceptSteer(
+    id: string,
+    node: AppendNodeInput,
+    attachmentLink?: AttachmentLink,
+  ): Promise<RunRecord> {
+    return this.db.transaction(
+      'rw',
+      [this.db.runs, this.db.attachments],
+      async () => {
+        const current = await this.db.runs.get(id);
+        if (!current) throw new Error(`Run not found: ${id}`);
+        if (!steerableStates.includes(current.state)) {
+          throw new Error(`Run ${id} does not accept steering in state ${current.state}`);
+        }
+        if (node.type !== 'user_message' || !node.id) {
+          throw new Error('Steer must be a user_message with a stable node id');
+        }
+        if (attachmentLink && node.id !== attachmentLink.nodeId) {
+          throw new Error('Attachment link nodeId must match the appended node');
+        }
+
+        await this.linkAttachments(current, attachmentLink);
+
+        const updated: RunRecord = {
+          ...current,
+          pendingSteers: [
+            ...(current.pendingSteers ?? []),
+            {
+              nodeId: node.id,
+              payload: structuredClone(node.payload as UserMessagePayload),
+              attachmentIds: attachmentLink?.attachmentIds
+                ? [...attachmentLink.attachmentIds]
+                : undefined,
+              acceptedAt: this.now(),
+            },
+          ],
+          revision: current.revision + 1,
+          updatedAt: this.now(),
+        };
+        await this.db.runs.put(updated);
+        return updated;
+      },
+    );
+  }
+
+  async materializeSteers(id: string, nodeIds: readonly string[]): Promise<RunRecord> {
+    return this.db.transaction(
+      'rw',
+      [this.db.runs, this.db.threads, this.db.nodes],
+      async () => {
+        const current = await this.db.runs.get(id);
+        if (!current) throw new Error(`Run not found: ${id}`);
+        if (closedSteerStates.includes(current.state)) {
+          throw new Error(`Run ${id} is terminal in state ${current.state}`);
+        }
+        const requested = new Set(nodeIds);
+        const pending = current.pendingSteers ?? [];
+        const selected = pending.filter((steer) => requested.has(steer.nodeId));
+        if (selected.length !== requested.size) {
+          throw new Error(`Run ${id} has missing pending steer nodes`);
+        }
+        const tree = new ThreadTree(this.db);
+        for (const steer of selected) {
+          await tree.appendNode(current.threadId, {
+            id: steer.nodeId,
+            type: 'user_message',
+            payload: steer.payload,
+          });
+        }
+        const updated: RunRecord = {
+          ...current,
+          pendingSteers: pending.filter((steer) => !requested.has(steer.nodeId)),
+          revision: current.revision + 1,
+          updatedAt: this.now(),
+        };
+        await this.db.runs.put(updated);
+        return updated;
+      },
+    );
+  }
+
   async appendNodesAndTransition(
     id: string,
     nodes: readonly AppendNodeInput[],
@@ -222,22 +311,7 @@ export class RunRepository {
         const tree = new ThreadTree(this.db);
         for (const node of nodes) await tree.appendNode(current.threadId, node);
 
-        for (const attachmentId of attachmentLink?.attachmentIds ?? []) {
-          const attachment = await this.db.attachments.get(attachmentId);
-          if (!attachment || attachment.threadId !== current.threadId) {
-            throw new Error(`Attachment not found in run thread: ${attachmentId}`);
-          }
-          if (attachment.provenance !== 'user') {
-            throw new Error(`Attachment is not a user upload: ${attachmentId}`);
-          }
-          await this.db.attachments.update(attachmentId, {
-            refs: {
-              ...attachment.refs,
-              nodeIds: [...new Set([...(attachment.refs?.nodeIds ?? []), attachmentLink!.nodeId])],
-              runIds: [...new Set([...(attachment.refs?.runIds ?? []), current.id])],
-            },
-          });
-        }
+        await this.linkAttachments(current, attachmentLink);
 
         const updated: RunRecord = {
           ...current,
@@ -250,6 +324,25 @@ export class RunRepository {
         return updated;
       },
     );
+  }
+
+  private async linkAttachments(run: RunRecord, attachmentLink?: AttachmentLink): Promise<void> {
+    for (const attachmentId of attachmentLink?.attachmentIds ?? []) {
+      const attachment = await this.db.attachments.get(attachmentId);
+      if (!attachment || attachment.threadId !== run.threadId) {
+        throw new Error(`Attachment not found in run thread: ${attachmentId}`);
+      }
+      if (attachment.provenance !== 'user') {
+        throw new Error(`Attachment is not a user upload: ${attachmentId}`);
+      }
+      await this.db.attachments.update(attachmentId, {
+        refs: {
+          ...attachment.refs,
+          nodeIds: [...new Set([...(attachment.refs?.nodeIds ?? []), attachmentLink!.nodeId])],
+          runIds: [...new Set([...(attachment.refs?.runIds ?? []), run.id])],
+        },
+      });
+    }
   }
 
   async appendAssistantAndCommitUsage(

@@ -358,7 +358,7 @@ export class RealEngineCore {
           });
           return;
         }
-        active.handle.steer(op.input);
+        await active.handle.steer(op.input);
         return;
       }
       case 'turn.enqueue': {
@@ -820,6 +820,13 @@ export class RealEngineCore {
       activateSkill: async (skillId) => {
         await this.runs.activateSkill(run.id, skillId);
       },
+      persistSteer: async (node, attachmentLink) => {
+        await this.runs.acceptSteer(run.id, node, attachmentLink);
+      },
+      materializeSteers: async (nodeIds) => {
+        await this.runs.materializeSteers(run.id, nodeIds);
+      },
+      initialPendingSteerIds: run.pendingSteers?.map((steer) => steer.nodeId),
     };
 
     const handle = runTurn(env, threadId, input, 'user', {

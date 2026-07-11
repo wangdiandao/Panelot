@@ -266,6 +266,150 @@ describe('RunRepository', () => {
     expect((await db.attachments.get('attachment-a'))?.refs?.nodeIds).toEqual(['message-a']);
   });
 
+  it('durably accepts a steer without moving the thread leaf, then materializes it at delivery', async () => {
+    const threadId = await createThread();
+    const run = await runs.enqueue({
+      threadId,
+      clientId: 'client-a',
+      submissionId: 'submission-steer-file',
+      input: { text: 'start' },
+    });
+    await runs.transition(run.id, 'preparing');
+    await runs.transition(run.id, 'streaming_model');
+    await db.attachments.add({
+      id: 'attachment-steer',
+      threadId,
+      createdAt: 1,
+      kind: 'file',
+      mime: 'text/plain',
+      bytes: new Blob(['steer']),
+      trust: 'trusted',
+      provenance: 'user',
+    });
+
+    const updated = await runs.acceptSteer(
+      run.id,
+      {
+        id: 'steer-node',
+        type: 'user_message',
+        payload: { content: [{ type: 'text', text: 'also inspect this' }], steered: true },
+      },
+      { attachmentIds: ['attachment-steer'], nodeId: 'steer-node' },
+    );
+
+    expect(updated).toMatchObject({
+      state: 'streaming_model',
+      pendingSteers: [{ nodeId: 'steer-node' }],
+    });
+    expect(await db.nodes.get('steer-node')).toBeUndefined();
+    expect((await db.threads.get(threadId))?.leafId).toBeNull();
+    expect((await db.attachments.get('attachment-steer'))?.refs).toMatchObject({
+      nodeIds: ['steer-node'],
+      runIds: [run.id],
+    });
+
+    await runs.materializeSteers(run.id, ['steer-node']);
+    expect(await db.nodes.get('steer-node')).toMatchObject({ threadId, type: 'user_message' });
+    expect((await db.threads.get(threadId))?.leafId).toBe('steer-node');
+    expect((await runs.get(run.id))?.pendingSteers).toEqual([]);
+  });
+
+  it('rolls back a steer node when attachment linking fails', async () => {
+    const threadId = await createThread();
+    const run = await runs.enqueue({
+      threadId,
+      clientId: 'client-a',
+      submissionId: 'submission-steer-invalid-file',
+      input: { text: 'start' },
+    });
+    await runs.transition(run.id, 'preparing');
+    await runs.transition(run.id, 'streaming_model');
+
+    await expect(
+      runs.acceptSteer(
+        run.id,
+        {
+          id: 'steer-rollback',
+          type: 'user_message',
+          payload: { content: [{ type: 'text', text: 'must roll back' }], steered: true },
+        },
+        { attachmentIds: ['missing-attachment'], nodeId: 'steer-rollback' },
+      ),
+    ).rejects.toThrow(/Attachment not found/);
+
+    expect(await db.nodes.get('steer-rollback')).toBeUndefined();
+    expect((await db.threads.get(threadId))?.leafId).toBeNull();
+    expect(await db.runs.get(run.id)).toMatchObject({ state: 'streaming_model' });
+  });
+
+  it('rejects delayed steer acceptance after the run becomes terminal', async () => {
+    const threadId = await createThread();
+    const run = await runs.enqueue({
+      threadId,
+      clientId: 'client-a',
+      submissionId: 'submission-terminal-steer',
+      input: { text: 'start' },
+    });
+    await runs.transition(run.id, 'preparing');
+    await runs.transition(run.id, 'streaming_model');
+    await runs.acceptSteer(run.id, {
+      id: 'accepted-before-close',
+      type: 'user_message',
+      payload: { content: [{ type: 'text', text: 'accepted before close' }], steered: true },
+    });
+    await runs.transition(run.id, 'completed');
+
+    await expect(
+      runs.acceptSteer(run.id, {
+        id: 'too-late',
+        type: 'user_message',
+        payload: { content: [{ type: 'text', text: 'too late' }], steered: true },
+      }),
+    ).rejects.toThrow(/does not accept steering.*completed/);
+    await expect(runs.materializeSteers(run.id, ['accepted-before-close'])).rejects.toThrow(
+      /terminal.*completed/,
+    );
+    expect(await db.nodes.get('too-late')).toBeUndefined();
+    expect(await db.nodes.get('accepted-before-close')).toBeUndefined();
+    expect((await runs.get(run.id))?.pendingSteers).toEqual([
+      expect.objectContaining({ nodeId: 'accepted-before-close' }),
+    ]);
+  });
+
+  it('retains pending steers for materialization after repository restart', async () => {
+    const threadId = await createThread();
+    const run = await runs.enqueue({
+      threadId,
+      clientId: 'client-a',
+      submissionId: 'submission-restart-steer',
+      input: { text: 'start' },
+    });
+    await runs.transition(run.id, 'preparing');
+    await runs.transition(run.id, 'streaming_model');
+    await runs.acceptSteer(run.id, {
+      id: 'restart-steer',
+      type: 'user_message',
+      payload: {
+        content: [{ type: 'text', text: 'survive worker restart' }],
+        steered: true,
+      },
+    });
+
+    const restarted = new RunRepository(db, { now: () => now });
+    expect((await restarted.get(run.id))?.pendingSteers).toEqual([
+      expect.objectContaining({ nodeId: 'restart-steer' }),
+    ]);
+    await restarted.materializeSteers(run.id, ['restart-steer']);
+
+    const thread = await db.threads.get(threadId);
+    const path = await new ThreadTree(db).getPath(threadId, thread!.leafId!);
+    expect(path.at(-1)).toMatchObject({
+      id: 'restart-steer',
+      type: 'user_message',
+      payload: { steered: true },
+    });
+  });
+
   it('edits and removes only queued runs', async () => {
     const threadId = await createThread();
     const run = await runs.enqueue({

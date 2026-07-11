@@ -497,7 +497,7 @@ describe('steering & interrupt (docs/04 §3)', () => {
     );
 
     const handle = runTurn(makeEnv(), thread.id, { text: 'go' });
-    handle.steer({ text: 'also check prices' });
+    await handle.steer({ text: 'also check prices' });
     await handle.done;
 
     const secondReq = provider.requests[1]!;
@@ -505,6 +505,44 @@ describe('steering & interrupt (docs/04 §3)', () => {
       .filter((m) => m.role === 'user')
       .flatMap((m) => m.content.map((c) => (c.type === 'text' ? c.text : '')));
     expect(userTexts).toContain('also check prices');
+  });
+
+  it('materializes durable pending steer ids on the first request after resume', async () => {
+    const thread = await tree.createThread({});
+    await tree.appendNode(thread.id, {
+      type: 'user_message',
+      payload: { content: [{ type: 'text', text: 'original request' }] },
+    });
+    provider.queue({ streamText: ['resumed'] });
+
+    await runTurn(
+      makeEnv({
+        initialPendingSteerIds: ['durable-steer'],
+        materializeSteers: async (nodeIds) => {
+          expect(nodeIds).toEqual(['durable-steer']);
+          await tree.appendNode(thread.id, {
+            id: nodeIds[0],
+            type: 'user_message',
+            payload: {
+              content: [{ type: 'text', text: 'survived restart' }],
+              steered: true,
+            },
+          });
+        },
+      }),
+      thread.id,
+      { text: 'unused resumed input' },
+      'user',
+      { resumeExisting: true },
+    ).done;
+
+    expect(JSON.stringify(provider.requests[0]!.messages)).toContain('survived restart');
+    const path = await tree.getPath(thread.id, (await tree.getThread(thread.id))!.leafId!);
+    expect(path.map((node) => node.type)).toEqual([
+      'user_message',
+      'user_message',
+      'assistant_message',
+    ]);
   });
 
   it('interrupt aborts promptly with stopReason interrupted', async () => {

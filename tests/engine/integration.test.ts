@@ -175,6 +175,27 @@ let n = 0;
 
 const allowAll: GatekeeperCheck = { check: async () => ({ verdict: 'allow' }) };
 
+function registerBlockingTool(name: string) {
+  let toolStarted: () => void;
+  let releaseTool: () => void;
+  const entered = new Promise<void>((resolve) => (toolStarted = resolve));
+  const gate = new Promise<void>((resolve) => (releaseTool = resolve));
+  tools.register({
+    name,
+    label: name,
+    description: 'blocks for deterministic steering assertions',
+    parameters: z.object({}),
+    level: 'builtin',
+    effects: 'read',
+    execute: async () => {
+      toolStarted!();
+      await gate;
+      return { content: [{ type: 'text', text: 'released' }] };
+    },
+  });
+  return { entered, release: () => releaseTool!() };
+}
+
 function buildEngine(
   dbInstance?: PanelotDB,
   resolverOverride?: ProviderResolver,
@@ -532,8 +553,7 @@ describe('engine integration (Op → events → DB)', () => {
     const path = await new ThreadTree(db).getPath(threadId, meta!.leafId!);
     const steered = path.filter(
       (node) =>
-        node.type === 'user_message' &&
-        (node.payload as { steered?: boolean }).steered === true,
+        node.type === 'user_message' && (node.payload as { steered?: boolean }).steered === true,
     );
     expect(steered).toHaveLength(1);
     expect((steered[0]?.payload as { content: unknown }).content).toEqual([
@@ -544,7 +564,156 @@ describe('engine integration (Op → events → DB)', () => {
     );
   });
 
-  it('includes an acknowledged steer accepted during context build in the imminent request', async () => {
+  it('persists steer durably before command.ack', async () => {
+    const { host } = buildEngine();
+    const blocker = registerBlockingTool('durable_ack_gate');
+    const client = connect(host);
+    const threadId = await initThread(client);
+    provider.queue(
+      { toolCalls: [{ id: 'c1', name: 'durable_ack_gate', params: {} }] },
+      { streamText: ['done'] },
+    );
+    client.post({ type: 'turn.submit', threadId, input: { text: 'start' } });
+    const turnStart = await client.waitFor('turn.start');
+    await blocker.entered;
+
+    const steerSubmissionId = client.post({
+      type: 'turn.steer',
+      threadId,
+      expectedTurnId: turnStart.turnId,
+      input: { text: 'durable before ack' },
+    });
+    await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
+        event.type === 'command.ack' && event.submissionId === steerSubmissionId,
+    );
+    const pathBeforeRelease = await new ThreadTree(db).getPath(
+      threadId,
+      (await db.threads.get(threadId))!.leafId!,
+    );
+    const activeRunBeforeRelease = await db.runs.where('threadId').equals(threadId).first();
+    blocker.release();
+    await client.waitFor('turn.complete');
+    const finalPath = await new ThreadTree(db).getPath(
+      threadId,
+      (await db.threads.get(threadId))!.leafId!,
+    );
+
+    expect(
+      pathBeforeRelease.filter(
+        (node) =>
+          node.type === 'user_message' && (node.payload as { steered?: boolean }).steered === true,
+      ),
+    ).toHaveLength(0);
+    expect(activeRunBeforeRelease?.pendingSteers).toEqual([
+      expect.objectContaining({ payload: expect.objectContaining({ steered: true }) }),
+    ]);
+    expect(finalPath.map((node) => node.type)).toEqual([
+      'turn_context',
+      'user_message',
+      'assistant_message',
+      'tool_call',
+      'tool_result',
+      'user_message',
+      'assistant_message',
+    ]);
+    expect(JSON.stringify(finalPath[5]?.payload)).toContain('durable before ack');
+  });
+
+  it('rejects steer when durable persistence fails', async () => {
+    const { core, host } = buildEngine();
+    const blocker = registerBlockingTool('persistence_failure_gate');
+    const runs = (core as unknown as { runs: RunRepository }).runs;
+    runs.acceptSteer = async () => {
+      throw new Error('injected steer persistence failure');
+    };
+    const client = connect(host);
+    const threadId = await initThread(client);
+    provider.queue(
+      { toolCalls: [{ id: 'c1', name: 'persistence_failure_gate', params: {} }] },
+      { streamText: ['done'] },
+    );
+    client.post({ type: 'turn.submit', threadId, input: { text: 'start' } });
+    const turnStart = await client.waitFor('turn.start');
+    await blocker.entered;
+
+    const steerSubmissionId = client.post({
+      type: 'turn.steer',
+      threadId,
+      expectedTurnId: turnStart.turnId,
+      input: { text: 'must not be accepted' },
+    });
+    const response = await client.waitForMatching(
+      (
+        event,
+      ): event is
+        | Extract<AgentEvent, { type: 'command.ack' }>
+        | Extract<AgentEvent, { type: 'command.rejected' }> =>
+        'submissionId' in event &&
+        event.submissionId === steerSubmissionId &&
+        (event.type === 'command.ack' || event.type === 'command.rejected'),
+    );
+    blocker.release();
+    await client.waitFor('turn.complete');
+
+    expect(response).toMatchObject({ type: 'command.rejected', code: 'internal' });
+    expect(
+      (await db.nodes.where('threadId').equals(threadId).toArray()).some((node) =>
+        JSON.stringify(node.payload).includes('must not be accepted'),
+      ),
+    ).toBe(false);
+  });
+
+  it('atomically persists a steered attachment and its refs before ack', async () => {
+    const { host } = buildEngine();
+    const blocker = registerBlockingTool('attachment_steer_gate');
+    const client = connect(host);
+    const threadId = await initThread(client);
+    await db.attachments.add({
+      id: 'steer-attachment',
+      threadId,
+      createdAt: Date.now(),
+      kind: 'file',
+      mime: 'text/plain',
+      bytes: new Blob(['attachment']),
+      trust: 'trusted',
+      provenance: 'user',
+    });
+    provider.queue(
+      { toolCalls: [{ id: 'c1', name: 'attachment_steer_gate', params: {} }] },
+      { streamText: ['done'] },
+    );
+    client.post({ type: 'turn.submit', threadId, input: { text: 'start' } });
+    const turnStart = await client.waitFor('turn.start');
+    await blocker.entered;
+
+    const steerSubmissionId = client.post({
+      type: 'turn.steer',
+      threadId,
+      expectedTurnId: turnStart.turnId,
+      input: { text: 'inspect attachment', attachmentIds: ['steer-attachment'] },
+    });
+    const ack = await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
+        event.type === 'command.ack' && event.submissionId === steerSubmissionId,
+    );
+    const attachment = await db.attachments.get('steer-attachment');
+    const linkedNodeBeforeDelivery = await db.nodes.get(attachment!.refs!.nodeIds![0]!);
+    const activeRun = await db.runs.where('threadId').equals(threadId).first();
+    blocker.release();
+    await client.waitFor('turn.complete');
+    const linkedNode = await db.nodes.get(attachment!.refs!.nodeIds![0]!);
+
+    expect(ack.type).toBe('command.ack');
+    expect(linkedNodeBeforeDelivery).toBeUndefined();
+    expect(linkedNode).toMatchObject({
+      type: 'user_message',
+      payload: { steered: true, content: [{ type: 'text', text: 'inspect attachment' }] },
+    });
+    expect(attachment?.refs?.runIds).toEqual([activeRun!.id]);
+  });
+
+  it('delivers a steer accepted after a request cutoff in the following request', async () => {
     const { core, host } = buildEngine();
     tools.register({
       name: 'context_step',
@@ -578,7 +747,7 @@ describe('engine integration (Op → events → DB)', () => {
     provider.queue(
       { toolCalls: [{ id: 'c1', name: 'context_step', params: {} }] },
       { streamText: ['second response'] },
-      { streamText: ['must not need a third request'] },
+      { streamText: ['third response'] },
     );
     client.post({ type: 'turn.submit', threadId, input: { text: 'start' } });
     const turnStart = await client.waitFor('turn.start');
@@ -597,15 +766,124 @@ describe('engine integration (Op → events → DB)', () => {
     releaseContextBuild!();
     await client.waitFor('turn.complete');
 
-    expect(provider.requests).toHaveLength(2);
-    const imminentUserTexts = provider.requests[1]!.messages
-      .filter((message) => message.role === 'user')
-      .flatMap((message) =>
-        message.content.map((content) => (content.type === 'text' ? content.text : '')),
-      );
-    expect(imminentUserTexts.filter((text) => text === 'include in imminent request')).toHaveLength(
-      1,
+    expect(provider.requests).toHaveLength(3);
+    const imminentUserTexts = provider.requests[1]!.messages.filter(
+      (message) => message.role === 'user',
+    ).flatMap((message) =>
+      message.content.map((content) => (content.type === 'text' ? content.text : '')),
     );
+    expect(imminentUserTexts).not.toContain('include in imminent request');
+    const followingUserTexts = provider.requests[2]!.messages.filter(
+      (message) => message.role === 'user',
+    ).flatMap((message) =>
+      message.content.map((content) => (content.type === 'text' ? content.text : '')),
+    );
+    expect(followingUserTexts.filter((text) => text === 'include in imminent request')).toHaveLength(1);
+    expect(contextReadCount).toBe(3);
+  });
+
+  it('uses a bounded steer cutoff without duplicate delivery or context rebuild starvation', async () => {
+    const { core, host } = buildEngine();
+    tools.register({
+      name: 'cutoff_step',
+      label: 'Cutoff step',
+      description: 'advances to the cutoff request',
+      parameters: z.object({}),
+      level: 'builtin',
+      effects: 'read',
+      execute: async () => ({ content: [{ type: 'text', text: 'step complete' }] }),
+    });
+    const client = connect(host);
+    const threadId = await initThread(client);
+
+    let contextSnapshotTaken: () => void;
+    let releaseContextBuild: () => void;
+    let secondRequestStarted: () => void;
+    let releaseSecondRequest: () => void;
+    const snapshotTaken = new Promise<void>((resolve) => (contextSnapshotTaken = resolve));
+    const contextGate = new Promise<void>((resolve) => (releaseContextBuild = resolve));
+    const secondStarted = new Promise<void>((resolve) => (secondRequestStarted = resolve));
+    const secondGate = new Promise<void>((resolve) => (releaseSecondRequest = resolve));
+    const coreTree = (core as unknown as { tree: ThreadTree }).tree;
+    const getPath = coreTree.getPath.bind(coreTree);
+    let contextReadCount = 0;
+    coreTree.getPath = async (requestedThreadId, leafId) => {
+      const path = await getPath(requestedThreadId, leafId);
+      contextReadCount++;
+      if (contextReadCount === 2) {
+        contextSnapshotTaken!();
+        await contextGate;
+      }
+      return path;
+    };
+
+    provider.queue(
+      { toolCalls: [{ id: 'c1', name: 'cutoff_step', params: {} }] },
+      {
+        onStreamStart: () => secondRequestStarted!(),
+        release: secondGate,
+        streamText: ['second response'],
+      },
+      { streamText: ['third response'] },
+    );
+    client.post({ type: 'turn.submit', threadId, input: { text: 'start' } });
+    const turnStart = await client.waitFor('turn.start');
+    await snapshotTaken;
+
+    const cutoffTexts = Array.from({ length: 8 }, (_, index) => `cutoff steer ${index}`);
+    const cutoffSubmissionIds = cutoffTexts.map((text) =>
+      client.post({
+        type: 'turn.steer',
+        threadId,
+        expectedTurnId: turnStart.turnId,
+        input: { text },
+      }),
+    );
+    await Promise.all(
+      cutoffSubmissionIds.map((submissionId) =>
+        client.waitForMatching(
+          (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
+            event.type === 'command.ack' && event.submissionId === submissionId,
+        ),
+      ),
+    );
+    releaseContextBuild!();
+    await secondStarted;
+
+    const secondUserTexts = provider.requests[1]!.messages.filter(
+      (message) => message.role === 'user',
+    ).flatMap((message) =>
+      message.content.map((content) => (content.type === 'text' ? content.text : '')),
+    );
+    for (const text of cutoffTexts) {
+      expect(secondUserTexts).not.toContain(text);
+    }
+
+    const afterCutoffSubmissionId = client.post({
+      type: 'turn.steer',
+      threadId,
+      expectedTurnId: turnStart.turnId,
+      input: { text: 'after cutoff' },
+    });
+    await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
+        event.type === 'command.ack' && event.submissionId === afterCutoffSubmissionId,
+    );
+    expect(secondUserTexts).not.toContain('after cutoff');
+    releaseSecondRequest!();
+    await client.waitFor('turn.complete');
+
+    expect(provider.requests).toHaveLength(3);
+    const thirdUserTexts = provider.requests[2]!.messages.filter(
+      (message) => message.role === 'user',
+    ).flatMap((message) =>
+      message.content.map((content) => (content.type === 'text' ? content.text : '')),
+    );
+    for (const text of cutoffTexts) {
+      expect(thirdUserTexts.filter((candidate) => candidate === text)).toHaveLength(1);
+    }
+    expect(thirdUserTexts.filter((text) => text === 'after cutoff')).toHaveLength(1);
+    expect(contextReadCount).toBe(3);
   });
 
   it('turn.steer rejects after loop termination while terminal persistence is pending', async () => {
@@ -641,8 +919,7 @@ describe('engine integration (Op → events → DB)', () => {
       (
         event,
       ): event is
-        | Extract<AgentEvent, { type: 'command.ack' }>
-        | Extract<AgentEvent, { type: 'error' }> =>
+        Extract<AgentEvent, { type: 'command.ack' }> | Extract<AgentEvent, { type: 'error' }> =>
         'submissionId' in event &&
         event.submissionId === steerSubmissionId &&
         (event.type === 'command.ack' || event.type === 'error'),
@@ -663,6 +940,65 @@ describe('engine integration (Op → events → DB)', () => {
           JSON.stringify((node.payload as { content: unknown }).content).includes('too late'),
       ),
     ).toBe(false);
+  });
+
+  it('waits for an admitted steer persistence that crosses the final response boundary', async () => {
+    const { core, host } = buildEngine();
+    let streamStarted: () => void;
+    let releaseStream: () => void;
+    let persistenceStarted: () => void;
+    let releasePersistence: () => void;
+    let assistantCommitted: () => void;
+    const streamEntered = new Promise<void>((resolve) => (streamStarted = resolve));
+    const streamGate = new Promise<void>((resolve) => (releaseStream = resolve));
+    const persistenceEntered = new Promise<void>((resolve) => (persistenceStarted = resolve));
+    const persistenceGate = new Promise<void>((resolve) => (releasePersistence = resolve));
+    const finalBoundary = new Promise<void>((resolve) => (assistantCommitted = resolve));
+    const runs = (core as unknown as { runs: RunRepository }).runs;
+    const acceptSteer = runs.acceptSteer.bind(runs);
+    runs.acceptSteer = async (...args) => {
+      persistenceStarted!();
+      await persistenceGate;
+      return acceptSteer(...args);
+    };
+    const appendAssistant = runs.appendAssistantAndCommitUsage.bind(runs);
+    runs.appendAssistantAndCommitUsage = async (...args) => {
+      const result = await appendAssistant(...args);
+      assistantCommitted!();
+      return result;
+    };
+
+    const client = connect(host);
+    const threadId = await initThread(client);
+    provider.queue(
+      { onStreamStart: () => streamStarted!(), release: streamGate, streamText: ['first final'] },
+      { streamText: ['after steer'] },
+    );
+    client.post({ type: 'turn.submit', threadId, input: { text: 'start' } });
+    const turnStart = await client.waitFor('turn.start');
+    await streamEntered;
+    const steerSubmissionId = client.post({
+      type: 'turn.steer',
+      threadId,
+      expectedTurnId: turnStart.turnId,
+      input: { text: 'cross final boundary' },
+    });
+    await persistenceEntered;
+    releaseStream!();
+    await finalBoundary;
+    releasePersistence!();
+    await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
+        event.type === 'command.ack' && event.submissionId === steerSubmissionId,
+    );
+    await client.waitFor('turn.complete');
+
+    expect(provider.requests).toHaveLength(2);
+    const secondRoles = provider.requests[1]!.messages.map((message) => message.role);
+    expect(secondRoles).toEqual(['user', 'assistant', 'user']);
+    expect(JSON.stringify(provider.requests[1]!.messages.at(-1))).toContain(
+      'cross final boundary',
+    );
   });
 
   it('persists an acknowledged steer exactly once when the provider stream errors', async () => {
@@ -704,8 +1040,7 @@ describe('engine integration (Op → events → DB)', () => {
     expect(
       path.filter(
         (node) =>
-          node.type === 'user_message' &&
-          (node.payload as { steered?: boolean }).steered === true,
+          node.type === 'user_message' && (node.payload as { steered?: boolean }).steered === true,
       ),
     ).toHaveLength(1);
     expect(JSON.stringify(path.at(-1)?.payload)).toContain('keep this error steer');
@@ -744,8 +1079,7 @@ describe('engine integration (Op → events → DB)', () => {
     expect(
       path.filter(
         (node) =>
-          node.type === 'user_message' &&
-          (node.payload as { steered?: boolean }).steered === true,
+          node.type === 'user_message' && (node.payload as { steered?: boolean }).steered === true,
       ),
     ).toHaveLength(1);
     expect(JSON.stringify(path.at(-1)?.payload)).toContain('keep this interrupted steer');
@@ -799,8 +1133,7 @@ describe('engine integration (Op → events → DB)', () => {
       (
         event,
       ): event is
-        | Extract<AgentEvent, { type: 'command.ack' }>
-        | Extract<AgentEvent, { type: 'error' }> =>
+        Extract<AgentEvent, { type: 'command.ack' }> | Extract<AgentEvent, { type: 'error' }> =>
         'submissionId' in event &&
         event.submissionId === steerSubmissionId &&
         (event.type === 'command.ack' || event.type === 'error'),

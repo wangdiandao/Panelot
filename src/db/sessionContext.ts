@@ -43,6 +43,27 @@ export interface SessionContext {
   path: ThreadNode[];
 }
 
+export function userMessageToUnifiedMessage(
+  payload: UserMessagePayload,
+): Extract<UnifiedMessage, { role: 'user' }> {
+  const blocks: ContentBlock[] = [...payload.content];
+  for (const ctx of payload.attachedContext ?? []) {
+    const mustFence =
+      ctx.trust === 'untrusted' ||
+      ['page', 'selection', 'screenshot', 'tab', 'mcp_resource', 'file'].includes(ctx.kind);
+    blocks.push(
+      ...(mustFence
+        ? fenceBlocks(
+            ctx.content,
+            ctx.origin ?? `panelot://${ctx.provenance ?? ctx.kind}`,
+            ctx.provenance ?? ctx.kind,
+          )
+        : ctx.content),
+    );
+  }
+  return { role: 'user', content: blocks };
+}
+
 export async function buildSessionContext(
   tree: ThreadTree,
   threadId: string,
@@ -72,23 +93,7 @@ function appendNodeAsMessage(messages: UnifiedMessage[], node: ThreadNode): void
   switch (node.type) {
     case 'user_message': {
       const p = node.payload as UserMessagePayload;
-      const blocks: ContentBlock[] = [...p.content];
-      // This is the single boundary where attached context becomes provider input.
-      for (const ctx of p.attachedContext ?? []) {
-        const mustFence =
-          ctx.trust === 'untrusted' ||
-          ['page', 'selection', 'screenshot', 'tab', 'mcp_resource', 'file'].includes(ctx.kind);
-        blocks.push(
-          ...(mustFence
-            ? fenceBlocks(
-                ctx.content,
-                ctx.origin ?? `panelot://${ctx.provenance ?? ctx.kind}`,
-                ctx.provenance ?? ctx.kind,
-              )
-            : ctx.content),
-        );
-      }
-      messages.push({ role: 'user', content: blocks });
+      messages.push(userMessageToUnifiedMessage(p));
       break;
     }
     case 'assistant_message': {
