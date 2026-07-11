@@ -10,35 +10,66 @@ import { ProviderError, type ProviderErrorDetails, type ProviderErrorReason } fr
 
 const MAX_UPSTREAM_TEXT = 2000;
 
-function sanitizeUpstreamText(value: string): string {
+function redactCredentials(value: string): string {
   return value
-    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
-    .trim()
-    .slice(0, MAX_UPSTREAM_TEXT);
+    .replace(
+      /\b(authorization|api[_-]?key|apikey)\b(\s*[:=]\s*|\s+)(?:"[^"]*"|'[^']*'|Bearer\s+[^\s,;}\]]+|[^\s,;}\]]+)/gi,
+      '$1$2[REDACTED]',
+    )
+    .replace(/\bBearer\s+[^\s,;}\]]+/gi, 'Bearer [REDACTED]')
+    .replace(/\bsk-[A-Za-z0-9_-]{6,}\b/g, '[REDACTED]');
 }
 
-function readUpstreamDetails(bodyText: string): ProviderErrorDetails {
-  const raw = sanitizeUpstreamText(bodyText);
+function sanitizeUpstreamText(value: string): string {
+  const visible = value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
+  return redactCredentials(visible).trim().slice(0, MAX_UPSTREAM_TEXT);
+}
+
+interface UpstreamDetailsResult {
+  details: ProviderErrorDetails;
+  searchableText: string;
+}
+
+function readUpstreamDetails(bodyText: string): UpstreamDetailsResult {
   let value: unknown;
   try {
     value = JSON.parse(bodyText);
   } catch {
-    return { raw, upstreamMessage: raw || undefined };
+    const raw = sanitizeUpstreamText(bodyText);
+    return {
+      details: { raw, upstreamMessage: raw || undefined },
+      searchableText: raw,
+    };
   }
 
-  const root = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+  if (!value || typeof value !== 'object') {
+    const raw = sanitizeUpstreamText(typeof value === 'string' ? value : String(value ?? ''));
+    return {
+      details: { raw, upstreamMessage: raw || undefined },
+      searchableText: raw,
+    };
+  }
+
+  const root = value as Record<string, unknown>;
   const nested =
     root.error && typeof root.error === 'object' ? (root.error as Record<string, unknown>) : root;
-  const message = nested.message ?? root.message ?? root.detail;
-  const code = nested.code ?? nested.type ?? root.code;
+  const message = nested.message ?? nested.detail ?? root.message ?? root.detail;
+  const code = nested.code ?? nested.type ?? root.code ?? root.type;
+  const upstreamMessage =
+    typeof message === 'string' ? sanitizeUpstreamText(message) || undefined : undefined;
+  const upstreamCode =
+    typeof code === 'string' || typeof code === 'number'
+      ? sanitizeUpstreamText(String(code)) || undefined
+      : undefined;
+  const searchableText = [upstreamCode, upstreamMessage].filter(Boolean).join(' ');
+  const raw = sanitizeUpstreamText([upstreamCode, upstreamMessage].filter(Boolean).join(' · '));
   return {
-    raw,
-    upstreamMessage:
-      typeof message === 'string' ? sanitizeUpstreamText(message) || undefined : undefined,
-    upstreamCode:
-      typeof code === 'string' || typeof code === 'number'
-        ? sanitizeUpstreamText(String(code)) || undefined
-        : undefined,
+    details: {
+      raw: raw || undefined,
+      upstreamMessage,
+      upstreamCode,
+    },
+    searchableText,
   };
 }
 
@@ -117,11 +148,9 @@ export function normalizeHttpError(
   retryAfterHeader?: string | null,
 ): ProviderError {
   const retryAfterMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 || undefined : undefined;
-  const details = readUpstreamDetails(bodyText);
-  const searchableText = [details.upstreamCode, details.upstreamMessage, details.raw]
-    .filter(Boolean)
-    .join(' ')
-    .replace(/[_-]+/g, ' ');
+  const upstream = readUpstreamDetails(bodyText);
+  const details = upstream.details;
+  const searchableText = upstream.searchableText.replace(/[_-]+/g, ' ');
 
   if (!isQuotaError(status, searchableText) && isContextLengthError(status, searchableText)) {
     return new ProviderError('context_too_long', 'context window exceeded', undefined, {

@@ -138,6 +138,74 @@ describe('normalizeHttpError (docs/03 §7)', () => {
     expect(error.details.upstreamCode).toBe('invalid_request');
     expect(error.details).not.toHaveProperty('authorization');
     expect(error.details).not.toHaveProperty('headers');
+    expect(JSON.stringify(error.details)).not.toContain('fake-secret');
+  });
+
+  it('redacts credentials from allowlisted upstream fields', () => {
+    const error = normalizeHttpError(
+      400,
+      JSON.stringify({
+        error: {
+          code: 'api_key=code-secret',
+          message: 'authorization: Bearer message-secret sk-message-secret',
+        },
+      }),
+    );
+
+    expect(error.details.upstreamCode).not.toContain('code-secret');
+    expect(error.details.upstreamMessage).not.toContain('message-secret');
+    expect(JSON.stringify(error.details)).not.toMatch(/code-secret|message-secret/);
+  });
+
+  it('redacts credentials from plain-text upstream responses', () => {
+    const error = normalizeHttpError(
+      400,
+      'Authorization: Bearer bearer-secret api_key=key-secret apiKey: camel-secret sk-plain-secret',
+    );
+
+    expect(error.details.upstreamMessage).toContain('[REDACTED]');
+    expect(JSON.stringify(error.details)).not.toMatch(
+      /bearer-secret|key-secret|camel-secret|sk-plain-secret/,
+    );
+  });
+
+  it('classifies structured JSON from known error fields only', () => {
+    const error = normalizeHttpError(
+      400,
+      JSON.stringify({
+        error: { message: 'invalid tools' },
+        metadata: { quota: 'exceeded', model: 'unknown_model' },
+        request: { prompt: 'context_length_exceeded' },
+      }),
+    );
+
+    expect(error).toMatchObject({
+      kind: 'protocol',
+      details: { reason: 'invalid_request', upstreamMessage: 'invalid tools' },
+    });
+  });
+
+  it('does not classify echoed request metadata when JSON has no error fields', () => {
+    const error = normalizeHttpError(
+      418,
+      JSON.stringify({
+        request: { prompt: 'quota exceeded for unknown_model context_length_exceeded' },
+        authorization: 'Bearer fake-secret',
+      }),
+    );
+
+    expect(error.details.reason).toBeUndefined();
+    expect(JSON.stringify(error.details)).not.toContain('fake-secret');
+  });
+
+  it('does not treat JSON arrays as plain-text error fallbacks', () => {
+    const error = normalizeHttpError(
+      418,
+      JSON.stringify(['quota exceeded for unknown_model', 'Bearer array-secret']),
+    );
+
+    expect(error.details.reason).toBeUndefined();
+    expect(JSON.stringify(error.details)).not.toContain('array-secret');
   });
 
   it('detects context_too_long from a 400 body', () => {
