@@ -23,7 +23,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Read package version
-        run: echo "VERSION=$(node -p \"require('./package.json').version\")" >> "$GITHUB_ENV"
+        run: node -e "process.stdout.write('VERSION=' + require('./package.json').version + '\n')" >> "$GITHUB_ENV"
       - name: Verify tag matches package version
         run: test "${GITHUB_REF_NAME}" = "v${VERSION}"
       - run: pnpm format:check
