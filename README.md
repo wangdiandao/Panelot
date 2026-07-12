@@ -75,7 +75,7 @@ a Skill. Browser writes follow the configured approval policy and site rules.
 
 ## Development
 
-Requirements: Node.js 20.12+, pnpm 9.12.3, and Chrome 116+.
+Requirements: Node.js 20.19+ or 22.12+, pnpm 9.12.3, and Chrome 116+.
 
 ```bash
 pnpm install
