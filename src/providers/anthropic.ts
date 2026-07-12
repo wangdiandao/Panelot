@@ -13,7 +13,13 @@
 import type { UnifiedMessage } from '../db/sessionContext';
 import type { ContentBlock, Usage } from '../messaging/protocol';
 import { iterateSse } from './sse';
-import { createKeyRing, createResponseFormatError, normalizeHttpError, withRetry } from './http';
+import {
+  createKeyRing,
+  createProviderFrameError,
+  createResponseFormatError,
+  normalizeHttpError,
+  withRetry,
+} from './http';
 import {
   ProviderError,
   type Connection,
@@ -227,8 +233,7 @@ export class AnthropicAdapter implements ProviderAdapter {
             if (!isRecord(ev.error)) break;
             if (ev.error.type !== undefined && typeof ev.error.type !== 'string') break;
             if (ev.error.message !== undefined && typeof ev.error.message !== 'string') break;
-            throw createResponseFormatError(
-              ev.error?.type === 'overloaded_error' ? 'overloaded' : 'protocol',
+            throw createProviderFrameError(
               response.status,
               ev.error?.message,
               'provider stream error',

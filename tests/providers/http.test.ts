@@ -1,8 +1,102 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createKeyRing, normalizeHttpError, withRetry } from '../../src/providers/http';
+import {
+  createKeyRing,
+  createProviderFrameError,
+  normalizeHttpError,
+  withRetry,
+} from '../../src/providers/http';
 import { ProviderError } from '../../src/providers/types';
 
 const noSleep = () => Promise.resolve();
+
+describe('createProviderFrameError', () => {
+  it.each([
+    ['insufficient_quota', 'request rejected'],
+    ['insufficient_balance', 'request rejected'],
+    ['insufficient_credits', 'request rejected'],
+    ['billing_error', 'quota exceeded'],
+    ['billing_error', 'current quota is zero'],
+  ])('classifies quota signal %s / %s', (code, message) => {
+    expect(createProviderFrameError(207, message, 'provider error', code)).toMatchObject({
+      kind: 'rate_limit',
+      details: { status: 207, reason: 'quota_exceeded', upstreamCode: code },
+    });
+  });
+
+  it.each([
+    'insufficient_permissions',
+    'insufficient_permission',
+    'permission_denied',
+    'permission_error',
+  ])('classifies permission code %s', (code) => {
+    expect(createProviderFrameError(207, 'access rejected', 'provider error', code)).toMatchObject({
+      kind: 'auth',
+      details: { status: 207, reason: 'permission_denied', upstreamCode: code },
+    });
+  });
+
+  it('keeps generic rate limits unqualified and invalid keys classified as authentication', () => {
+    expect(
+      createProviderFrameError(
+        207,
+        'requests arriving too quickly',
+        'provider error',
+        'rate_limit',
+      ),
+    ).toMatchObject({ kind: 'rate_limit', details: { status: 207 } });
+    expect(
+      createProviderFrameError(207, 'key rejected', 'provider error', 'invalid_api_key'),
+    ).toMatchObject({ kind: 'auth', details: { status: 207, reason: 'invalid_key' } });
+    expect(
+      createProviderFrameError(207, 'requests arriving too quickly', 'provider error', 'rate_limit')
+        .details.reason,
+    ).toBeUndefined();
+  });
+
+  it.each(['rate_limit_error', 'rate_limit', 'rate_limited', 'too_many_requests'])(
+    'refines canonical rate-limit code %s only for strong quota evidence',
+    (code) => {
+      expect(
+        createProviderFrameError(207, 'credit quota exhausted', 'provider error', code),
+      ).toMatchObject({ kind: 'rate_limit', details: { reason: 'quota_exceeded' } });
+      expect(
+        createProviderFrameError(207, 'requested model not found', 'provider error', code),
+      ).toMatchObject({ kind: 'rate_limit' });
+      expect(
+        createProviderFrameError(207, 'provider overloaded', 'provider error', code),
+      ).toMatchObject({ kind: 'rate_limit' });
+      expect(
+        createProviderFrameError(207, 'requested model not found', 'provider error', code).details
+          .reason,
+      ).toBeUndefined();
+      expect(
+        createProviderFrameError(207, 'provider overloaded', 'provider error', code).details.reason,
+      ).toBeUndefined();
+    },
+  );
+
+  it.each([
+    ['overloaded_error', 'current quota is exhausted', 'overloaded', 'upstream_error'],
+    ['invalid_request_error', 'quota exceeded', 'protocol', 'invalid_request'],
+    ['model_not_found', 'rate limit reached', 'protocol', 'model_not_found'],
+    ['invalid_api_key', 'permission denied for this operation', 'auth', 'invalid_key'],
+  ])('prefers canonical code %s over conflicting message text', (code, message, kind, reason) => {
+    expect(createProviderFrameError(207, message, 'provider error', code)).toMatchObject({
+      kind,
+      details: { status: 207, reason, upstreamCode: code, upstreamMessage: message },
+    });
+  });
+
+  it('uses message heuristics when the code is absent or unknown', () => {
+    expect(createProviderFrameError(207, 'current quota is zero', 'provider error')).toMatchObject({
+      kind: 'rate_limit',
+      details: { reason: 'quota_exceeded' },
+    });
+    expect(
+      createProviderFrameError(207, 'provider overloaded', 'provider error', 'vendor_error'),
+    ).toMatchObject({ kind: 'overloaded', details: { reason: 'upstream_error' } });
+  });
+});
 
 describe('normalizeHttpError (docs/03 §7)', () => {
   it.each([

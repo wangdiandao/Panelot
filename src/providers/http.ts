@@ -70,6 +70,115 @@ export function createResponseFormatError(
   return new ProviderError(kind, details.upstreamMessage ?? fallback, undefined, details);
 }
 
+function createProviderFrameDetails(
+  status: number,
+  upstreamMessage: unknown,
+  fallback: string,
+  upstreamCode?: unknown,
+): ProviderErrorDetails {
+  const message = sanitizeUpstreamText(
+    typeof upstreamMessage === 'string' ? upstreamMessage : fallback,
+  );
+  const code =
+    typeof upstreamCode === 'string' || typeof upstreamCode === 'number'
+      ? sanitizeUpstreamText(String(upstreamCode)) || undefined
+      : undefined;
+  const raw = sanitizeUpstreamText([code, message].filter(Boolean).join(' 路 '));
+  return {
+    status,
+    upstreamCode: code,
+    upstreamMessage: message || undefined,
+    raw: raw || undefined,
+  };
+}
+
+/** Classify canonical structured error frames carried inside a successful stream response. */
+export function createProviderFrameError(
+  status: number,
+  upstreamMessage: unknown,
+  fallback: string,
+  upstreamCode?: unknown,
+): ProviderError {
+  const details = createProviderFrameDetails(status, upstreamMessage, fallback, upstreamCode);
+  const code = details.upstreamCode?.toLowerCase().replace(/[\s-]+/g, '_') ?? '';
+  const message = details.upstreamMessage?.toLowerCase() ?? '';
+
+  let kind: ProviderErrorKind = 'protocol';
+  let reason: ProviderErrorReason | undefined = 'response_format';
+  let knownCode = false;
+
+  if (
+    /^(?:insufficient_permissions?|permission_denied|permission_error|forbidden|access_denied)$/.test(
+      code,
+    )
+  ) {
+    knownCode = true;
+    kind = 'auth';
+    reason = 'permission_denied';
+  } else if (
+    /^(?:auth|auth_error|authentication_error|invalid_api_key|invalid_key|unauthorized)$/.test(code)
+  ) {
+    knownCode = true;
+    kind = 'auth';
+    reason = 'invalid_key';
+  } else if (/^insufficient_(?:quota|balance|credits?)$/.test(code)) {
+    knownCode = true;
+    kind = 'rate_limit';
+    reason = 'quota_exceeded';
+  } else if (/(?:^|_)(?:rate_limit|rate_limited|too_many_requests)(?:_|$)/.test(code)) {
+    knownCode = true;
+    kind = 'rate_limit';
+    reason = isQuotaError(status, message) ? 'quota_exceeded' : undefined;
+  } else if (/^(?:overloaded|overloaded_error|server_overload|server_overloaded)$/.test(code)) {
+    knownCode = true;
+    kind = 'overloaded';
+    reason = 'upstream_error';
+  } else if (/^(?:model_not_found|unknown_model|model_missing|invalid_model)$/.test(code)) {
+    knownCode = true;
+    reason = 'model_not_found';
+  } else if (
+    /^(?:invalid_request|invalid_request_error|bad_request|validation_error)$/.test(code)
+  ) {
+    knownCode = true;
+    reason = 'invalid_request';
+  }
+
+  if (!knownCode) {
+    if (/\b(?:permission denied|permission error|forbidden|access denied)\b/.test(message)) {
+      kind = 'auth';
+      reason = 'permission_denied';
+    } else if (
+      /\b(?:invalid api key|invalid key|unauthorized|authentication error)\b/.test(message)
+    ) {
+      kind = 'auth';
+      reason = 'invalid_key';
+    } else if (
+      /\b(?:quota exceeded|current quota|insufficient (?:balance|credits?))\b/.test(message)
+    ) {
+      kind = 'rate_limit';
+      reason = 'quota_exceeded';
+    } else if (/\brate[\s_-]*limit(?:ed|ing)?\b|\btoo many requests\b/.test(message)) {
+      kind = 'rate_limit';
+      reason = undefined;
+    } else if (/\b(?:server|provider)\s+overload(?:ed)?\b/.test(message)) {
+      kind = 'overloaded';
+      reason = 'upstream_error';
+    } else if (/\bmodel\b.{0,24}\b(?:does not exist|not found|unavailable)\b/.test(message)) {
+      reason = 'model_not_found';
+    } else if (/\b(?:invalid request|request validation (?:failed|error))\b/.test(message)) {
+      reason = 'invalid_request';
+    }
+  }
+
+  const classifiedDetails = reason ? { ...details, reason } : details;
+  return new ProviderError(
+    kind,
+    classifiedDetails.upstreamMessage ?? fallback,
+    undefined,
+    classifiedDetails,
+  );
+}
+
 interface UpstreamDetailsResult {
   details: ProviderErrorDetails;
   searchableText: string;

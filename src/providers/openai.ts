@@ -9,7 +9,13 @@
 import type { UnifiedMessage } from '../db/sessionContext';
 import type { ContentBlock, Usage } from '../messaging/protocol';
 import { iterateSse } from './sse';
-import { createKeyRing, createResponseFormatError, normalizeHttpError, withRetry } from './http';
+import {
+  createKeyRing,
+  createProviderFrameError,
+  createResponseFormatError,
+  normalizeHttpError,
+  withRetry,
+} from './http';
 import {
   ProviderError,
   type Connection,
@@ -300,8 +306,7 @@ export class OpenAiAdapter implements ProviderAdapter {
         };
 
         if (chunk.error) {
-          throw createResponseFormatError(
-            'protocol',
+          throw createProviderFrameError(
             response.status,
             chunk.error.message,
             'provider returned error frame',
@@ -320,8 +325,12 @@ export class OpenAiAdapter implements ProviderAdapter {
             (isRecord(promptDetails) &&
               (promptDetails.cached_tokens === undefined ||
                 isTokenCount(promptDetails.cached_tokens)));
+          const hasTokenCount =
+            isTokenCount(promptTokens) ||
+            isTokenCount(completionTokens) ||
+            (isRecord(promptDetails) && isTokenCount(promptDetails.cached_tokens));
 
-          if (validPromptTokens && validCompletionTokens && validPromptDetails) {
+          if (hasTokenCount && validPromptTokens && validCompletionTokens && validPromptDetails) {
             recognizedFrame = true;
             usage = {
               input: isTokenCount(promptTokens) ? promptTokens : 0,

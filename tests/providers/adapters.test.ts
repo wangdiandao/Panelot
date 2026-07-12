@@ -1,8 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OpenAiAdapter, ThinkTagSplitter, toOpenAiMessages } from '../../src/providers/openai';
 import { AnthropicAdapter, toAnthropicMessages } from '../../src/providers/anthropic';
-import { mergeParams, type Connection, type StreamEvent } from '../../src/providers/types';
+import {
+  mergeParams,
+  ProviderError,
+  type Connection,
+  type StreamEvent,
+} from '../../src/providers/types';
 import type { UnifiedMessage } from '../../src/db/sessionContext';
+import { buildProviderErrorPresentation } from '../../src/ui/providerErrorPresentation';
 
 const conn = (overrides?: Partial<Connection>): Connection => ({
   id: 'c1',
@@ -225,14 +231,24 @@ describe('AnthropicAdapter streaming', () => {
     expect(headers['anthropic-dangerous-direct-browser-access']).toBe('true');
   });
 
-  it('maps overloaded_error stream frames to ProviderError overloaded', async () => {
+  it('maps overloaded_error stream frames to a non-settings overloaded presentation', async () => {
     mockFetchOnce(
       sseResponse([
         'event: error\ndata: {"type":"error","error":{"type":"overloaded_error","message":"busy"}}\n\n',
       ]),
     );
-    await expect(new AnthropicAdapter(aconn).stream(baseReq).final()).rejects.toMatchObject({
+    const error = (await new AnthropicAdapter(aconn)
+      .stream(baseReq)
+      .final()
+      .catch((caught: unknown) => caught)) as ProviderError;
+
+    expect(error).toMatchObject({
       kind: 'overloaded',
+      details: { status: 200, reason: 'upstream_error', upstreamCode: 'overloaded_error' },
+    });
+    expect(buildProviderErrorPresentation(error)).toMatchObject({
+      summaryKey: 'error.reason.upstream_error',
+      opensSettings: false,
     });
   });
 });
@@ -496,6 +512,29 @@ describe('provider response-format diagnostics', () => {
     expect(final.usage).toEqual({ input: 0, output: 0 });
   });
 
+  it('does not recognize an empty OpenAI usage object as a provider frame', async () => {
+    mockFetchOnce(sseResponse(['data: {"usage":{}}\n\n'], 206));
+
+    await expect(new OpenAiAdapter(conn()).stream(baseReq).final()).rejects.toMatchObject({
+      kind: 'protocol',
+      details: { status: 206, reason: 'response_format' },
+    });
+  });
+
+  it('ignores an empty OpenAI usage object before a later valid frame', async () => {
+    mockFetchOnce(
+      sseResponse([
+        'data: {"usage":{}}\n\n',
+        'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n',
+      ]),
+    );
+
+    await expect(new OpenAiAdapter(conn()).stream(baseReq).final()).resolves.toMatchObject({
+      message: [{ type: 'text', text: 'ok' }],
+      usage: { input: 0, output: 0 },
+    });
+  });
+
   it('rejects non-array OpenAI tool calls as response_format with the response status', async () => {
     mockFetchOnce(
       sseResponse(['data: {"choices":[{"delta":{"tool_calls":{"index":0}}}]}\n\n'], 206),
@@ -664,7 +703,7 @@ describe('provider response-format diagnostics', () => {
     ).resolves.toMatchObject({ message: [], toolCalls: [], usage: { input: 0, output: 0 } });
   });
 
-  it('marks an OpenAI provider error frame as response_format and redacts credentials', async () => {
+  it('keeps an unknown OpenAI provider error frame as response_format and redacts credentials', async () => {
     mockFetchOnce(
       sseResponse([
         'data: {"error":{"code":"bad_frame","message":"api_key=sk-supersecret rejected"}}\n\n',
@@ -682,7 +721,122 @@ describe('provider response-format diagnostics', () => {
     });
   });
 
-  it('marks an Anthropic provider error frame as response_format and redacts credentials', async () => {
+  it.each([
+    {
+      name: 'OpenAI invalid key',
+      make: () => new OpenAiAdapter(conn()),
+      frame:
+        'data: {"error":{"code":"invalid_api_key","message":"api_key=sk-supersecret rejected"}}\n\n',
+      kind: 'auth',
+      reason: 'invalid_key',
+    },
+    {
+      name: 'Anthropic authentication',
+      make: () =>
+        new AnthropicAdapter(conn({ kind: 'anthropic', baseUrl: 'https://api.anthropic.com' })),
+      frame:
+        'event: error\ndata: {"type":"error","error":{"type":"authentication_error","message":"Bearer secret-token rejected"}}\n\n',
+      kind: 'auth',
+      reason: 'invalid_key',
+    },
+    {
+      name: 'OpenAI rate limit',
+      make: () => new OpenAiAdapter(conn()),
+      frame:
+        'data: {"error":{"code":"rate_limit_exceeded","message":"requests are arriving too quickly"}}\n\n',
+      kind: 'rate_limit',
+      reason: undefined,
+    },
+    {
+      name: 'Anthropic quota limit',
+      make: () =>
+        new AnthropicAdapter(conn({ kind: 'anthropic', baseUrl: 'https://api.anthropic.com' })),
+      frame:
+        'event: error\ndata: {"type":"error","error":{"type":"rate_limit_error","message":"credit quota exhausted"}}\n\n',
+      kind: 'rate_limit',
+      reason: 'quota_exceeded',
+    },
+    {
+      name: 'OpenAI insufficient quota',
+      make: () => new OpenAiAdapter(conn()),
+      frame:
+        'data: {"error":{"code":"insufficient_quota","message":"Current quota exceeded for this account"}}\n\n',
+      kind: 'rate_limit',
+      reason: 'quota_exceeded',
+      upstreamCode: 'insufficient_quota',
+      upstreamMessage: 'Current quota exceeded for this account',
+    },
+    {
+      name: 'Anthropic insufficient permissions',
+      make: () =>
+        new AnthropicAdapter(conn({ kind: 'anthropic', baseUrl: 'https://api.anthropic.com' })),
+      frame:
+        'event: error\ndata: {"type":"error","error":{"type":"insufficient_permissions","message":"Key lacks access to this model"}}\n\n',
+      kind: 'auth',
+      reason: 'permission_denied',
+      upstreamCode: 'insufficient_permissions',
+      upstreamMessage: 'Key lacks access to this model',
+    },
+  ])(
+    'classifies an in-band $name frame without response_format',
+    async ({ make, frame, kind, reason, upstreamCode, upstreamMessage }) => {
+      mockFetchOnce(sseResponse([frame], 207));
+
+      const error = await make()
+        .stream(baseReq)
+        .final()
+        .catch((caught: unknown) => caught);
+
+      expect(error).toMatchObject({ kind, details: { status: 207 } });
+      if (upstreamCode) {
+        expect(error).toMatchObject({ details: { upstreamCode, upstreamMessage } });
+      }
+      if (reason) {
+        expect(error).toMatchObject({ details: { reason } });
+      } else {
+        expect(error).not.toMatchObject({ details: { reason: 'response_format' } });
+        expect((error as { details?: { reason?: string } }).details?.reason).toBeUndefined();
+      }
+    },
+  );
+
+  it('classifies OpenAI model and invalid-request error codes', async () => {
+    mockFetchOnce(
+      sseResponse(
+        [
+          'data: {"error":{"code":"model_not_found","message":"requested model is unavailable"}}\n\n',
+        ],
+        208,
+      ),
+    );
+
+    await expect(new OpenAiAdapter(conn()).stream(baseReq).final()).rejects.toMatchObject({
+      kind: 'protocol',
+      details: { status: 208, reason: 'model_not_found', upstreamCode: 'model_not_found' },
+    });
+  });
+
+  it('classifies Anthropic invalid_request_error frames', async () => {
+    mockFetchOnce(
+      sseResponse(
+        [
+          'event: error\ndata: {"type":"error","error":{"type":"invalid_request_error","message":"request schema invalid"}}\n\n',
+        ],
+        209,
+      ),
+    );
+
+    await expect(
+      new AnthropicAdapter(conn({ kind: 'anthropic', baseUrl: 'https://api.anthropic.com' }))
+        .stream(baseReq)
+        .final(),
+    ).rejects.toMatchObject({
+      kind: 'protocol',
+      details: { status: 209, reason: 'invalid_request', upstreamCode: 'invalid_request_error' },
+    });
+  });
+
+  it('classifies an Anthropic authentication frame and redacts credentials', async () => {
     mockFetchOnce(
       sseResponse([
         'event: error\ndata: {"type":"error","error":{"type":"authentication_error","message":"Bearer secret-token rejected"}}\n\n',
@@ -694,10 +848,10 @@ describe('provider response-format diagnostics', () => {
         .stream(baseReq)
         .final(),
     ).rejects.toMatchObject({
-      kind: 'protocol',
+      kind: 'auth',
       details: {
         status: 200,
-        reason: 'response_format',
+        reason: 'invalid_key',
         upstreamCode: 'authentication_error',
         upstreamMessage: 'Bearer [REDACTED] rejected',
       },
