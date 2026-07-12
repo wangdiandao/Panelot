@@ -23,6 +23,7 @@ import {
   type UserInput,
 } from '../messaging/protocol';
 import { createPortTransport, type EngineTransport } from '../messaging/transport';
+import type { ProviderErrorDetails } from '../providers/types';
 import { SettingsStore } from '../settings/store';
 import { hostPermissionBroker } from '../permissions/hostPermissionBroker';
 
@@ -70,7 +71,12 @@ export interface ThreadUiState {
    */
   queuedTexts: string[];
   todos: { text: string; done: boolean }[];
-  lastError: { message: string; retryable: boolean; kind?: string } | null;
+  lastError: {
+    message: string;
+    retryable: boolean;
+    kind?: string;
+    details?: ProviderErrorDetails;
+  } | null;
   /** Last submitted input, kept for the error-banner retry (docs/09 §7). */
   lastInput: UserInput | null;
   /** Tabs the agent has operated on — audit trail for the task panel (docs/09 §3.1). */
@@ -744,7 +750,12 @@ export class EngineSession {
           break;
         }
         s.setState({
-          lastError: { message: ev.message, retryable: ev.retryable, kind: ev.errorKind },
+          lastError: {
+            message: ev.message,
+            retryable: ev.retryable,
+            kind: ev.errorKind,
+            details: ev.providerDetails,
+          },
         });
         break;
       }

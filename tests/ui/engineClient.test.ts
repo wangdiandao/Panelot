@@ -203,6 +203,18 @@ describe('session outbox', () => {
         protocol: ENGINE_PROTOCOL,
         schemaHash: ENGINE_SCHEMA_HASH,
       });
+      first.emit({
+        type: 'error',
+        code: 'provider_error',
+        message: 'unexpected HTTP 404',
+        retryable: false,
+        errorKind: 'protocol',
+        providerDetails: { status: 404, reason: 'endpoint_not_found' },
+      });
+      expect(session.store.getState().lastError).toMatchObject({
+        kind: 'protocol',
+        details: { status: 404, reason: 'endpoint_not_found' },
+      });
       session.createThread();
       const original = first.sent.find((op) => op.type === 'thread.create')!;
 
