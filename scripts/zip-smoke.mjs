@@ -1,7 +1,7 @@
 import { readFile, readdir } from 'node:fs/promises';
 import JSZip from 'jszip';
 
-const requested = process.argv.slice(2);
+const requested = process.argv.slice(2).filter((argument) => argument !== '--');
 const packageJson = JSON.parse(await readFile('package.json', 'utf8'));
 const paths =
   requested.length > 0
