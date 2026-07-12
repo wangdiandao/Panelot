@@ -15,7 +15,7 @@ const conn = (overrides?: Partial<Connection>): Connection => ({
 });
 
 /** Build a streaming Response from SSE frames. */
-function sseResponse(frames: string[]): Response {
+function sseResponse(frames: string[], status = 200): Response {
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       const enc = new TextEncoder();
@@ -23,7 +23,7 @@ function sseResponse(frames: string[]): Response {
       controller.close();
     },
   });
-  return new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+  return new Response(stream, { status, headers: { 'content-type': 'text/event-stream' } });
 }
 
 function mockFetchOnce(response: Response) {
@@ -105,7 +105,12 @@ describe('OpenAiAdapter streaming', () => {
   });
 
   it('honors quirks in the request payload', async () => {
-    const spy = mockFetchOnce(sseResponse(['data: [DONE]\n\n']));
+    const spy = mockFetchOnce(
+      sseResponse([
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+        'data: [DONE]\n\n',
+      ]),
+    );
     await new OpenAiAdapter(
       conn({
         quirks: { noStreamOptions: true, maxTokensField: 'max_completion_tokens' },
@@ -263,6 +268,440 @@ describe('Anthropic message conversion', () => {
       { type: 'tool_result', tool_use_id: 'a', content: 'r1' },
       { type: 'tool_result', tool_use_id: 'b', content: 'r2', is_error: true },
     ]);
+  });
+});
+
+describe('provider verification diagnostics', () => {
+  it('preserves OpenAI chat-probe status and upstream details', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: [{ id: 'deepseek-v4-flash' }] }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ error: { code: 'invalid_request', message: 'invalid tools' } }),
+          { status: 400 },
+        ),
+      );
+
+    await expect(new OpenAiAdapter(conn()).verify()).resolves.toMatchObject({
+      failure: 'protocol_mismatch',
+      detail: 'invalid tools',
+      details: {
+        status: 400,
+        reason: 'invalid_request',
+        upstreamCode: 'invalid_request',
+        upstreamMessage: 'invalid tools',
+      },
+    });
+  });
+
+  it('preserves Anthropic chat-probe status and upstream details', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: [{ id: 'claude-test' }] }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ error: { type: 'invalid_request_error', message: 'invalid tools' } }),
+          { status: 400 },
+        ),
+      );
+
+    await expect(
+      new AnthropicAdapter(
+        conn({ kind: 'anthropic', baseUrl: 'https://api.anthropic.com' }),
+      ).verify(),
+    ).resolves.toMatchObject({
+      failure: 'protocol_mismatch',
+      detail: 'invalid tools',
+      details: {
+        status: 400,
+        reason: 'invalid_request',
+        upstreamCode: 'invalid_request_error',
+        upstreamMessage: 'invalid tools',
+      },
+    });
+  });
+
+  it('preserves broad invalid-key compatibility while preferring the upstream message', async () => {
+    mockFetchOnce(
+      new Response(
+        JSON.stringify({ error: { code: 'invalid_api_key', message: 'Key was rejected' } }),
+        { status: 401 },
+      ),
+    );
+
+    await expect(new OpenAiAdapter(conn()).verify()).resolves.toMatchObject({
+      failure: 'invalid_key',
+      detail: 'Key was rejected',
+      details: {
+        status: 401,
+        reason: 'invalid_key',
+        upstreamMessage: 'Key was rejected',
+      },
+    });
+  });
+});
+
+describe('provider response-format diagnostics', () => {
+  const adapters = [
+    ['OpenAI', () => new OpenAiAdapter(conn())],
+    [
+      'Anthropic',
+      () => new AnthropicAdapter(conn({ kind: 'anthropic', baseUrl: 'https://api.anthropic.com' })),
+    ],
+  ] as const;
+
+  it.each(adapters)(
+    'marks a successful %s response without a body as response_format',
+    async (_name, make) => {
+      mockFetchOnce(new Response(null, { status: 200 }));
+
+      await expect(make().stream(baseReq).final()).rejects.toMatchObject({
+        kind: 'protocol',
+        details: {
+          status: 200,
+          reason: 'response_format',
+          upstreamMessage: 'response has no body',
+        },
+      });
+    },
+  );
+
+  it('preserves an OpenAI 204 status when the response has no body', async () => {
+    mockFetchOnce(new Response(null, { status: 204 }));
+
+    await expect(new OpenAiAdapter(conn()).stream(baseReq).final()).rejects.toMatchObject({
+      kind: 'protocol',
+      details: {
+        status: 204,
+        reason: 'response_format',
+        upstreamMessage: 'response has no body',
+      },
+    });
+  });
+
+  it('preserves an Anthropic 206 status for an empty readable stream', async () => {
+    mockFetchOnce(new Response('', { status: 206 }));
+
+    await expect(
+      new AnthropicAdapter(conn({ kind: 'anthropic', baseUrl: 'https://api.anthropic.com' }))
+        .stream(baseReq)
+        .final(),
+    ).rejects.toMatchObject({
+      kind: 'protocol',
+      details: {
+        status: 206,
+        reason: 'response_format',
+        upstreamMessage: 'provider response contained no recognizable frames',
+      },
+    });
+  });
+
+  it.each(adapters)('rejects an empty readable %s response body', async (_name, make) => {
+    mockFetchOnce(new Response('', { status: 200 }));
+
+    await expect(make().stream(baseReq).final()).rejects.toMatchObject({
+      kind: 'protocol',
+      details: {
+        status: 200,
+        reason: 'response_format',
+        upstreamMessage: 'provider response contained no recognizable frames',
+      },
+    });
+  });
+
+  it.each(adapters)('rejects a non-SSE %s response body', async (_name, make) => {
+    mockFetchOnce(new Response('<html>upstream proxy</html>', { status: 200 }));
+
+    await expect(make().stream(baseReq).final()).rejects.toMatchObject({
+      details: { reason: 'response_format' },
+    });
+  });
+
+  it.each(adapters)('rejects malformed JSON-only %s frames', async (_name, make) => {
+    mockFetchOnce(sseResponse(['data: {bad json}\n\n']));
+
+    await expect(make().stream(baseReq).final()).rejects.toMatchObject({
+      details: { reason: 'response_format' },
+    });
+  });
+
+  it.each(adapters)('rejects unknown JSON-only %s frames', async (_name, make) => {
+    mockFetchOnce(sseResponse(['data: {"unknown":"frame"}\n\n']));
+
+    await expect(make().stream(baseReq).final()).rejects.toMatchObject({
+      details: { reason: 'response_format' },
+    });
+  });
+
+  it.each(adapters)('rejects null JSON-only %s frames as response_format', async (_name, make) => {
+    mockFetchOnce(sseResponse(['data: null\n\n']));
+
+    await expect(make().stream(baseReq).final()).rejects.toMatchObject({
+      kind: 'protocol',
+      details: { reason: 'response_format' },
+    });
+  });
+
+  it('does not recognize malformed OpenAI usage or delta shapes', async () => {
+    mockFetchOnce(
+      sseResponse([
+        'data: {"usage":"not-an-object"}\n\n',
+        'data: {"choices":[{"delta":"not-an-object"}]}\n\n',
+      ]),
+    );
+
+    await expect(new OpenAiAdapter(conn()).stream(baseReq).final()).rejects.toMatchObject({
+      details: { reason: 'response_format' },
+    });
+  });
+
+  it('rejects malformed-only OpenAI usage frames with the response status', async () => {
+    mockFetchOnce(
+      sseResponse(
+        [
+          'data: {"usage":{"prompt_tokens":"3"}}\n\n',
+          'data: {"usage":{"completion_tokens":-1}}\n\n',
+          'data: {"usage":{"prompt_tokens_details":[]}}\n\n',
+          'data: {"usage":{"prompt_tokens_details":null}}\n\n',
+          'data: {"usage":{"prompt_tokens_details":{"cached_tokens":1.5}}}\n\n',
+        ],
+        206,
+      ),
+    );
+
+    await expect(new OpenAiAdapter(conn()).stream(baseReq).final()).rejects.toMatchObject({
+      kind: 'protocol',
+      details: { status: 206, reason: 'response_format' },
+    });
+  });
+
+  it('drops malformed OpenAI usage before a later valid model frame', async () => {
+    mockFetchOnce(
+      sseResponse([
+        'data: {"usage":{"prompt_tokens":99,"completion_tokens":{},"prompt_tokens_details":{"cached_tokens":"7"}}}\n\n',
+        'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
+      ]),
+    );
+
+    const stream = new OpenAiAdapter(conn()).stream(baseReq);
+    const events: StreamEvent[] = [];
+    for await (const event of stream) events.push(event);
+    const final = await stream.final();
+
+    expect(events).toEqual([{ type: 'text', delta: 'ok' }]);
+    expect(final.message).toEqual([{ type: 'text', text: 'ok' }]);
+    expect(final.usage).toEqual({ input: 0, output: 0 });
+  });
+
+  it('rejects non-array OpenAI tool calls as response_format with the response status', async () => {
+    mockFetchOnce(
+      sseResponse(['data: {"choices":[{"delta":{"tool_calls":{"index":0}}}]}\n\n'], 206),
+    );
+
+    await expect(new OpenAiAdapter(conn()).stream(baseReq).final()).rejects.toMatchObject({
+      kind: 'protocol',
+      details: { status: 206, reason: 'response_format' },
+    });
+  });
+
+  it('rejects malformed OpenAI tool-call entries without leaking a TypeError', async () => {
+    mockFetchOnce(
+      sseResponse(
+        [
+          'data: {"choices":[{"delta":{"tool_calls":[null,"bad",[],{"id":"missing-index"},{"index":"0"},{"index":0,"function":"bad"},{"index":1,"function":{"name":3}}]}}]}\n\n',
+        ],
+        207,
+      ),
+    );
+
+    await expect(new OpenAiAdapter(conn()).stream(baseReq).final()).rejects.toMatchObject({
+      kind: 'protocol',
+      details: { status: 207, reason: 'response_format' },
+    });
+  });
+
+  it('tolerates malformed OpenAI tool calls when a later frame is recognizable', async () => {
+    mockFetchOnce(
+      sseResponse([
+        'data: {"choices":[{"delta":{"tool_calls":[null,{"index":0,"function":"bad"}]}}]}\n\n',
+        'data: {"choices":[{"delta":{"content":"still works"}}]}\n\n',
+      ]),
+    );
+
+    await expect(new OpenAiAdapter(conn()).stream(baseReq).final()).resolves.toMatchObject({
+      message: [{ type: 'text', text: 'still works' }],
+    });
+  });
+
+  it('tolerates OpenAI junk before a recognizable usage-only frame', async () => {
+    mockFetchOnce(
+      sseResponse([
+        'data: {bad json}\n\n',
+        'data: {"unknown":"frame"}\n\n',
+        'data: {"usage":{"prompt_tokens":3,"completion_tokens":1}}\n\n',
+      ]),
+    );
+
+    await expect(new OpenAiAdapter(conn()).stream(baseReq).final()).resolves.toMatchObject({
+      usage: { input: 3, output: 1 },
+    });
+  });
+
+  it('tolerates Anthropic junk before recognizable protocol frames', async () => {
+    mockFetchOnce(
+      sseResponse([
+        'data: {bad json}\n\n',
+        'data: {"unknown":"frame"}\n\n',
+        'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":3}}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+      ]),
+    );
+
+    await expect(
+      new AnthropicAdapter(conn({ kind: 'anthropic', baseUrl: 'https://api.anthropic.com' }))
+        .stream(baseReq)
+        .final(),
+    ).resolves.toMatchObject({ usage: { input: 3, output: 0 } });
+  });
+
+  it('rejects malformed-only Anthropic model frames with the response status', async () => {
+    mockFetchOnce(
+      sseResponse(
+        [
+          'data: {"type":"message_start","message":[]}' + '\n\n',
+          'data: {"type":"message_start","message":{"usage":{"input_tokens":"3","cache_read_input_tokens":{}}}}' +
+            '\n\n',
+          'data: {"type":"content_block_start","index":"0","content_block":{"type":"tool_use","id":{},"name":[]}}' +
+            '\n\n',
+          'data: {"type":"content_block_start","index":0,"content_block":null}' + '\n\n',
+          'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":{}}}' +
+            '\n\n',
+          'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":{}}}' +
+            '\n\n',
+          'data: {"type":"message_delta","delta":[],"usage":{"output_tokens":[]}}' + '\n\n',
+          'data: {"type":"content_block_stop","index":"0"}' + '\n\n',
+        ],
+        206,
+      ),
+    );
+
+    await expect(
+      new AnthropicAdapter(conn({ kind: 'anthropic', baseUrl: 'https://api.anthropic.com' }))
+        .stream(baseReq)
+        .final(),
+    ).rejects.toMatchObject({
+      kind: 'protocol',
+      details: { status: 206, reason: 'response_format' },
+    });
+  });
+
+  it('drops malformed Anthropic values before later valid model frames', async () => {
+    mockFetchOnce(
+      sseResponse([
+        'data: {"type":"content_block_start","index":"0","content_block":{"type":"tool_use","id":{},"name":[]}}' +
+          '\n\n',
+        'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":{}}}' +
+          '\n\n',
+        'data: {"type":"message_delta","delta":{"stop_reason":[]},"usage":{"output_tokens":{}}}' +
+          '\n\n',
+        'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tool-1","name":"click"}}' +
+          '\n\n',
+        'data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"ref\\":\\"s1\\"}"}}' +
+          '\n\n',
+        'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}' +
+          '\n\n',
+        'data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":2}}' +
+          '\n\n',
+      ]),
+    );
+
+    const stream = new AnthropicAdapter(
+      conn({ kind: 'anthropic', baseUrl: 'https://api.anthropic.com' }),
+    ).stream(baseReq);
+    const events: StreamEvent[] = [];
+    for await (const event of stream) events.push(event);
+    const final = await stream.final();
+
+    expect(events).toEqual([
+      { type: 'tool_call_partial', index: 1, id: 'tool-1', name: 'click', argsDelta: '' },
+      { type: 'tool_call_partial', index: 1, argsDelta: '{"ref":"s1"}' },
+      { type: 'text', delta: 'ok' },
+      { type: 'usage', usage: { input: 0, output: 2 } },
+    ]);
+    expect(final.message).toEqual([{ type: 'text', text: 'ok' }]);
+    expect(final.toolCalls).toEqual([{ id: 'tool-1', name: 'click', params: { ref: 's1' } }]);
+    expect(final.usage).toEqual({ input: 0, output: 2 });
+  });
+
+  it('does not treat an Anthropic ping as a model response', async () => {
+    mockFetchOnce(sseResponse(['data: {"type":"ping"}\n\n'], 207));
+
+    await expect(
+      new AnthropicAdapter(conn({ kind: 'anthropic', baseUrl: 'https://api.anthropic.com' }))
+        .stream(baseReq)
+        .final(),
+    ).rejects.toMatchObject({
+      kind: 'protocol',
+      details: { status: 207, reason: 'response_format' },
+    });
+  });
+
+  it('accepts shape-valid Anthropic message lifecycle frames as an empty model response', async () => {
+    mockFetchOnce(
+      sseResponse([
+        'data: {"type":"message_start","message":{"usage":{"input_tokens":0}}}\n\n',
+        'data: {"type":"message_stop"}\n\n',
+      ]),
+    );
+
+    await expect(
+      new AnthropicAdapter(conn({ kind: 'anthropic', baseUrl: 'https://api.anthropic.com' }))
+        .stream(baseReq)
+        .final(),
+    ).resolves.toMatchObject({ message: [], toolCalls: [], usage: { input: 0, output: 0 } });
+  });
+
+  it('marks an OpenAI provider error frame as response_format and redacts credentials', async () => {
+    mockFetchOnce(
+      sseResponse([
+        'data: {"error":{"code":"bad_frame","message":"api_key=sk-supersecret rejected"}}\n\n',
+      ]),
+    );
+
+    await expect(new OpenAiAdapter(conn()).stream(baseReq).final()).rejects.toMatchObject({
+      kind: 'protocol',
+      details: {
+        status: 200,
+        reason: 'response_format',
+        upstreamCode: 'bad_frame',
+        upstreamMessage: 'api_key=[REDACTED] rejected',
+      },
+    });
+  });
+
+  it('marks an Anthropic provider error frame as response_format and redacts credentials', async () => {
+    mockFetchOnce(
+      sseResponse([
+        'event: error\ndata: {"type":"error","error":{"type":"authentication_error","message":"Bearer secret-token rejected"}}\n\n',
+      ]),
+    );
+
+    await expect(
+      new AnthropicAdapter(conn({ kind: 'anthropic', baseUrl: 'https://api.anthropic.com' }))
+        .stream(baseReq)
+        .final(),
+    ).rejects.toMatchObject({
+      kind: 'protocol',
+      details: {
+        status: 200,
+        reason: 'response_format',
+        upstreamCode: 'authentication_error',
+        upstreamMessage: 'Bearer [REDACTED] rejected',
+      },
+    });
   });
 });
 

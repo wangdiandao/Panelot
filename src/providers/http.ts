@@ -6,7 +6,12 @@
  * the model's domain (docs/03 §7).
  */
 
-import { ProviderError, type ProviderErrorDetails, type ProviderErrorReason } from './types';
+import {
+  ProviderError,
+  type ProviderErrorDetails,
+  type ProviderErrorKind,
+  type ProviderErrorReason,
+} from './types';
 
 const MAX_UPSTREAM_TEXT = 2000;
 
@@ -23,6 +28,31 @@ function redactCredentials(value: string): string {
 function sanitizeUpstreamText(value: string): string {
   const visible = value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
   return redactCredentials(visible).trim().slice(0, MAX_UPSTREAM_TEXT);
+}
+
+export function createResponseFormatError(
+  kind: ProviderErrorKind,
+  status: number,
+  upstreamMessage: unknown,
+  fallback: string,
+  upstreamCode?: unknown,
+): ProviderError {
+  const message = sanitizeUpstreamText(
+    typeof upstreamMessage === 'string' ? upstreamMessage : fallback,
+  );
+  const code =
+    typeof upstreamCode === 'string' || typeof upstreamCode === 'number'
+      ? sanitizeUpstreamText(String(upstreamCode)) || undefined
+      : undefined;
+  const raw = sanitizeUpstreamText([code, message].filter(Boolean).join(' · '));
+  const details: ProviderErrorDetails = {
+    status,
+    reason: 'response_format',
+    upstreamCode: code,
+    upstreamMessage: message || undefined,
+    raw: raw || undefined,
+  };
+  return new ProviderError(kind, details.upstreamMessage ?? fallback, undefined, details);
 }
 
 interface UpstreamDetailsResult {

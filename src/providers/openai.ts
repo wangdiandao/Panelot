@@ -9,7 +9,7 @@
 import type { UnifiedMessage } from '../db/sessionContext';
 import type { ContentBlock, Usage } from '../messaging/protocol';
 import { iterateSse } from './sse';
-import { createKeyRing, normalizeHttpError, withRetry } from './http';
+import { createKeyRing, createResponseFormatError, normalizeHttpError, withRetry } from './http';
 import {
   ProviderError,
   type Connection,
@@ -22,6 +22,14 @@ import {
   type ToolSchema,
   type VerifyResult,
 } from './types';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isTokenCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
 
 // ---------------------------------------------------------------------------
 // Message conversion: UnifiedMessage → OpenAI chat format
@@ -231,6 +239,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     const partialCalls = new Map<number, PartialToolCall>();
     let usage: Usage = { input: 0, output: 0 };
     let finishReason = '';
+    let recognizedFrame = false;
     const splitter = quirks?.thinkTagReasoning ? new ThinkTagSplitter() : undefined;
 
     async function* run(): AsyncGenerator<StreamEvent> {
@@ -256,7 +265,14 @@ export class OpenAiAdapter implements ProviderAdapter {
               res.headers.get('retry-after'),
             );
           }
-          if (!res.body) throw new ProviderError('protocol', 'response has no body');
+          if (!res.body) {
+            throw createResponseFormatError(
+              'protocol',
+              res.status,
+              'response has no body',
+              'response has no body',
+            );
+          }
           return res;
         },
         { signal: req.signal },
@@ -269,82 +285,136 @@ export class OpenAiAdapter implements ProviderAdapter {
         } catch {
           continue; // tolerate junk frames from sloppy relays
         }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
         const chunk = parsed as {
           choices?: {
             delta?: {
               content?: string | null;
               reasoning_content?: string | null;
-              tool_calls?: {
-                index: number;
-                id?: string;
-                function?: { name?: string; arguments?: string };
-              }[];
+              tool_calls?: unknown;
             };
             finish_reason?: string | null;
           }[];
-          usage?: {
-            prompt_tokens?: number;
-            completion_tokens?: number;
-            prompt_tokens_details?: { cached_tokens?: number };
-          };
-          error?: { message?: string };
+          usage?: unknown;
+          error?: { code?: string | number; type?: string; message?: string };
         };
 
         if (chunk.error) {
-          throw new ProviderError(
+          throw createResponseFormatError(
             'protocol',
-            chunk.error.message ?? 'provider returned error frame',
+            response.status,
+            chunk.error.message,
+            'provider returned error frame',
+            chunk.error.code ?? chunk.error.type,
           );
         }
-        if (chunk.usage) {
-          usage = {
-            input: chunk.usage.prompt_tokens ?? 0,
-            output: chunk.usage.completion_tokens ?? 0,
-            cacheRead: chunk.usage.prompt_tokens_details?.cached_tokens,
-          };
-          yield { type: 'usage', usage };
-        }
+        if (isRecord(chunk.usage)) {
+          const promptTokens = chunk.usage.prompt_tokens;
+          const completionTokens = chunk.usage.completion_tokens;
+          const promptDetails = chunk.usage.prompt_tokens_details;
+          const validPromptTokens = promptTokens === undefined || isTokenCount(promptTokens);
+          const validCompletionTokens =
+            completionTokens === undefined || isTokenCount(completionTokens);
+          const validPromptDetails =
+            promptDetails === undefined ||
+            (isRecord(promptDetails) &&
+              (promptDetails.cached_tokens === undefined ||
+                isTokenCount(promptDetails.cached_tokens)));
 
-        const choice = chunk.choices?.[0];
-        if (!choice) continue;
-        if (choice.finish_reason) finishReason = choice.finish_reason;
-        const delta = choice.delta;
-        if (!delta) continue;
-
-        if (typeof delta.reasoning_content === 'string' && delta.reasoning_content !== '') {
-          reasoningParts.push(delta.reasoning_content);
-          yield { type: 'reasoning', delta: delta.reasoning_content };
-        }
-        if (typeof delta.content === 'string' && delta.content !== '') {
-          if (splitter) {
-            const { text, reasoning } = splitter.feed(delta.content);
-            if (reasoning) {
-              reasoningParts.push(reasoning);
-              yield { type: 'reasoning', delta: reasoning };
-            }
-            if (text) {
-              textParts.push(text);
-              yield { type: 'text', delta: text };
-            }
-          } else {
-            textParts.push(delta.content);
-            yield { type: 'text', delta: delta.content };
+          if (validPromptTokens && validCompletionTokens && validPromptDetails) {
+            recognizedFrame = true;
+            usage = {
+              input: isTokenCount(promptTokens) ? promptTokens : 0,
+              output: isTokenCount(completionTokens) ? completionTokens : 0,
+              cacheRead:
+                isRecord(promptDetails) && isTokenCount(promptDetails.cached_tokens)
+                  ? promptDetails.cached_tokens
+                  : undefined,
+            };
+            yield { type: 'usage', usage };
           }
         }
-        for (const tc of delta.tool_calls ?? []) {
+
+        const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
+        if (!choice || typeof choice !== 'object') continue;
+        if (typeof choice.finish_reason === 'string') {
+          recognizedFrame = true;
+          if (choice.finish_reason) finishReason = choice.finish_reason;
+        }
+        const delta = choice.delta;
+        if (!delta || typeof delta !== 'object' || Array.isArray(delta)) continue;
+
+        if (typeof delta.reasoning_content === 'string') {
+          recognizedFrame = true;
+          if (delta.reasoning_content !== '') {
+            reasoningParts.push(delta.reasoning_content);
+            yield { type: 'reasoning', delta: delta.reasoning_content };
+          }
+        }
+        if (typeof delta.content === 'string') {
+          recognizedFrame = true;
+          if (delta.content !== '') {
+            if (splitter) {
+              const { text, reasoning } = splitter.feed(delta.content);
+              if (reasoning) {
+                reasoningParts.push(reasoning);
+                yield { type: 'reasoning', delta: reasoning };
+              }
+              if (text) {
+                textParts.push(text);
+                yield { type: 'text', delta: text };
+              }
+            } else {
+              textParts.push(delta.content);
+              yield { type: 'text', delta: delta.content };
+            }
+          }
+        }
+        const toolCalls = Array.isArray(delta.tool_calls) ? delta.tool_calls : [];
+        for (const candidate of toolCalls) {
+          if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue;
+          const tc = candidate as {
+            index?: unknown;
+            id?: unknown;
+            function?: unknown;
+          };
+          if (typeof tc.index !== 'number' || !Number.isInteger(tc.index)) continue;
+          if (tc.id !== undefined && typeof tc.id !== 'string') continue;
+          if (
+            tc.function !== undefined &&
+            (!tc.function || typeof tc.function !== 'object' || Array.isArray(tc.function))
+          ) {
+            continue;
+          }
+          const fn = tc.function as { name?: unknown; arguments?: unknown } | undefined;
+          if (fn?.name !== undefined && typeof fn.name !== 'string') continue;
+          if (fn?.arguments !== undefined && typeof fn.arguments !== 'string') continue;
+
+          recognizedFrame = true;
           const partial = partialCalls.get(tc.index) ?? { args: '' };
           if (tc.id) partial.id = tc.id;
-          if (tc.function?.name) partial.name = (partial.name ?? '') + tc.function.name;
-          if (tc.function?.arguments) partial.args += tc.function.arguments;
+          if (typeof fn?.name === 'string' && fn.name) {
+            partial.name = (partial.name ?? '') + fn.name;
+          }
+          if (typeof fn?.arguments === 'string' && fn.arguments) partial.args += fn.arguments;
           partialCalls.set(tc.index, partial);
           yield {
             type: 'tool_call_partial',
             index: tc.index,
-            id: tc.id,
-            name: tc.function?.name,
-            argsDelta: tc.function?.arguments ?? '',
+            id: typeof tc.id === 'string' ? tc.id : undefined,
+            name: typeof fn?.name === 'string' ? fn.name : undefined,
+            argsDelta: typeof fn?.arguments === 'string' ? fn.arguments : '',
           };
         }
+      }
+
+      if (!recognizedFrame) {
+        throw createResponseFormatError(
+          'protocol',
+          response.status,
+          'provider response contained no recognizable frames',
+          'provider response contained no recognizable frames',
+        );
       }
     }
 
@@ -424,7 +494,8 @@ export async function verifyConnection(
       if (e instanceof ProviderError && e.kind === 'auth') {
         result.reachable = true;
         result.failure = 'invalid_key';
-        result.detail = e.message;
+        result.detail = e.details.upstreamMessage ?? e.message;
+        result.details = e.details;
         return result;
       }
       // Unreachable or no /models — fall through to chat probe.
@@ -462,7 +533,8 @@ export async function verifyConnection(
           : e.kind === 'network'
             ? 'unreachable'
             : 'protocol_mismatch';
-      result.detail = e.message;
+      result.detail = e.details.upstreamMessage ?? e.message;
+      result.details = e.details;
     } else {
       result.failure = 'unreachable';
       result.detail = (e as Error).message;
