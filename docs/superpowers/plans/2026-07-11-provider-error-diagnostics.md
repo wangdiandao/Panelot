@@ -37,7 +37,7 @@
 - Modify: `src/providers/http.ts`
 - Test: `tests/providers/http.test.ts`
 
-- [ ] **Step 1: Write failing classification and sanitization tests**
+- [x] **Step 1: Write failing classification and sanitization tests**
 
 Add focused cases to `tests/providers/http.test.ts`:
 
@@ -79,13 +79,13 @@ it('sanitizes and caps raw upstream text', () => {
 });
 ```
 
-- [ ] **Step 2: Run the HTTP tests and verify RED**
+- [x] **Step 2: Run the HTTP tests and verify RED**
 
 Run: `pnpm vitest run tests/providers/http.test.ts`
 
 Expected: FAIL because `ProviderError.details` and the fine-grained reasons do not exist.
 
-- [ ] **Step 3: Add diagnostic types and parsing**
+- [x] **Step 3: Add diagnostic types and parsing**
 
 In `src/providers/types.ts`, define the shared payload and make the constructor backward-compatible for existing three-argument calls:
 
@@ -162,13 +162,13 @@ function readUpstreamDetails(bodyText: string): ProviderErrorDetails {
 
 Rewrite `normalizeHttpError` to set `status`, classify in the design order, preserve `Retry-After`, and return `kind: 'overloaded'` for other 5xx responses. Use the combined sanitized code/message/raw text for the finite keyword checks. Keep context-length detection ahead of general invalid-request handling.
 
-- [ ] **Step 4: Run HTTP tests and verify GREEN**
+- [x] **Step 4: Run HTTP tests and verify GREEN**
 
 Run: `pnpm vitest run tests/providers/http.test.ts`
 
 Expected: PASS, including the existing failover/backoff assertions.
 
-- [ ] **Step 5: Commit the HTTP diagnostic unit**
+- [x] **Step 5: Commit the HTTP diagnostic unit**
 
 ```bash
 git add src/providers/types.ts src/providers/http.ts tests/providers/http.test.ts
@@ -182,7 +182,7 @@ git commit -m "feat: classify provider HTTP errors"
 - Modify: `src/providers/anthropic.ts`
 - Test: `tests/providers/adapters.test.ts`
 
-- [ ] **Step 1: Write failing Verify propagation tests**
+- [x] **Step 1: Write failing Verify propagation tests**
 
 Add a `describe('provider verification diagnostics')` block:
 
@@ -211,13 +211,13 @@ it('returns status and upstream details when the chat probe is rejected', async 
 });
 ```
 
-- [ ] **Step 2: Run the adapter tests and verify RED**
+- [x] **Step 2: Run the adapter tests and verify RED**
 
 Run: `pnpm vitest run tests/providers/adapters.test.ts`
 
 Expected: FAIL because Verify drops `ProviderError.details`.
 
-- [ ] **Step 3: Copy details into Verify and mark format failures**
+- [x] **Step 3: Copy details into Verify and mark format failures**
 
 In `verifyConnection`, retain the current broad `failure` values for compatibility and add:
 
@@ -237,13 +237,13 @@ new ProviderError('protocol', 'response has no body', undefined, {
 
 Apply the same `response_format` detail to provider error frames whose structure cannot be consumed as a successful model stream.
 
-- [ ] **Step 4: Run adapter and HTTP tests and verify GREEN**
+- [x] **Step 4: Run adapter and HTTP tests and verify GREEN**
 
 Run: `pnpm vitest run tests/providers/adapters.test.ts tests/providers/http.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit adapter propagation**
+- [x] **Step 5: Commit adapter propagation**
 
 ```bash
 git add src/providers/openai.ts src/providers/anthropic.ts tests/providers/adapters.test.ts
@@ -257,7 +257,7 @@ git commit -m "feat: expose provider verify diagnostics"
 - Modify: `src/agent/loop.ts`
 - Test: `tests/agent/loop.test.ts`
 
-- [ ] **Step 1: Write a failing agent event test**
+- [x] **Step 1: Write a failing agent event test**
 
 Extend the test mock so one scripted response can reject, then add:
 
@@ -288,13 +288,13 @@ it('emits structured provider diagnostics on a failed model call', async () => {
 });
 ```
 
-- [ ] **Step 2: Run the agent test and verify RED**
+- [x] **Step 2: Run the agent test and verify RED**
 
 Run: `pnpm vitest run tests/agent/loop.test.ts`
 
 Expected: FAIL because `AgentEvent` and the loop omit `providerDetails`.
 
-- [ ] **Step 3: Add the optional protocol field and emit it**
+- [x] **Step 3: Add the optional protocol field and emit it**
 
 Import `ProviderErrorDetails` as a type into `src/messaging/protocol.ts` and extend only the `error` event:
 
@@ -310,13 +310,13 @@ In the loop error emission add:
 
 Keep the field optional so a reloaded UI can tolerate an older Service Worker during the existing schema-reload window.
 
-- [ ] **Step 4: Run agent and compile checks**
+- [x] **Step 4: Run agent and compile checks**
 
 Run: `pnpm vitest run tests/agent/loop.test.ts && pnpm compile`
 
 Expected: PASS with no protocol type errors.
 
-- [ ] **Step 5: Commit protocol propagation**
+- [x] **Step 5: Commit protocol propagation**
 
 ```bash
 git add src/messaging/protocol.ts src/agent/loop.ts tests/agent/loop.test.ts
@@ -332,7 +332,7 @@ git commit -m "feat: propagate provider error details"
 - Create: `tests/ui/providerErrorPresentation.test.ts`
 - Modify: `src/ui/i18n.ts`
 
-- [ ] **Step 1: Write failing client and presentation tests**
+- [x] **Step 1: Write failing client and presentation tests**
 
 Inside the existing `session outbox` test harness, deliver an error with `FakeTransport.emit` after its initialized event and assert the store retains details:
 
@@ -387,13 +387,13 @@ it('falls back to kind and sanitized raw detail', () => {
 });
 ```
 
-- [ ] **Step 2: Run client/presentation tests and verify RED**
+- [x] **Step 2: Run client/presentation tests and verify RED**
 
 Run: `pnpm vitest run tests/ui/engineClient.test.ts tests/ui/providerErrorPresentation.test.ts`
 
 Expected: FAIL because details are dropped and the presentation helper does not exist.
 
-- [ ] **Step 3: Preserve client details and implement the pure presenter**
+- [x] **Step 3: Preserve client details and implement the pure presenter**
 
 Change `ThreadUiState.lastError` to include `details?: ProviderErrorDetails`, then store `ev.providerDetails` in the error case.
 
@@ -432,13 +432,13 @@ const PRESENTATION_BY_REASON = {
 
 Add all referenced Chinese and English keys to `src/ui/i18n.ts`, with concise summaries and actionable guidance matching the approved design.
 
-- [ ] **Step 4: Run client/presentation tests and verify GREEN**
+- [x] **Step 4: Run client/presentation tests and verify GREEN**
 
 Run: `pnpm vitest run tests/ui/engineClient.test.ts tests/ui/providerErrorPresentation.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit client presentation policy**
+- [x] **Step 5: Commit client presentation policy**
 
 ```bash
 git add src/ui/engineClient.ts src/ui/providerErrorPresentation.ts src/ui/i18n.ts tests/ui/engineClient.test.ts tests/ui/providerErrorPresentation.test.ts
@@ -453,7 +453,7 @@ git commit -m "feat: present actionable provider errors"
 - Modify: `src/ui/settings/ProvidersPage.tsx`
 - Create: `tests/ui/providerErrorNotice.test.ts`
 
-- [ ] **Step 1: Write a failing plain-text rendering test**
+- [x] **Step 1: Write a failing plain-text rendering test**
 
 Create `tests/ui/providerErrorNotice.test.ts` using React's server renderer:
 
@@ -485,13 +485,13 @@ describe('ProviderErrorNotice', () => {
 });
 ```
 
-- [ ] **Step 2: Run the notice test and verify RED**
+- [x] **Step 2: Run the notice test and verify RED**
 
 Run: `pnpm vitest run tests/ui/providerErrorNotice.test.ts`
 
 Expected: FAIL because `ProviderErrorNotice` does not exist.
 
-- [ ] **Step 3: Implement the shared text-only notice**
+- [x] **Step 3: Implement the shared text-only notice**
 
 Create `src/ui/components/ProviderErrorNotice.tsx`. It accepts the same input as `buildProviderErrorPresentation`, calls that helper, and renders summary, detail, and guidance in three ordinary text nodes. It must not use `dangerouslySetInnerHTML`, Markdown, or raw HTML parsing.
 
@@ -508,13 +508,13 @@ export function ProviderErrorNotice({ error }: { error: ProviderErrorViewInput }
 }
 ```
 
-- [ ] **Step 4: Run the notice test and verify GREEN**
+- [x] **Step 4: Run the notice test and verify GREEN**
 
 Run: `pnpm vitest run tests/ui/providerErrorNotice.test.ts`
 
 Expected: PASS and the upstream HTML-like text is escaped.
 
-- [ ] **Step 5: Render chat diagnostics**
+- [x] **Step 5: Render chat diagnostics**
 
 Replace `humanizeError` in `ThreadView.tsx` with `buildProviderErrorPresentation` for action decisions and `ProviderErrorNotice` for text rendering:
 
@@ -526,17 +526,17 @@ const errorView = state.lastError ? buildProviderErrorPresentation(state.lastErr
 
 Show “打开设置” when `errorView.opensSettings`, not only for `auth`. Preserve the existing retry button logic.
 
-- [ ] **Step 6: Render Verify diagnostics with the same notice**
+- [x] **Step 6: Render Verify diagnostics with the same notice**
 
 In `ProvidersPage.tsx`, convert `verifyResult.failure` plus `verifyResult.details` into the presenter input. Keep `FAILURE_TEXT` only as the fallback for failures without structured details. Under the status chips render summary, detail, and guidance as plain React text nodes.
 
-- [ ] **Step 7: Run UI, provider, and compile checks**
+- [x] **Step 7: Run UI, provider, and compile checks**
 
 Run: `pnpm vitest run tests/ui/providerErrorPresentation.test.ts tests/ui/providerErrorNotice.test.ts tests/ui/engineClient.test.ts tests/providers/http.test.ts tests/providers/adapters.test.ts && pnpm compile`
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit UI integration**
+- [x] **Step 8: Commit UI integration**
 
 ```bash
 git add src/ui/components/ProviderErrorNotice.tsx src/ui/components/ThreadView.tsx src/ui/settings/ProvidersPage.tsx tests/ui/providerErrorNotice.test.ts
@@ -548,25 +548,25 @@ git commit -m "feat: show upstream provider diagnostics"
 **Files:**
 - Verify all files changed in Tasks 1-5
 
-- [ ] **Step 1: Run formatting checks on changed source**
+- [x] **Step 1: Run formatting checks on changed source**
 
 Run: `pnpm prettier --check src/providers/types.ts src/providers/http.ts src/providers/openai.ts src/providers/anthropic.ts src/messaging/protocol.ts src/agent/loop.ts src/ui/engineClient.ts src/ui/providerErrorPresentation.ts src/ui/i18n.ts src/ui/components/ProviderErrorNotice.tsx src/ui/components/ThreadView.tsx src/ui/settings/ProvidersPage.tsx tests/providers/http.test.ts tests/providers/adapters.test.ts tests/agent/loop.test.ts tests/ui/engineClient.test.ts tests/ui/providerErrorPresentation.test.ts tests/ui/providerErrorNotice.test.ts`
 
 Expected: all files pass. If not, run the same command with `--write`, inspect the diff, and rerun `--check`.
 
-- [ ] **Step 2: Run the full unit suite**
+- [x] **Step 2: Run the full unit suite**
 
 Run: `pnpm test`
 
 Expected: all Vitest tests pass.
 
-- [ ] **Step 3: Run type checking and lint**
+- [x] **Step 3: Run type checking and lint**
 
 Run: `pnpm compile && pnpm lint`
 
 Expected: both commands exit 0 with no warnings.
 
-- [ ] **Step 4: Check scope and code hygiene**
+- [x] **Step 4: Check scope and code hygiene**
 
 Run:
 
@@ -578,13 +578,13 @@ rg -n "console\.log|debugger|FIX-[0-9]+|P[0-9]+|C[0-9]+" src/providers src/agent
 
 Expected: no whitespace errors, no task-created temporary files, no new debug statements or repair-round comments. Existing unrelated dirty files remain untouched.
 
-- [ ] **Step 5: Review the final scoped diff**
+- [x] **Step 5: Review the final scoped diff**
 
 Run: `git diff -- src/providers/types.ts src/providers/http.ts src/providers/openai.ts src/providers/anthropic.ts src/messaging/protocol.ts src/agent/loop.ts src/ui/engineClient.ts src/ui/providerErrorPresentation.ts src/ui/i18n.ts src/ui/components/ProviderErrorNotice.tsx src/ui/components/ThreadView.tsx src/ui/settings/ProvidersPage.tsx tests/providers/http.test.ts tests/providers/adapters.test.ts tests/agent/loop.test.ts tests/ui/engineClient.test.ts tests/ui/providerErrorPresentation.test.ts tests/ui/providerErrorNotice.test.ts`
 
 Expected: only approved Provider diagnostics behavior, tests, translations, and UI rendering changes.
 
-- [ ] **Step 6: Commit any verification-only cleanup**
+- [x] **Step 6: Commit any verification-only cleanup**
 
 If formatting or hygiene produced changes, commit only those scoped files:
 

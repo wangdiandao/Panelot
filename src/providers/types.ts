@@ -173,12 +173,30 @@ export type ProviderErrorKind =
   | 'network'
   | 'protocol';
 
+export type ProviderErrorReason =
+  | 'invalid_key'
+  | 'permission_denied'
+  | 'quota_exceeded'
+  | 'endpoint_not_found'
+  | 'model_not_found'
+  | 'invalid_request'
+  | 'upstream_error'
+  | 'response_format';
+
+export interface ProviderErrorDetails {
+  status?: number;
+  reason?: ProviderErrorReason;
+  upstreamCode?: string;
+  upstreamMessage?: string;
+  raw?: string;
+}
+
 export class ProviderError extends Error {
   constructor(
     public kind: ProviderErrorKind,
     message: string,
     public retryAfterMs?: number,
-    public raw?: string,
+    public details: ProviderErrorDetails = {},
   ) {
     super(message);
     this.name = 'ProviderError';
@@ -194,4 +212,5 @@ export interface VerifyResult {
   /** Human-oriented failure attribution (docs/03 §6). */
   failure?: 'invalid_key' | 'unreachable' | 'needs_host_permission' | 'protocol_mismatch';
   detail?: string;
+  details?: ProviderErrorDetails;
 }

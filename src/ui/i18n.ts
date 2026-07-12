@@ -155,32 +155,109 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
 
   // Provider error attribution (docs/03 §7)
   'error.auth': {
-    'zh-CN': 'API Key 无效或已过期 — 检查设置中的 Key',
-    en: 'Invalid or expired API key — check it in settings',
+    'zh-CN': '身份验证失败',
+    en: 'Authentication failed',
   },
   'error.rate_limit': {
-    'zh-CN': '触发限流 — 稍后自动可重试，或添加备用 Key',
-    en: 'Rate limited — retry shortly or add a backup key',
+    'zh-CN': '请求频率受限',
+    en: 'Request rate limited',
   },
   'error.overloaded': {
-    'zh-CN': '模型服务过载 — 稍后重试',
-    en: 'Model service overloaded — retry later',
+    'zh-CN': '模型服务暂时不可用',
+    en: 'Model service temporarily unavailable',
   },
   'error.context_too_long': {
-    'zh-CN': '上下文超长 — 试试新会话',
-    en: 'Context too long — try a new chat',
+    'zh-CN': '上下文超过模型限制',
+    en: 'Context exceeds the model limit',
   },
   'error.content_filter': {
     'zh-CN': '内容被模型服务拦截',
     en: 'Content blocked by the model service',
   },
   'error.network': {
-    'zh-CN': '网络异常 — 检查网络或代理设置',
-    en: 'Network error — check connectivity or proxy',
+    'zh-CN': '无法连接模型服务',
+    en: 'Could not reach the model service',
   },
   'error.protocol': {
-    'zh-CN': '端点协议不符 — 检查连接的 API 风格配置',
-    en: 'Protocol mismatch — check the connection API style',
+    'zh-CN': '端点返回了不兼容的响应',
+    en: 'The endpoint returned an incompatible response',
+  },
+  'error.reason.invalid_key': {
+    'zh-CN': 'API Key 无效或已过期',
+    en: 'API key is invalid or expired',
+  },
+  'error.reason.permission_denied': { 'zh-CN': 'API Key 权限不足', en: 'API key lacks permission' },
+  'error.reason.quota_exceeded': { 'zh-CN': '账户额度不足', en: 'Account quota exceeded' },
+  'error.reason.endpoint_not_found': { 'zh-CN': 'API 端点不存在', en: 'API endpoint not found' },
+  'error.reason.model_not_found': {
+    'zh-CN': '模型不存在或不可用',
+    en: 'Model not found or unavailable',
+  },
+  'error.reason.invalid_request': {
+    'zh-CN': '上游拒绝了请求参数',
+    en: 'Upstream rejected the request',
+  },
+  'error.reason.upstream_error': { 'zh-CN': '上游服务发生错误', en: 'Upstream service error' },
+  'error.reason.response_format': {
+    'zh-CN': '上游响应格式不兼容',
+    en: 'Upstream response format is incompatible',
+  },
+  'error.guidance.invalid_key': {
+    'zh-CN': '在连接设置中更新 API Key 后重试。',
+    en: 'Update the API key in connection settings, then retry.',
+  },
+  'error.guidance.permission_denied': {
+    'zh-CN': '确认 API Key 有权使用所选模型和接口。',
+    en: 'Confirm the API key can use the selected model and API.',
+  },
+  'error.guidance.quota_exceeded': {
+    'zh-CN': '检查账户余额、套餐额度或计费状态。',
+    en: 'Check the account balance, plan quota, or billing status.',
+  },
+  'error.guidance.endpoint_not_found': {
+    'zh-CN': '检查 Base URL 和连接的 API 风格。',
+    en: 'Check the Base URL and connection API style.',
+  },
+  'error.guidance.model_not_found': {
+    'zh-CN': '在连接设置中选择上游实际支持的模型。',
+    en: 'Select a model that the upstream endpoint actually supports.',
+  },
+  'error.guidance.invalid_request': {
+    'zh-CN': '检查模型能力、兼容性开关和请求参数。',
+    en: 'Check model capabilities, compatibility switches, and request parameters.',
+  },
+  'error.guidance.upstream_error': {
+    'zh-CN': '稍后重试；若持续失败，请查看上游服务状态。',
+    en: 'Retry later; if it persists, check the upstream service status.',
+  },
+  'error.guidance.response_format': {
+    'zh-CN': '检查 API 风格和端点兼容性配置。',
+    en: 'Check the API style and endpoint compatibility settings.',
+  },
+  'error.guidance.auth': {
+    'zh-CN': '检查连接设置中的 API Key。',
+    en: 'Check the API key in connection settings.',
+  },
+  'error.guidance.rate_limit': {
+    'zh-CN': '稍后重试，或添加备用 API Key。',
+    en: 'Retry shortly or add a backup API key.',
+  },
+  'error.guidance.overloaded': { 'zh-CN': '稍后重试。', en: 'Retry later.' },
+  'error.guidance.context_too_long': {
+    'zh-CN': '缩短上下文或开始新会话。',
+    en: 'Shorten the context or start a new chat.',
+  },
+  'error.guidance.content_filter': {
+    'zh-CN': '调整请求内容后重试。',
+    en: 'Revise the request content, then retry.',
+  },
+  'error.guidance.network': {
+    'zh-CN': '检查网络、代理和浏览器站点权限。',
+    en: 'Check connectivity, proxy, and browser site permissions.',
+  },
+  'error.guidance.protocol': {
+    'zh-CN': '检查连接的 API 风格和兼容性设置。',
+    en: 'Check the connection API style and compatibility settings.',
   },
 
   // Shortcut labels (registry-driven help sheet)
@@ -239,6 +316,7 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   'settings.noMatch': { 'zh-CN': '无匹配的设置项', en: 'No matching settings' },
 
   // Permission switch (composer autonomy tiers)
+  'perm.switch': { 'zh-CN': '权限模式', en: 'Permission mode' },
   'perm.plan': { 'zh-CN': '计划模式', en: 'Plan mode' },
   'perm.planHint': {
     'zh-CN': 'AI 先制定计划并等待确认，确认后再执行操作',
@@ -345,6 +423,7 @@ function detectLang(): Lang {
 
 export function setLang(lang: Lang): void {
   currentLang = lang;
+  if (typeof document !== 'undefined') document.documentElement.lang = lang;
 }
 
 export function getLang(): Lang {

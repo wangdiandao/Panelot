@@ -13,7 +13,13 @@
 import type { UnifiedMessage } from '../db/sessionContext';
 import type { ContentBlock, Usage } from '../messaging/protocol';
 import { iterateSse } from './sse';
-import { createKeyRing, normalizeHttpError, withRetry } from './http';
+import {
+  createKeyRing,
+  createProviderFrameError,
+  createResponseFormatError,
+  normalizeHttpError,
+  withRetry,
+} from './http';
 import {
   ProviderError,
   type Connection,
@@ -25,6 +31,18 @@ import {
   type StreamRequest,
   type VerifyResult,
 } from './types';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isTokenCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
+function isBlockIndex(value: unknown): value is number {
+  return isTokenCount(value);
+}
 import { verifyConnection } from './openai';
 
 // ---------------------------------------------------------------------------
@@ -160,6 +178,9 @@ export class AnthropicAdapter implements ProviderAdapter {
     const partialBlocks = new Map<number, { id: string; name: string; json: string }>();
     let usage: Usage = { input: 0, output: 0 };
     let stopReason = '';
+    // Transport keepalives do not prove the provider produced a model response;
+    // only shape-valid model lifecycle or data frames do.
+    let recognizedFrame = false;
 
     async function* run(): AsyncGenerator<StreamEvent> {
       const response = await withRetry(
@@ -184,7 +205,14 @@ export class AnthropicAdapter implements ProviderAdapter {
               res.headers.get('retry-after'),
             );
           }
-          if (!res.body) throw new ProviderError('protocol', 'response has no body');
+          if (!res.body) {
+            throw createResponseFormatError(
+              'protocol',
+              res.status,
+              'response has no body',
+              'response has no body',
+            );
+          }
           return res;
         },
         { signal: req.signal },
@@ -197,86 +225,131 @@ export class AnthropicAdapter implements ProviderAdapter {
         } catch {
           continue;
         }
-        const ev = parsed as {
-          type: string;
-          index?: number;
-          message?: { usage?: { input_tokens?: number; cache_read_input_tokens?: number } };
-          content_block?: { type: string; id?: string; name?: string };
-          delta?: {
-            type?: string;
-            text?: string;
-            partial_json?: string;
-            thinking?: string;
-            stop_reason?: string;
-          };
-          usage?: { output_tokens?: number };
-          error?: { type?: string; message?: string };
-        };
+        if (!isRecord(parsed) || typeof parsed.type !== 'string') continue;
+        const ev = parsed;
 
         switch (ev.type) {
-          case 'error':
-            throw new ProviderError(
-              ev.error?.type === 'overloaded_error' ? 'overloaded' : 'protocol',
-              ev.error?.message ?? 'provider stream error',
+          case 'error': {
+            if (!isRecord(ev.error)) break;
+            if (ev.error.type !== undefined && typeof ev.error.type !== 'string') break;
+            if (ev.error.message !== undefined && typeof ev.error.message !== 'string') break;
+            throw createProviderFrameError(
+              response.status,
+              ev.error?.message,
+              'provider stream error',
+              ev.error?.type,
             );
+          }
           case 'message_start': {
-            const u = ev.message?.usage;
-            if (u) {
+            if (!isRecord(ev.message)) break;
+            const u = ev.message.usage;
+            if (u !== undefined) {
+              if (!isRecord(u)) break;
+              if (u.input_tokens !== undefined && !isTokenCount(u.input_tokens)) break;
+              if (
+                u.cache_read_input_tokens !== undefined &&
+                !isTokenCount(u.cache_read_input_tokens)
+              ) {
+                break;
+              }
               usage = {
-                input: u.input_tokens ?? 0,
+                input: isTokenCount(u.input_tokens) ? u.input_tokens : 0,
                 output: 0,
-                cacheRead: u.cache_read_input_tokens,
+                cacheRead: isTokenCount(u.cache_read_input_tokens)
+                  ? u.cache_read_input_tokens
+                  : undefined,
               };
             }
+            recognizedFrame = true;
             break;
           }
           case 'content_block_start': {
-            if (ev.content_block?.type === 'tool_use' && ev.index !== undefined) {
+            if (!isBlockIndex(ev.index) || !isRecord(ev.content_block)) break;
+            const block = ev.content_block;
+            if (block.type === 'tool_use') {
+              if (typeof block.id !== 'string' || typeof block.name !== 'string') break;
               partialBlocks.set(ev.index, {
-                id: ev.content_block.id ?? crypto.randomUUID(),
-                name: ev.content_block.name ?? '',
+                id: block.id,
+                name: block.name,
                 json: '',
               });
               yield {
                 type: 'tool_call_partial',
                 index: ev.index,
-                id: ev.content_block.id,
-                name: ev.content_block.name,
+                id: block.id,
+                name: block.name,
                 argsDelta: '',
               };
+            } else if (block.type === 'text') {
+              if (typeof block.text !== 'string') break;
+            } else if (block.type === 'thinking') {
+              if (typeof block.thinking !== 'string') break;
+            } else {
+              break;
             }
+            recognizedFrame = true;
             break;
           }
           case 'content_block_delta': {
+            if (!isBlockIndex(ev.index) || !isRecord(ev.delta)) break;
             const d = ev.delta;
-            if (!d) break;
-            if (d.type === 'text_delta' && d.text) {
-              textParts.push(d.text);
-              yield { type: 'text', delta: d.text };
-            } else if (d.type === 'thinking_delta' && d.thinking) {
-              reasoningParts.push(d.thinking);
-              yield { type: 'reasoning', delta: d.thinking };
-            } else if (
-              d.type === 'input_json_delta' &&
-              d.partial_json !== undefined &&
-              ev.index !== undefined
-            ) {
+            if (d.type === 'text_delta' && typeof d.text === 'string') {
+              recognizedFrame = true;
+              if (d.text) {
+                textParts.push(d.text);
+                yield { type: 'text', delta: d.text };
+              }
+            } else if (d.type === 'thinking_delta' && typeof d.thinking === 'string') {
+              recognizedFrame = true;
+              if (d.thinking) {
+                reasoningParts.push(d.thinking);
+                yield { type: 'reasoning', delta: d.thinking };
+              }
+            } else if (d.type === 'input_json_delta' && typeof d.partial_json === 'string') {
               const block = partialBlocks.get(ev.index);
-              if (block) block.json += d.partial_json;
+              if (!block) break;
+              recognizedFrame = true;
+              block.json += d.partial_json;
               yield { type: 'tool_call_partial', index: ev.index, argsDelta: d.partial_json };
             }
             break;
           }
           case 'message_delta': {
-            if (ev.delta?.stop_reason) stopReason = ev.delta.stop_reason;
-            if (ev.usage?.output_tokens !== undefined) {
-              usage = { ...usage, output: ev.usage.output_tokens };
-              yield { type: 'usage', usage };
+            if (!isRecord(ev.delta) || !isRecord(ev.usage)) break;
+            if (
+              ev.delta.stop_reason !== undefined &&
+              ev.delta.stop_reason !== null &&
+              typeof ev.delta.stop_reason !== 'string'
+            ) {
+              break;
             }
+            if (!isTokenCount(ev.usage.output_tokens)) break;
+            recognizedFrame = true;
+            if (typeof ev.delta.stop_reason === 'string' && ev.delta.stop_reason) {
+              stopReason = ev.delta.stop_reason;
+            }
+            usage = { ...usage, output: ev.usage.output_tokens };
+            yield { type: 'usage', usage };
             break;
           }
-          // content_block_stop / message_stop / ping: no action needed.
+          case 'content_block_stop':
+            if (isBlockIndex(ev.index)) recognizedFrame = true;
+            break;
+          case 'message_stop':
+            recognizedFrame = true;
+            break;
+          case 'ping':
+            break;
         }
+      }
+
+      if (!recognizedFrame) {
+        throw createResponseFormatError(
+          'protocol',
+          response.status,
+          'provider response contained no recognizable frames',
+          'provider response contained no recognizable frames',
+        );
       }
     }
 

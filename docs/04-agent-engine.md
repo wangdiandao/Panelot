@@ -21,7 +21,9 @@ async function runTurn(thread: Thread, input: UserInput, overrides?: TurnOverrid
   emit('turn.start');
 
   while (true) {
-    const messages = buildSessionContext(thread.leafId);   // 02 §4
+    const cutoff = snapshotAdmittedSteers();               // 同步线性化边界，不等待队列静默
+    await materializeSteersAfterCurrentLeaf(cutoff);        // 只在安全边界推进持久化路径
+    const messages = await buildSessionContext(thread.leafId);
 
     const stream = provider.stream(messages, tools, signal);   // 03 章适配层
     for await (const ev of stream) emitDelta(ev);              // 文本/推理增量转 item.delta
@@ -29,9 +31,8 @@ async function runTurn(thread: Thread, input: UserInput, overrides?: TurnOverrid
 
     transaction(assistant_message + usage/cost + stats + Run.stepCursor);
     emit('item.complete'); emit('token.usage');
-    consumeSteerQueue();                              // §3：插话在此注入
 
-    if (toolCalls.length === 0) break;                // 正常完成条件
+    if (toolCalls.length === 0 && !hasPendingSteerOverlay()) break;
 
     for (const call of toolCalls) {
       appendNode(tool_call);                          // 校验/审批失败也留下审计卡片
@@ -63,28 +64,32 @@ async function runTurn(thread: Thread, input: UserInput, overrides?: TurnOverrid
 
 ## 3. Steering / Queueing / Interrupt 三通路
 
-| 通路 | Op | 语义 | 约束 |
-|---|---|---|---|
-| **插话 steer** | `turn.steer{expectedTurnId}` | 注入**当前轮**：追加一条 user_message，在当前 LLM 调用结束后、下一次调用前生效 | `expectedTurnId` 不匹配报错；协议保留 non-steerable turnKind，但当前标题生成不走 runTurn |
-| **排队 enqueue** | `turn.enqueue` | 当前轮跑完后作为**下一轮**执行 | 队列有界（8 条），UI 显示 `queue.updated` |
-| **打断 interrupt** | `turn.interrupt` | 立即停止当前轮 | 总是允许 |
+| 通路               | Op                           | 语义                                                                                                                                                  | 约束                                                                                                                                           |
+| ------------------ | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| **插话 steer**     | `turn.steer{expectedTurnId}` | 注入**当前轮**：先把 stable-ID steer 写入 Run 的 durable pending 集合（附件 refs 同事务），持久化成功后 ACK；下一次 provider 请求的 cutoff 再将其物化为 `user_message{steered:true}` | `expectedTurnId` 不匹配或已 interrupt/逻辑结束时报错；持久化失败只 reject、不 ACK；协议保留 non-steerable turnKind，但当前标题生成不走 runTurn |
+| **排队 enqueue**   | `turn.enqueue`               | 当前轮跑完后作为**下一轮**执行                                                                                                                        | 队列有界（8 条），UI 显示 `queue.updated`                                                                                                      |
+| **打断 interrupt** | `turn.interrupt`             | 立即停止当前轮                                                                                                                                        | 总是允许                                                                                                                                       |
 
 UI 交互映射（见 09）：Agent 运行中输入框可继续打字，`Enter` = steer（不可插话时自动降级为 enqueue 并提示），`Shift+Alt+Enter` = 显式排队，`Esc` = interrupt。
+
+Steer 的 ACK 是持久化边界，不是内存入队边界：`RunRepository` 在同一 Dexie 事务中写入带 admission sequence 的 Run pending steer 记录并链接用户附件的 `nodeIds/runIds`，但不移动 Thread leaf；事务失败则整笔回滚。下一次 provider 请求开始时，loop 同步截取已发起的 admission，等待这些事务完成，再按持久化的接收顺序把 cutoff 内的 pending steer 物化到当前 leaf。这样不会因事务完成顺序或 SW 重启改变消息顺序，也不会把 user message 插进 `tool_call` 与 `tool_result` 之间，或放到未读取该 steer 的 assistant response 之前。
+
+每次 provider 请求只截取一次 cutoff 并构建一次 session context；cutoff 之后到达的 steer 属于再下一次请求，不循环重建 context，也不会因持续输入饿死 provider。最终回复返回时，loop 会先关闭新的 admission，再等待已经发起的持久化：成功的 steer 会触发下一次请求，失败的 steer 不会 ACK。若 provider error/abort/interrupt 使 turn 在下一次请求前终止，已 ACK 的 pending steer 会先在安全 leaf 物化后再写终态。SW 重启时 Run 中的 pending 集合会随恢复路径重新进入首个请求，因而不依赖内存 overlay。
 
 ## 4. AgentTool 接口
 
 ```ts
 // src/agent/tool.ts —— 所有工具（浏览器/MCP/内置）的统一形态
 interface AgentTool<P = unknown, D = unknown> {
-  name: string;                  // 'browser_click'
-  label: string;                 // UI 显示："点击元素"
-  description: string;           // 给 LLM（文案见 10 §3）
-  parameters: z.ZodType<P>;      // zod schema → 同时生成 JSON Schema 发给 LLM
-  inputSchema?: object;          // MCP 等远端工具的原始 JSON Schema，优先原样发给 Provider
+  name: string; // 'browser_click'
+  label: string; // UI 显示："点击元素"
+  description: string; // 给 LLM（文案见 10 §3）
+  parameters: z.ZodType<P>; // zod schema → 同时生成 JSON Schema 发给 LLM
+  inputSchema?: object; // MCP 等远端工具的原始 JSON Schema，优先原样发给 Provider
   level: 'L0' | 'L1' | 'L2' | 'mcp' | 'builtin';
-  effects: 'read' | 'write';     // Gatekeeper 默认裁决的依据（06）
+  effects: 'read' | 'write'; // Gatekeeper 默认裁决的依据（06）
   recovery?: 'retry-safe' | 'inspect-first' | 'never-retry';
-  resolveTarget?(params: P): Promise<{ tabId?, frameId?, origin?, serverId? }>;
+  resolveTarget?(params: P): Promise<{ tabId?; frameId?; origin?; serverId? }>;
   execute(
     toolCallId: string,
     params: P,
@@ -94,8 +99,8 @@ interface AgentTool<P = unknown, D = unknown> {
 }
 
 interface ToolResult<D> {
-  content: ContentBlock[];   // 给 LLM：精简文本/图片，计入上下文
-  details?: D;               // 给 UI：截图、快照 diff、高亮坐标——不进 LLM，经 item.complete 下发
+  content: ContentBlock[]; // 给 LLM：精简文本/图片，计入上下文
+  details?: D; // 给 UI：截图、快照 diff、高亮坐标——不进 LLM，经 item.complete 下发
 }
 ```
 

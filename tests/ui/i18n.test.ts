@@ -40,4 +40,37 @@ describe('i18n', () => {
     setLang('en');
     expect(t('app.settings')).toBe('Settings');
   });
+
+  it('defines bilingual summaries and guidance for every provider diagnosis', () => {
+    const diagnoses = [
+      'invalid_key',
+      'permission_denied',
+      'quota_exceeded',
+      'endpoint_not_found',
+      'model_not_found',
+      'invalid_request',
+      'upstream_error',
+      'response_format',
+    ];
+    const broadKinds = [
+      'auth',
+      'rate_limit',
+      'overloaded',
+      'context_too_long',
+      'content_filter',
+      'network',
+      'protocol',
+    ];
+    const keys = [
+      ...diagnoses.flatMap((reason) => [`error.reason.${reason}`, `error.guidance.${reason}`]),
+      ...broadKinds.flatMap((kind) => [`error.${kind}`, `error.guidance.${kind}`]),
+    ];
+
+    for (const key of keys) {
+      setLang('zh-CN');
+      expect(t(key), `${key} zh-CN`).not.toBe(key);
+      setLang('en');
+      expect(t(key), `${key} en`).not.toBe(key);
+    }
+  });
 });

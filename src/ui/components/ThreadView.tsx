@@ -21,6 +21,8 @@ import { Onboarding } from './Onboarding';
 import { Button } from './ui/button';
 import { Skeleton } from './ui/skeleton';
 import { t } from '../i18n';
+import { buildProviderErrorPresentation } from '../providerErrorPresentation';
+import { ProviderErrorNotice } from './ProviderErrorNotice';
 
 export function useEngineState(session: EngineSession): ThreadUiState {
   return useSyncExternalStore(
@@ -30,21 +32,7 @@ export function useEngineState(session: EngineSession): ThreadUiState {
   );
 }
 
-/** Human-readable provider-error attribution (docs/03 §7, docs/09 §7). */
-const ERROR_KINDS = new Set([
-  'auth',
-  'rate_limit',
-  'overloaded',
-  'context_too_long',
-  'content_filter',
-  'network',
-  'protocol',
-]);
 const attachmentRepository = new AttachmentRepository(new PanelotDB());
-
-function humanizeError(err: { message: string; kind?: string }): string {
-  return err.kind && ERROR_KINDS.has(err.kind) ? t(`error.${err.kind}`) : err.message;
-}
 
 interface Props {
   session: EngineSession;
@@ -274,6 +262,10 @@ export function ThreadView({
     return () => window.removeEventListener('keydown', onKey);
   }, [session]);
 
+  const errorView = state.lastError ? buildProviderErrorPresentation(state.lastError) : undefined;
+  const canOpenErrorSettings = Boolean(errorView?.opensSettings && onOpenSettings);
+  const canRetryError = Boolean(state.lastError?.retryable && state.lastInput);
+
   return (
     <div className="flex h-full flex-col bg-background text-foreground">
       {showDisconnected && (
@@ -282,31 +274,26 @@ export function ThreadView({
         </div>
       )}
       {state.lastError && (
-        <div className="flex items-center gap-2 border-b border-destructive/30 bg-destructive/10 px-3 py-1 text-[11px] text-destructive">
-          <span className="min-w-0 flex-1 truncate" title={state.lastError.message}>
-            {humanizeError(state.lastError)}
-          </span>
-          {state.lastError.kind === 'auth' && onOpenSettings && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-5 shrink-0 px-2 text-[11px] text-destructive underline-offset-2 hover:underline"
-              onClick={onOpenSettings}
-            >
-              {t('error.openSettings')}
-            </Button>
-          )}
-          {state.lastError.retryable && state.lastInput && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-5 shrink-0 px-2 text-[11px] text-destructive underline-offset-2 hover:underline"
-              onClick={() => session.retryLast()}
-            >
-              {t('error.retry')}
-            </Button>
-          )}
-        </div>
+        <ProviderErrorNotice
+          error={state.lastError}
+          className="rounded-none border-x-0 border-t-0 px-3 py-2"
+          actions={
+            canOpenErrorSettings || canRetryError ? (
+              <>
+                {canOpenErrorSettings && (
+                  <Button variant="outline" size="xs" onClick={onOpenSettings}>
+                    {t('error.openSettings')}
+                  </Button>
+                )}
+                {canRetryError && (
+                  <Button variant="outline" size="xs" onClick={() => session.retryLast()}>
+                    {t('error.retry')}
+                  </Button>
+                )}
+              </>
+            ) : undefined
+          }
+        />
       )}
       {(showDisconnected || state.loading) && state.items.length === 0 ? (
         /* Thread switch / reconnect: 3-message skeleton (docs/09 §7). */

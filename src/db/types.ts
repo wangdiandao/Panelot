@@ -244,12 +244,21 @@ export interface RunRecord {
   environment?: ResolvedRunEnvironment;
   stepCursor: number;
   pendingTool?: PendingToolExecution;
+  pendingSteers?: PendingSteer[];
   usage?: Usage;
   costUsd?: number;
   stopReason?: string;
   error?: { code: string; message: string };
   createdAt: number;
   updatedAt: number;
+}
+
+export interface PendingSteer {
+  nodeId: string;
+  payload: UserMessagePayload;
+  attachmentIds?: string[];
+  acceptedAt: number;
+  admissionSequence?: number;
 }
 
 export type CommandReceiptResponse =

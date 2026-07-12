@@ -44,6 +44,8 @@ import {
 } from '../../settings/crypto';
 import { hostPermissionBroker } from '../../permissions/hostPermissionBroker';
 import { ModelSelector } from '../components/ModelSelector';
+import { ProviderErrorNotice } from '../components/ProviderErrorNotice';
+import type { ProviderErrorViewInput } from '../providerErrorPresentation';
 
 const FAILURE_TEXT: Record<NonNullable<VerifyResult['failure']>, string> = {
   invalid_key: 'API Key 无效 — 检查 Key 是否正确、是否有余额',
@@ -51,6 +53,48 @@ const FAILURE_TEXT: Record<NonNullable<VerifyResult['failure']>, string> = {
   needs_host_permission: '需要授权访问该域名 — 点击 Verify 时允许权限申请',
   protocol_mismatch: '协议不符 — 确认该端点兼容所选 API 风格（OpenAI/Anthropic）',
 };
+
+const VERIFY_KIND: Record<NonNullable<VerifyResult['failure']>, string> = {
+  invalid_key: 'auth',
+  unreachable: 'network',
+  needs_host_permission: 'network',
+  protocol_mismatch: 'protocol',
+};
+
+export function providerErrorFromVerifyResult(
+  result: VerifyResult,
+): ProviderErrorViewInput | undefined {
+  if (!result.failure) return undefined;
+  const hasStructuredDetails =
+    result.details !== undefined &&
+    Object.values(result.details).some((value) => value !== undefined);
+  return {
+    message: hasStructuredDetails
+      ? (result.detail ?? FAILURE_TEXT[result.failure])
+      : FAILURE_TEXT[result.failure],
+    kind: VERIFY_KIND[result.failure],
+    ...(hasStructuredDetails ? { details: result.details } : {}),
+  };
+}
+
+function VerifyStatus({ result }: { result: VerifyResult }) {
+  return (
+    <div className="flex flex-wrap gap-3 text-[13px]">
+      <span className={result.reachable ? 'text-success' : 'text-destructive'}>
+        {result.reachable ? '✓' : '✗'} 可达
+      </span>
+      <span className={result.keyValid ? 'text-success' : 'text-destructive'}>
+        {result.keyValid ? '✓' : '✗'} Key 有效
+      </span>
+      <span className={result.streaming ? 'text-success' : 'text-muted-foreground'}>
+        {result.streaming ? '✓' : '—'} 流式
+      </span>
+      <span className={result.toolUse ? 'text-success' : 'text-muted-foreground'}>
+        {result.toolUse ? '✓' : '—'} 工具调用
+      </span>
+    </div>
+  );
+}
 
 export function ProvidersPage() {
   const [connections, setConnections] = useState<Connection[]>([]);
@@ -354,6 +398,7 @@ function ConnectionForm({
   };
 
   const labelCls = 'mb-1 block text-[12px] text-muted-foreground';
+  const verifyError = verifyResult ? providerErrorFromVerifyResult(verifyResult) : undefined;
 
   return (
     <div className="max-w-xl space-y-4">
@@ -523,50 +568,37 @@ function ConnectionForm({
       </Collapsible>
 
       {verifyResult && (
-        <Alert
-          className={
-            verifyResult.keyValid
-              ? 'border-success/40 bg-success/5'
-              : 'border-destructive/40 bg-destructive/5'
-          }
-        >
-          <AlertDescription className="text-[13px]">
-            <div className="flex gap-3">
-              <span className={verifyResult.reachable ? 'text-success' : 'text-destructive'}>
-                {verifyResult.reachable ? '✓' : '✗'} 可达
-              </span>
-              <span className={verifyResult.keyValid ? 'text-success' : 'text-destructive'}>
-                {verifyResult.keyValid ? '✓' : '✗'} Key 有效
-              </span>
-              <span className={verifyResult.streaming ? 'text-success' : 'text-muted-foreground'}>
-                {verifyResult.streaming ? '✓' : '—'} 流式
-              </span>
-              <span className={verifyResult.toolUse ? 'text-success' : 'text-muted-foreground'}>
-                {verifyResult.toolUse ? '✓' : '—'} 工具调用
-              </span>
-            </div>
-            {verifyResult.failure && (
-              <div className="text-destructive">{FAILURE_TEXT[verifyResult.failure]}</div>
-            )}
-            {verifyResult.models && verifyResult.models.length > 0 && (
-              <div className="mt-1.5">
-                <div className="text-muted-foreground">
-                  从端点发现 {verifyResult.models.length} 个模型：
-                </div>
-                <div className="mt-1 flex max-h-24 flex-wrap gap-1 overflow-y-auto">
-                  {verifyResult.models.map((m) => (
-                    <span
-                      key={m}
-                      className="rounded-full bg-muted px-2 py-0.5 font-mono text-[11px] text-muted-foreground"
-                    >
-                      {m}
-                    </span>
-                  ))}
-                </div>
+        <>
+          {verifyError ? (
+            <ProviderErrorNotice
+              error={verifyError}
+              status={<VerifyStatus result={verifyResult} />}
+            />
+          ) : (
+            <Alert className="border-success/40 bg-success/5">
+              <AlertDescription className="text-[13px]">
+                <VerifyStatus result={verifyResult} />
+              </AlertDescription>
+            </Alert>
+          )}
+          {verifyResult.models && verifyResult.models.length > 0 && (
+            <div className="flex flex-col gap-1.5 text-[13px]">
+              <div className="text-muted-foreground">
+                从端点发现 {verifyResult.models.length} 个模型：
               </div>
-            )}
-          </AlertDescription>
-        </Alert>
+              <div className="flex max-h-24 flex-wrap gap-1 overflow-y-auto">
+                {verifyResult.models.map((m) => (
+                  <span
+                    key={m}
+                    className="rounded-full bg-muted px-2 py-0.5 font-mono text-[11px] text-muted-foreground"
+                  >
+                    {m}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
       )}
       {formError && <div className="text-[12px] text-destructive">{formError}</div>}
 

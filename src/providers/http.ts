@@ -6,7 +6,268 @@
  * the model's domain (docs/03 §7).
  */
 
-import { ProviderError } from './types';
+import {
+  ProviderError,
+  type ProviderErrorDetails,
+  type ProviderErrorKind,
+  type ProviderErrorReason,
+} from './types';
+
+const MAX_UPSTREAM_TEXT = 2000;
+
+function redactCredentials(value: string): string {
+  return value
+    .replace(
+      /\b(authorization|x(?:[_-]|\s+)?api(?:[_-]|\s+)?key|api(?:[_-]|\s+)?key)\b(["']?(?:\s*[:=]\s*|\s+))("(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|(?:(?:Basic|Bearer|Token)\s+)?[^\s,;}\]]+)/gi,
+      '$1$2[REDACTED]',
+    )
+    .replace(/\bBearer\s+[^\s,;}\]]+/gi, 'Bearer [REDACTED]')
+    .replace(/\bsk-[A-Za-z0-9_-]{6,}\b/gi, '[REDACTED]');
+}
+
+function stripUnsafeControlCharacters(value: string): string {
+  let visible = '';
+  for (const character of value) {
+    const codePoint = character.codePointAt(0)!;
+    const isUnsafeControl =
+      codePoint <= 0x08 ||
+      codePoint === 0x0b ||
+      codePoint === 0x0c ||
+      (codePoint >= 0x0e && codePoint <= 0x1f) ||
+      codePoint === 0x7f;
+    if (!isUnsafeControl) visible += character;
+  }
+  return visible;
+}
+
+function sanitizeUpstreamText(value: string): string {
+  const visible = stripUnsafeControlCharacters(value);
+  return redactCredentials(visible).trim().slice(0, MAX_UPSTREAM_TEXT);
+}
+
+export function createResponseFormatError(
+  kind: ProviderErrorKind,
+  status: number,
+  upstreamMessage: unknown,
+  fallback: string,
+  upstreamCode?: unknown,
+): ProviderError {
+  const message = sanitizeUpstreamText(
+    typeof upstreamMessage === 'string' ? upstreamMessage : fallback,
+  );
+  const code =
+    typeof upstreamCode === 'string' || typeof upstreamCode === 'number'
+      ? sanitizeUpstreamText(String(upstreamCode)) || undefined
+      : undefined;
+  const raw = sanitizeUpstreamText([code, message].filter(Boolean).join(' · '));
+  const details: ProviderErrorDetails = {
+    status,
+    reason: 'response_format',
+    upstreamCode: code,
+    upstreamMessage: message || undefined,
+    raw: raw || undefined,
+  };
+  return new ProviderError(kind, details.upstreamMessage ?? fallback, undefined, details);
+}
+
+function createProviderFrameDetails(
+  status: number,
+  upstreamMessage: unknown,
+  fallback: string,
+  upstreamCode?: unknown,
+): ProviderErrorDetails {
+  const message = sanitizeUpstreamText(
+    typeof upstreamMessage === 'string' ? upstreamMessage : fallback,
+  );
+  const code =
+    typeof upstreamCode === 'string' || typeof upstreamCode === 'number'
+      ? sanitizeUpstreamText(String(upstreamCode)) || undefined
+      : undefined;
+  const raw = sanitizeUpstreamText([code, message].filter(Boolean).join(' 路 '));
+  return {
+    status,
+    upstreamCode: code,
+    upstreamMessage: message || undefined,
+    raw: raw || undefined,
+  };
+}
+
+/** Classify canonical structured error frames carried inside a successful stream response. */
+export function createProviderFrameError(
+  status: number,
+  upstreamMessage: unknown,
+  fallback: string,
+  upstreamCode?: unknown,
+): ProviderError {
+  const details = createProviderFrameDetails(status, upstreamMessage, fallback, upstreamCode);
+  const code = details.upstreamCode?.toLowerCase().replace(/[\s-]+/g, '_') ?? '';
+  const message = details.upstreamMessage?.toLowerCase() ?? '';
+
+  let kind: ProviderErrorKind = 'protocol';
+  let reason: ProviderErrorReason | undefined = 'response_format';
+  let knownCode = false;
+
+  if (
+    /^(?:insufficient_permissions?|permission_denied|permission_error|forbidden|access_denied)$/.test(
+      code,
+    )
+  ) {
+    knownCode = true;
+    kind = 'auth';
+    reason = 'permission_denied';
+  } else if (
+    /^(?:auth|auth_error|authentication_error|invalid_api_key|invalid_key|unauthorized)$/.test(code)
+  ) {
+    knownCode = true;
+    kind = 'auth';
+    reason = 'invalid_key';
+  } else if (/^insufficient_(?:quota|balance|credits?)$/.test(code)) {
+    knownCode = true;
+    kind = 'rate_limit';
+    reason = 'quota_exceeded';
+  } else if (/(?:^|_)(?:rate_limit|rate_limited|too_many_requests)(?:_|$)/.test(code)) {
+    knownCode = true;
+    kind = 'rate_limit';
+    reason = isQuotaError(status, message) ? 'quota_exceeded' : undefined;
+  } else if (/^(?:overloaded|overloaded_error|server_overload|server_overloaded)$/.test(code)) {
+    knownCode = true;
+    kind = 'overloaded';
+    reason = 'upstream_error';
+  } else if (/^(?:model_not_found|unknown_model|model_missing|invalid_model)$/.test(code)) {
+    knownCode = true;
+    reason = 'model_not_found';
+  } else if (
+    /^(?:invalid_request|invalid_request_error|bad_request|validation_error)$/.test(code)
+  ) {
+    knownCode = true;
+    reason = 'invalid_request';
+  }
+
+  if (!knownCode) {
+    if (/\b(?:permission denied|permission error|forbidden|access denied)\b/.test(message)) {
+      kind = 'auth';
+      reason = 'permission_denied';
+    } else if (
+      /\b(?:invalid api key|invalid key|unauthorized|authentication error)\b/.test(message)
+    ) {
+      kind = 'auth';
+      reason = 'invalid_key';
+    } else if (
+      /\b(?:quota exceeded|current quota|insufficient (?:balance|credits?))\b/.test(message)
+    ) {
+      kind = 'rate_limit';
+      reason = 'quota_exceeded';
+    } else if (/\brate[\s_-]*limit(?:ed|ing)?\b|\btoo many requests\b/.test(message)) {
+      kind = 'rate_limit';
+      reason = undefined;
+    } else if (/\b(?:server|provider)\s+overload(?:ed)?\b/.test(message)) {
+      kind = 'overloaded';
+      reason = 'upstream_error';
+    } else if (/\bmodel\b.{0,24}\b(?:does not exist|not found|unavailable)\b/.test(message)) {
+      reason = 'model_not_found';
+    } else if (/\b(?:invalid request|request validation (?:failed|error))\b/.test(message)) {
+      reason = 'invalid_request';
+    }
+  }
+
+  const classifiedDetails = reason ? { ...details, reason } : details;
+  return new ProviderError(
+    kind,
+    classifiedDetails.upstreamMessage ?? fallback,
+    undefined,
+    classifiedDetails,
+  );
+}
+
+interface UpstreamDetailsResult {
+  details: ProviderErrorDetails;
+  searchableText: string;
+}
+
+function readUpstreamDetails(bodyText: string): UpstreamDetailsResult {
+  let value: unknown;
+  try {
+    value = JSON.parse(bodyText);
+  } catch {
+    const raw = sanitizeUpstreamText(bodyText);
+    return {
+      details: { raw, upstreamMessage: raw || undefined },
+      searchableText: raw,
+    };
+  }
+
+  if (!value || typeof value !== 'object') {
+    const raw = sanitizeUpstreamText(typeof value === 'string' ? value : String(value ?? ''));
+    return {
+      details: { raw, upstreamMessage: raw || undefined },
+      searchableText: raw,
+    };
+  }
+
+  const root = value as Record<string, unknown>;
+  const nested =
+    root.error && typeof root.error === 'object' ? (root.error as Record<string, unknown>) : root;
+  const message = nested.message ?? nested.detail ?? root.message ?? root.detail;
+  const code = nested.code ?? nested.type ?? root.code ?? root.type;
+  const upstreamMessage =
+    typeof message === 'string' ? sanitizeUpstreamText(message) || undefined : undefined;
+  const upstreamCode =
+    typeof code === 'string' || typeof code === 'number'
+      ? sanitizeUpstreamText(String(code)) || undefined
+      : undefined;
+  const searchableText = [upstreamCode, upstreamMessage].filter(Boolean).join(' ');
+  const raw = sanitizeUpstreamText([upstreamCode, upstreamMessage].filter(Boolean).join(' · '));
+  return {
+    details: {
+      raw: raw || undefined,
+      upstreamMessage,
+      upstreamCode,
+    },
+    searchableText,
+  };
+}
+
+function classifyReason(status: number, searchableText: string): ProviderErrorReason | undefined {
+  if (status === 401) return 'invalid_key';
+  if (status === 403) return 'permission_denied';
+  if (isQuotaError(status, searchableText)) return 'quota_exceeded';
+  if (status === 404) return 'endpoint_not_found';
+  if (status === 503 || status === 529) return 'upstream_error';
+  if (
+    /\bmodel[_\s-]*(?:not[_\s-]*(?:found|exist)|unknown)\b|\b(?:unknown|missing)[_\s-]+model\b|\bmodel\b.{0,24}\b(?:does not exist|not found)\b/i.test(
+      searchableText,
+    )
+  ) {
+    return 'model_not_found';
+  }
+  if (status === 400 || status === 409 || status === 422) return 'invalid_request';
+  if (status >= 500 && status <= 599) return 'upstream_error';
+  return undefined;
+}
+
+function isQuotaError(status: number, searchableText: string): boolean {
+  return (
+    status === 402 ||
+    /\b(?:quota|balance|credit|credits)\b|insufficient\s+(?:funds?|balance|credits?)/i.test(
+      searchableText,
+    )
+  );
+}
+
+function isContextLengthError(status: number, searchableText: string): boolean {
+  if (status !== 400 && status !== 413 && status !== 422) return false;
+  return (
+    /\bcontext(?:\s+window)?(?:\s+length)?\b.{0,32}\b(?:exceed|maximum|limit|too\s+long)/i.test(
+      searchableText,
+    ) ||
+    /\b(?:exceed|maximum|limit|length|too\s+(?:many|long))\b.{0,32}\btokens?\b/i.test(
+      searchableText,
+    ) ||
+    /\btokens?\b.{0,32}\b(?:exceed|maximum|limit|length|too\s+(?:many|long))\b/i.test(
+      searchableText,
+    )
+  );
+}
 
 export interface KeyRing {
   /** Returns the current sticky key (may be '' for keyless local endpoints). */
@@ -41,25 +302,42 @@ export function normalizeHttpError(
   retryAfterHeader?: string | null,
 ): ProviderError {
   const retryAfterMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 || undefined : undefined;
+  const upstream = readUpstreamDetails(bodyText);
+  const details = upstream.details;
+  const searchableText = upstream.searchableText.replace(/[_-]+/g, ' ');
+
+  if (!isQuotaError(status, searchableText) && isContextLengthError(status, searchableText)) {
+    return new ProviderError('context_too_long', 'context window exceeded', undefined, {
+      ...details,
+      status,
+    });
+  }
+
+  const reason = classifyReason(status, searchableText);
+  const diagnosticDetails = { ...details, status, reason };
+
   if (status === 401 || status === 403) {
-    return new ProviderError('auth', `authentication failed (${status})`, undefined, bodyText);
-  }
-  if (status === 429) {
-    return new ProviderError('rate_limit', 'rate limited (429)', retryAfterMs, bodyText);
-  }
-  if (status === 529 || status === 503) {
     return new ProviderError(
-      'overloaded',
-      `provider overloaded (${status})`,
-      retryAfterMs,
-      bodyText,
+      'auth',
+      `authentication failed (${status})`,
+      undefined,
+      diagnosticDetails,
     );
   }
-  // Context-length errors surface as 400 with a recognizable message on both protocols.
-  if (status === 400 && /context|token|length|too long|maximum/i.test(bodyText)) {
-    return new ProviderError('context_too_long', 'context window exceeded', undefined, bodyText);
+  if (status === 429) {
+    return new ProviderError('rate_limit', 'rate limited (429)', retryAfterMs, diagnosticDetails);
   }
-  return new ProviderError('protocol', `unexpected HTTP ${status}`, undefined, bodyText);
+  if (status >= 500 && status <= 599) {
+    return new ProviderError(
+      'overloaded',
+      status === 503 || status === 529
+        ? `provider overloaded (${status})`
+        : `upstream server error (${status})`,
+      retryAfterMs,
+      diagnosticDetails,
+    );
+  }
+  return new ProviderError('protocol', `unexpected HTTP ${status}`, undefined, diagnosticDetails);
 }
 
 export interface RetryOptions {

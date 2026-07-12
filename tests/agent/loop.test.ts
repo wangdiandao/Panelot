@@ -14,6 +14,7 @@ import type {
   StreamEvent,
   StreamRequest,
 } from '../../src/providers/types';
+import { ProviderError } from '../../src/providers/types';
 
 // ---------------------------------------------------------------------------
 // Mock provider: scripted responses, records every request it receives.
@@ -127,6 +128,55 @@ const eventTypes = () => events.map((e) => e.type);
 // ---------------------------------------------------------------------------
 
 describe('agent loop (docs/04 §2)', () => {
+  it('emits structured provider diagnostics on a failed model call', async () => {
+    const details = {
+      status: 400,
+      reason: 'model_not_found' as const,
+      upstreamCode: 'model_not_found',
+      upstreamMessage: 'Model Not Exist',
+      raw: '{"error":"Model Not Exist"}',
+    };
+    vi.spyOn(provider, 'stream').mockImplementation(() => {
+      throw new ProviderError('protocol', 'unexpected HTTP 400', undefined, details);
+    });
+    const thread = await tree.createThread({});
+
+    await runTurn(makeEnv(), thread.id, { text: 'hello' }).done;
+
+    const errorEvent = events.find((event) => event.type === 'error');
+    expect(errorEvent).toMatchObject({
+      type: 'error',
+      threadId: thread.id,
+      code: 'provider_error',
+      message: 'unexpected HTTP 400',
+      retryable: true,
+      errorKind: 'protocol',
+      providerDetails: details,
+    });
+    if (errorEvent?.type === 'error') {
+      expect(errorEvent.providerDetails).toEqual(details);
+    }
+  });
+
+  it('does not attach provider diagnostics to internal model failures', async () => {
+    vi.spyOn(provider, 'stream').mockImplementation(() => {
+      throw new Error('unexpected internal failure');
+    });
+    const thread = await tree.createThread({});
+
+    await runTurn(makeEnv(), thread.id, { text: 'hello' }).done;
+
+    const errorEvent = events.find((event) => event.type === 'error');
+    expect(errorEvent).toMatchObject({
+      type: 'error',
+      threadId: thread.id,
+      code: 'internal',
+      message: 'unexpected internal failure',
+      retryable: false,
+    });
+    expect(errorEvent).not.toHaveProperty('providerDetails');
+  });
+
   it('runs a text-only turn: user + assistant persisted, turn completes done', async () => {
     const thread = await tree.createThread({});
     provider.queue({ streamText: ['Hello', ' world'] });
@@ -352,12 +402,19 @@ describe('gatekeeper integration', () => {
     );
   });
 
-  it('ask → approval accepted → tool executes; decision persisted', async () => {
+  it('executes an approved tool after the approval callback persists its decision', async () => {
     const executed = vi.fn();
+    let decisionWasPersistedBeforeExecution = false;
     tools.register(
       makeEchoTool({
         effects: 'write',
         execute: async (_id, params) => {
+          const approvalNodes = await db.nodes
+            .where('threadId')
+            .equals(thread.id)
+            .filter((node) => node.type === 'approval_decision')
+            .toArray();
+          decisionWasPersistedBeforeExecution = approvalNodes.length === 1;
           executed(params);
           return { content: [{ type: 'text', text: 'done' }] };
         },
@@ -381,13 +438,39 @@ describe('gatekeeper integration', () => {
       { streamText: ['finished'] },
     );
 
-    await runTurn(makeEnv({ gatekeeper }), thread.id, { text: 'go' }).done;
+    await runTurn(
+      makeEnv({
+        gatekeeper,
+        requestApproval: async (_turnId, request) => {
+          const decision: ApprovalDecision = { kind: 'accept' };
+          const decidedAt = Date.now();
+          await tree.appendNode(thread.id, {
+            type: 'approval_decision',
+            ts: decidedAt,
+            payload: {
+              approvalId: 'approval-c1',
+              request,
+              decision,
+              decidedAt,
+            },
+          });
+          return decision;
+        },
+      }),
+      thread.id,
+      { text: 'go' },
+    ).done;
     expect(executed).toHaveBeenCalledWith({ text: 'x' });
+    expect(decisionWasPersistedBeforeExecution).toBe(true);
 
     const meta = await tree.getThread(thread.id);
     const ctx = await buildSessionContext(tree, thread.id, meta!.leafId!);
-    const approvalNode = ctx.path.find((p) => p.type === 'approval_decision');
-    expect(approvalNode).toBeDefined();
+    const approvalNodes = ctx.path.filter((node) => node.type === 'approval_decision');
+    expect(approvalNodes).toHaveLength(1);
+    expect(approvalNodes[0]?.payload).toMatchObject({
+      request: { tool: 'echo', params: { text: 'x' } },
+      decision: { kind: 'accept' },
+    });
   });
 
   it('ask → declined with note → note reaches the model, tool NOT executed', async () => {
@@ -464,7 +547,7 @@ describe('steering & interrupt (docs/04 §3)', () => {
     );
 
     const handle = runTurn(makeEnv(), thread.id, { text: 'go' });
-    handle.steer({ text: 'also check prices' });
+    await handle.steer({ text: 'also check prices' });
     await handle.done;
 
     const secondReq = provider.requests[1]!;
@@ -472,6 +555,89 @@ describe('steering & interrupt (docs/04 §3)', () => {
       .filter((m) => m.role === 'user')
       .flatMap((m) => m.content.map((c) => (c.type === 'text' ? c.text : '')));
     expect(userTexts).toContain('also check prices');
+  });
+
+  it('materializes durable pending steer ids on the first request after resume', async () => {
+    const thread = await tree.createThread({});
+    await tree.appendNode(thread.id, {
+      type: 'user_message',
+      payload: { content: [{ type: 'text', text: 'original request' }] },
+    });
+    provider.queue({ streamText: ['resumed'] });
+
+    await runTurn(
+      makeEnv({
+        initialPendingSteers: [{ nodeId: 'durable-steer', admissionSequence: 0 }],
+        materializeSteers: async (nodeIds) => {
+          expect(nodeIds).toEqual(['durable-steer']);
+          await tree.appendNode(thread.id, {
+            id: nodeIds[0],
+            type: 'user_message',
+            payload: {
+              content: [{ type: 'text', text: 'survived restart' }],
+              steered: true,
+            },
+          });
+        },
+      }),
+      thread.id,
+      { text: 'unused resumed input' },
+      'user',
+      { resumeExisting: true },
+    ).done;
+
+    expect(JSON.stringify(provider.requests[0]!.messages)).toContain('survived restart');
+    const path = await tree.getPath(thread.id, (await tree.getThread(thread.id))!.leafId!);
+    expect(path.map((node) => node.type)).toEqual([
+      'user_message',
+      'user_message',
+      'assistant_message',
+    ]);
+  });
+
+  it('restores durable pending steers by admission sequence after inverse persistence', async () => {
+    const thread = await tree.createThread({});
+    await tree.appendNode(thread.id, {
+      type: 'user_message',
+      payload: { content: [{ type: 'text', text: 'original request' }] },
+    });
+    provider.queue({ streamText: ['resumed'] });
+
+    await runTurn(
+      makeEnv({
+        initialPendingSteers: [
+          { nodeId: 'restart-b', admissionSequence: 1 },
+          { nodeId: 'restart-a', admissionSequence: 0 },
+        ],
+        materializeSteers: async (nodeIds) => {
+          for (const nodeId of nodeIds) {
+            await tree.appendNode(thread.id, {
+              id: nodeId,
+              type: 'user_message',
+              payload: {
+                content: [
+                  { type: 'text', text: nodeId === 'restart-a' ? 'restart A' : 'restart B' },
+                ],
+                steered: true,
+              },
+            });
+          }
+        },
+      }),
+      thread.id,
+      { text: 'unused resumed input' },
+      'user',
+      { resumeExisting: true },
+    ).done;
+
+    const restoredTexts = provider.requests[0]!.messages.filter(
+      (message) => message.role === 'user',
+    )
+      .flatMap((message) =>
+        message.content.map((block) => (block.type === 'text' ? block.text : '')),
+      )
+      .filter((text) => text.startsWith('restart '));
+    expect(restoredTexts).toEqual(['restart A', 'restart B']);
   });
 
   it('interrupt aborts promptly with stopReason interrupted', async () => {
