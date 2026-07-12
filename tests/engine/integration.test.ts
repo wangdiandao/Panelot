@@ -261,6 +261,41 @@ async function initThread(client: TestClient): Promise<string> {
 // ---------------------------------------------------------------------------
 
 describe('engine integration (Op → events → DB)', () => {
+  it('routes provider diagnostics only to the client subscribed to the failed thread', async () => {
+    const { host } = buildEngine();
+    const clientA = connect(host);
+    const clientB = connect(host);
+    const threadA = await initThread(clientA);
+    const threadB = await initThread(clientB);
+    expect(threadB).not.toBe(threadA);
+    const details = {
+      status: 404,
+      reason: 'model_not_found' as const,
+      upstreamCode: 'model_not_found',
+      upstreamMessage: 'Model Not Exist',
+      raw: '{"error":"Model Not Exist"}',
+    };
+    provider.queue({
+      streamError: new ProviderError('protocol', 'unexpected HTTP 404', undefined, details),
+    });
+
+    clientA.post({ type: 'turn.submit', threadId: threadA, input: { text: 'fail here' } });
+    const errorA = await clientA.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'error' }> =>
+        event.type === 'error' && event.code === 'provider_error',
+    );
+    await clientA.waitFor('turn.complete');
+
+    expect(errorA).toMatchObject({
+      threadId: threadA,
+      errorKind: 'protocol',
+      providerDetails: details,
+    });
+    expect(
+      clientB.events.some((event) => event.type === 'error' && event.code === 'provider_error'),
+    ).toBe(false);
+  });
+
   it('turn.submit streams deltas and completes; snapshot reflects the conversation', async () => {
     const { core, host } = buildEngine();
     const client = connect(host);
@@ -778,7 +813,9 @@ describe('engine integration (Op → events → DB)', () => {
     ).flatMap((message) =>
       message.content.map((content) => (content.type === 'text' ? content.text : '')),
     );
-    expect(followingUserTexts.filter((text) => text === 'include in imminent request')).toHaveLength(1);
+    expect(
+      followingUserTexts.filter((text) => text === 'include in imminent request'),
+    ).toHaveLength(1);
     expect(contextReadCount).toBe(3);
   });
 
@@ -1013,8 +1050,7 @@ describe('engine integration (Op → events → DB)', () => {
     await client.waitFor('turn.complete');
 
     expect(provider.requests).toHaveLength(2);
-    const orderedTexts = provider.requests[1]!.messages
-      .filter((message) => message.role === 'user')
+    const orderedTexts = provider.requests[1]!.messages.filter((message) => message.role === 'user')
       .flatMap((message) =>
         message.content.map((block) => (block.type === 'text' ? block.text : '')),
       )
@@ -1136,7 +1172,9 @@ describe('engine integration (Op → events → DB)', () => {
     expect(firstComplete.stopReason).toBe('interrupted');
     expect(interruptedRun).toMatchObject({
       state: 'interrupted',
-      pendingSteers: [expect.objectContaining({ payload: expect.objectContaining({ steered: true }) })],
+      pendingSteers: [
+        expect.objectContaining({ payload: expect.objectContaining({ steered: true }) }),
+      ],
     });
     expect(provider.requests).toHaveLength(1);
 
@@ -1147,9 +1185,9 @@ describe('engine integration (Op → events → DB)', () => {
     );
 
     expect(provider.requests).toHaveLength(2);
-    expect(JSON.stringify(provider.requests[1]!.messages).match(/recover this steer/g)).toHaveLength(
-      1,
-    );
+    expect(
+      JSON.stringify(provider.requests[1]!.messages).match(/recover this steer/g),
+    ).toHaveLength(1);
     expect(await runs.get(interruptedRun!.id)).toMatchObject({
       state: 'completed',
       pendingSteers: [],
@@ -1163,7 +1201,9 @@ describe('engine integration (Op → events → DB)', () => {
     const materializeSteers = runs.materializeSteers.bind(runs);
     let materializationStarted: () => void;
     let releaseMaterialization: () => void;
-    const materializationEntered = new Promise<void>((resolve) => (materializationStarted = resolve));
+    const materializationEntered = new Promise<void>(
+      (resolve) => (materializationStarted = resolve),
+    );
     const materializationGate = new Promise<void>((resolve) => (releaseMaterialization = resolve));
     runs.materializeSteers = async (...args) => {
       materializationStarted!();
@@ -1314,9 +1354,7 @@ describe('engine integration (Op → events → DB)', () => {
     expect(provider.requests).toHaveLength(2);
     const secondRoles = provider.requests[1]!.messages.map((message) => message.role);
     expect(secondRoles).toEqual(['user', 'assistant', 'user']);
-    expect(JSON.stringify(provider.requests[1]!.messages.at(-1))).toContain(
-      'cross final boundary',
-    );
+    expect(JSON.stringify(provider.requests[1]!.messages.at(-1))).toContain('cross final boundary');
   });
 
   it('persists an acknowledged steer exactly once when the provider stream errors', async () => {

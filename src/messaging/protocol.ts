@@ -9,6 +9,8 @@
  * before the UI knows about them.
  */
 
+import type { ProviderErrorDetails } from '../providers/types';
+
 export const PROTOCOL_VERSION = 1;
 export const ENGINE_PROTOCOL = 'panelot/engine-v1' as const;
 export const ENGINE_SCHEMA_HASH =
@@ -350,6 +352,7 @@ export type AgentEvent =
   | {
       type: 'error';
       submissionId?: string;
+      threadId?: string;
       code: ErrorCode;
       message: string;
       retryable: boolean;
@@ -362,6 +365,7 @@ export type AgentEvent =
         | 'content_filter'
         | 'network'
         | 'protocol';
+      providerDetails?: ProviderErrorDetails;
     }
   | { type: 'thread.created'; submissionId: string; threadId: string }
   | { type: 'thread.forked'; submissionId: string; threadId: string; newThreadId: string }

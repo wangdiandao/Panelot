@@ -14,6 +14,7 @@ import type {
   StreamEvent,
   StreamRequest,
 } from '../../src/providers/types';
+import { ProviderError } from '../../src/providers/types';
 
 // ---------------------------------------------------------------------------
 // Mock provider: scripted responses, records every request it receives.
@@ -127,6 +128,55 @@ const eventTypes = () => events.map((e) => e.type);
 // ---------------------------------------------------------------------------
 
 describe('agent loop (docs/04 §2)', () => {
+  it('emits structured provider diagnostics on a failed model call', async () => {
+    const details = {
+      status: 400,
+      reason: 'model_not_found' as const,
+      upstreamCode: 'model_not_found',
+      upstreamMessage: 'Model Not Exist',
+      raw: '{"error":"Model Not Exist"}',
+    };
+    vi.spyOn(provider, 'stream').mockImplementation(() => {
+      throw new ProviderError('protocol', 'unexpected HTTP 400', undefined, details);
+    });
+    const thread = await tree.createThread({});
+
+    await runTurn(makeEnv(), thread.id, { text: 'hello' }).done;
+
+    const errorEvent = events.find((event) => event.type === 'error');
+    expect(errorEvent).toMatchObject({
+      type: 'error',
+      threadId: thread.id,
+      code: 'provider_error',
+      message: 'unexpected HTTP 400',
+      retryable: true,
+      errorKind: 'protocol',
+      providerDetails: details,
+    });
+    if (errorEvent?.type === 'error') {
+      expect(errorEvent.providerDetails).toEqual(details);
+    }
+  });
+
+  it('does not attach provider diagnostics to internal model failures', async () => {
+    vi.spyOn(provider, 'stream').mockImplementation(() => {
+      throw new Error('unexpected internal failure');
+    });
+    const thread = await tree.createThread({});
+
+    await runTurn(makeEnv(), thread.id, { text: 'hello' }).done;
+
+    const errorEvent = events.find((event) => event.type === 'error');
+    expect(errorEvent).toMatchObject({
+      type: 'error',
+      threadId: thread.id,
+      code: 'internal',
+      message: 'unexpected internal failure',
+      retryable: false,
+    });
+    expect(errorEvent).not.toHaveProperty('providerDetails');
+  });
+
   it('runs a text-only turn: user + assistant persisted, turn completes done', async () => {
     const thread = await tree.createThread({});
     provider.queue({ streamText: ['Hello', ' world'] });
@@ -565,7 +615,9 @@ describe('steering & interrupt (docs/04 §3)', () => {
               id: nodeId,
               type: 'user_message',
               payload: {
-                content: [{ type: 'text', text: nodeId === 'restart-a' ? 'restart A' : 'restart B' }],
+                content: [
+                  { type: 'text', text: nodeId === 'restart-a' ? 'restart A' : 'restart B' },
+                ],
                 steered: true,
               },
             });
@@ -578,8 +630,9 @@ describe('steering & interrupt (docs/04 §3)', () => {
       { resumeExisting: true },
     ).done;
 
-    const restoredTexts = provider.requests[0]!.messages
-      .filter((message) => message.role === 'user')
+    const restoredTexts = provider.requests[0]!.messages.filter(
+      (message) => message.role === 'user',
+    )
       .flatMap((message) =>
         message.content.map((block) => (block.type === 'text' ? block.text : '')),
       )

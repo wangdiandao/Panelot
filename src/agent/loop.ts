@@ -148,20 +148,12 @@ export function runTurn(
   const steerOverlay: { nodeId: string; sequence: number }[] = initialPendingSteers.map(
     (steer) => ({ nodeId: steer.nodeId, sequence: steer.admissionSequence }),
   );
-  const pendingAdmissions = new Map<
-    string,
-    { sequence: number; persistence: Promise<void> }
-  >();
+  const pendingAdmissions = new Map<string, { sequence: number; persistence: Promise<void> }>();
   const pendingSteerNodes = new Map<string, AppendNodeInput>();
 
   function snapshotSteerOverlay(): { nodeId: string; sequence: number }[] {
-    return [
-      ...new Map(
-        steerOverlay.map((steer) => [steer.nodeId, steer] as const),
-      ).values(),
-    ].sort(
-      (left, right) =>
-        left.sequence - right.sequence || left.nodeId.localeCompare(right.nodeId),
+    return [...new Map(steerOverlay.map((steer) => [steer.nodeId, steer] as const)).values()].sort(
+      (left, right) => left.sequence - right.sequence || left.nodeId.localeCompare(right.nodeId),
     );
   }
 
@@ -173,9 +165,7 @@ export function runTurn(
   }
 
   async function takeSteerCutoff(): Promise<string[]> {
-    const cutoff = new Map(
-      snapshotSteerOverlay().map((steer) => [steer.nodeId, steer.sequence]),
-    );
+    const cutoff = new Map(snapshotSteerOverlay().map((steer) => [steer.nodeId, steer.sequence]));
     const admissions = [...pendingAdmissions.entries()];
     const results = await Promise.allSettled(
       admissions.map(([, admission]) => admission.persistence),
@@ -215,21 +205,21 @@ export function runTurn(
         payload: steerPayload(steerInput),
       };
       pendingSteerNodes.set(nodeId, node);
-      const persist = (env.persistSteer
-        ? env.persistSteer(
-            node,
-            steerInput.attachmentIds?.length
-              ? { attachmentIds: steerInput.attachmentIds, nodeId }
-              : undefined,
-            sequence,
-          )
-        : Promise.resolve()).then(() => {
+      const persist = (
+        env.persistSteer
+          ? env.persistSteer(
+              node,
+              steerInput.attachmentIds?.length
+                ? { attachmentIds: steerInput.attachmentIds, nodeId }
+                : undefined,
+              sequence,
+            )
+          : Promise.resolve()
+      ).then(() => {
         steerOverlay.push({ nodeId, sequence });
       });
       pendingAdmissions.set(nodeId, { sequence, persistence: persist });
-      void persist
-        .finally(() => pendingAdmissions.delete(nodeId))
-        .catch(() => undefined);
+      void persist.finally(() => pendingAdmissions.delete(nodeId)).catch(() => undefined);
       void persist.catch(() => pendingSteerNodes.delete(nodeId));
       return persist;
     },
@@ -664,10 +654,11 @@ export function runTurn(
       stopReason = 'error';
       env.emit({
         type: 'error',
+        threadId,
         code: e instanceof ProviderError ? 'provider_error' : 'internal',
         message: e instanceof Error ? e.message : String(e),
         retryable: e instanceof ProviderError || steerMaterializationFailed,
-        ...(e instanceof ProviderError ? { errorKind: e.kind } : {}),
+        ...(e instanceof ProviderError ? { errorKind: e.kind, providerDetails: e.details } : {}),
       });
     }
     // turn.complete fires only after all writes above have resolved — every
@@ -702,6 +693,7 @@ export function runTurn(
         terminalState = 'interrupted';
         env.emit({
           type: 'error',
+          threadId,
           code: 'internal',
           message: error instanceof Error ? error.message : String(error),
           retryable: true,
