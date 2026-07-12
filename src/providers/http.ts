@@ -13,11 +13,11 @@ const MAX_UPSTREAM_TEXT = 2000;
 function redactCredentials(value: string): string {
   return value
     .replace(
-      /\b(authorization|api[_-]?key|apikey)\b(\s*[:=]\s*|\s+)(?:"[^"]*"|'[^']*'|Bearer\s+[^\s,;}\]]+|[^\s,;}\]]+)/gi,
+      /\b(authorization|x(?:[_-]|\s+)?api(?:[_-]|\s+)?key|api(?:[_-]|\s+)?key)\b(["']?(?:\s*[:=]\s*|\s+))("(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|(?:(?:Basic|Bearer|Token)\s+)?[^\s,;}\]]+)/gi,
       '$1$2[REDACTED]',
     )
     .replace(/\bBearer\s+[^\s,;}\]]+/gi, 'Bearer [REDACTED]')
-    .replace(/\bsk-[A-Za-z0-9_-]{6,}\b/g, '[REDACTED]');
+    .replace(/\bsk-[A-Za-z0-9_-]{6,}\b/gi, '[REDACTED]');
 }
 
 function sanitizeUpstreamText(value: string): string {

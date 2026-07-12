@@ -169,6 +169,76 @@ describe('normalizeHttpError (docs/03 §7)', () => {
     );
   });
 
+  it.each([
+    'API key: opaque-secret',
+    'api_key=opaque-secret',
+    'api-key: opaque-secret',
+    '"api_key":"opaque-secret"',
+    'Authorization: Basic opaque-secret',
+    'Authorization: Bearer opaque-secret',
+    'Authorization: Token opaque-secret',
+    'x-api-key: opaque-secret',
+  ])('redacts the complete labeled credential in %s', (body) => {
+    const details = normalizeHttpError(400, body).details;
+    expect(JSON.stringify(details)).not.toContain('opaque-secret');
+    expect(details.upstreamMessage).toContain('[REDACTED]');
+  });
+
+  it('redacts quoted key-value text embedded in an allowlisted message', () => {
+    const error = normalizeHttpError(
+      400,
+      JSON.stringify({ error: { message: 'upstream echoed "api_key":"opaque-secret"' } }),
+    );
+
+    expect(JSON.stringify(error.details)).not.toContain('opaque-secret');
+    expect(error.details.upstreamMessage).toContain('[REDACTED]');
+  });
+
+  it('keeps ordinary prose without a credential label-value pattern', () => {
+    const prose = 'Credential formats are documented, and access controls are configurable.';
+    expect(normalizeHttpError(400, prose).details.upstreamMessage).toBe(prose);
+  });
+
+  it.each(['apiKey opaque-secret', 'api key opaque-secret', 'x-api-key opaque-secret'])(
+    'redacts a whitespace-delimited opaque credential in %s',
+    (body) => {
+      const details = normalizeHttpError(400, body).details;
+      expect(JSON.stringify(details)).not.toContain('opaque-secret');
+      expect(details.upstreamMessage).toContain('[REDACTED]');
+    },
+  );
+
+  it.each(['apiKey abcdefgh', 'api key ONLYLETTERS', 'x-api-key abcdef'])(
+    'redacts a terminal pure-letter credential in %s',
+    (body) => {
+      const details = normalizeHttpError(400, body).details;
+      expect(details.upstreamMessage).toContain('[REDACTED]');
+      expect(details.upstreamMessage).not.toBe(body);
+    },
+  );
+
+  it.each([
+    'API key opaque-secret was rejected',
+    'x-api-key opaque-secret is invalid',
+    'apiKey abcdefgh remains unusable',
+  ])('redacts a whitespace-delimited credential before trailing prose in %s', (body) => {
+    const details = normalizeHttpError(400, body).details;
+    expect(details.upstreamMessage).toContain('[REDACTED]');
+    expect(JSON.stringify(details)).not.toMatch(/opaque-secret|abcdefgh/);
+  });
+
+  it('redacts mixed-case standalone SK credentials', () => {
+    const details = normalizeHttpError(400, 'upstream echoed SK-MixedCase123').details;
+    expect(JSON.stringify(details)).not.toContain('SK-MixedCase123');
+    expect(details.upstreamMessage).toContain('[REDACTED]');
+  });
+
+  it('redacts an entire escaped quoted credential value without leaking a suffix', () => {
+    const details = normalizeHttpError(400, String.raw`api_key="abc\"tail" after`).details;
+    expect(JSON.stringify(details)).not.toMatch(/abc|tail/);
+    expect(details.upstreamMessage).toBe('api_key=[REDACTED] after');
+  });
+
   it('classifies structured JSON from known error fields only', () => {
     const error = normalizeHttpError(
       400,
