@@ -13,3 +13,4 @@ coverage/
 scratch/
 *.pem
 *.crx
+AGENTS.md

@@ -5,7 +5,7 @@
 
 浏览器原生 AI Agent 扩展：模型自带（BYOK），以浏览器为「手」，用 Skills / 数据型 Plugin / 远端 MCP 扩展能力。
 
-[English](./README.md) · [设计文档](./DESIGN.md) · [开发指南](./docs/development.md)
+[English](./README.md) · [架构文档](./docs/01-architecture.md) · [开发指南](./docs/development.md)
 
 </div>
 

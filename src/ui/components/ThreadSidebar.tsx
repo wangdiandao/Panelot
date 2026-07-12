@@ -16,7 +16,7 @@
  * column is exactly: new chat, search, list.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import {
   ChevronDown,
   Ellipsis,
@@ -41,16 +41,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from './ui/alert-dialog';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { cn } from '../lib/utils';
 import { t } from '../i18n';
@@ -61,6 +51,10 @@ import {
   SIDEBAR_WIDTH_VAR,
   clampSidebarWidth,
 } from '../layoutTokens';
+
+const ThreadDeleteDialog = lazy(() =>
+  import('./ThreadDeleteDialog').then((module) => ({ default: module.ThreadDeleteDialog })),
+);
 
 // ---------------------------------------------------------------------------
 // Pure helpers (unit-tested in tests/ui/threadSidebar.test.ts)
@@ -352,28 +346,15 @@ export function ThreadSidebar({
         className="absolute -right-1.5 top-0 z-10 h-full w-3 cursor-col-resize outline-none after:absolute after:inset-y-0 after:left-1/2 after:w-[2px] after:-translate-x-1/2 after:bg-transparent hover:after:bg-primary/30 focus-visible:after:bg-primary/50"
       />
 
-      <AlertDialog open={deleting !== null} onOpenChange={(o) => !o && setDeleting(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {t('app.deleteConfirmTitle')} <b>{deleting?.title || t('app.untitled')}</b>
-            </AlertDialogTitle>
-            <AlertDialogDescription>{t('app.deleteConfirmBody')}</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t('app.cancel')}</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={() => {
-                if (deleting) onDelete(deleting);
-                setDeleting(null);
-              }}
-            >
-              {t('app.delete')}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {deleting && (
+        <Suspense fallback={null}>
+          <ThreadDeleteDialog
+            thread={deleting}
+            onClose={() => setDeleting(null)}
+            onDelete={onDelete}
+          />
+        </Suspense>
+      )}
     </aside>
   );
 }

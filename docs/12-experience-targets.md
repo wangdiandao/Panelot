@@ -1,6 +1,6 @@
 # 12 — 体验目标与对标基线
 
-> 上级文档：[DESIGN.md](../DESIGN.md) · 关联：全部分章（本文是横切层）
+> 文档索引：[README.md](../README.md) · 关联：全部分章（本文是横切层）
 > 定位：各分章回答「怎么做」；本文回答「**做到什么程度才算好**」——每个体验维度的对标对象、可测量的达标线（P0）与超越点（P1）、诚实声明的不及之处、以及反目标（明确不做的事）。所有量化指标带编号（如 `OP-2`），供回归集引用。
 >
 > 本章的外部产品描述来自设计阶段的对标记录，本轮没有逐项复测上游当前版本，公开引用前均**待确认**。表中数字是目标而非现状；当前验证边界见 §8。
@@ -162,21 +162,18 @@
 
 ---
 
-## 8. 测量基建
+## 8. 自动化验证基建
 
-- **目标基准场景集**：20 个脚本化场景（表单/比价/搜索提取/注入攻击）× 3 档模型，使用本地 fixture 避免外部站点漂移。当前仓库尚未形成这套集合；
-- **当前 Playwright 范围**：persistent Chromium context 加载生产 unpacked extension，验证 MV3 Service Worker、options 页面与权限清单；另验证快照 ref 和填值回显。尚不调用真实 Provider/MCP；
-- **性能埋点目标**：dev 构建本地采集 CH/OP/RL 指标且不上报。当前没有 perf 面板或指标导出实现；
-- **可用性/对标测试目标**：5 人小样本、Playwright MCP 同页快照和 Codex 审批次数基线。仓库当前没有跑分表或人工测试记录。
+- **确定性场景集**：20 个无模型 actionability 场景覆盖可见、稳定、可用、可编辑、接收事件和 DOM 连接状态；
+- **当前 Playwright 范围**：persistent Chromium context 加载生产 unpacked extension，验证 MV3 Service Worker、options 页面、权限清单、快照 ref、填值回显、closed shadow root 与跨域 iframe；
+- **覆盖率门禁**：使用当前仓库基线作为只能上调的棘轮，并对 Gatekeeper 等核心文件设置更高的独立阈值。
 
 ### 8.1 验证状态
 
-当前自动化测试覆盖若干**机制不变量**：流式 Markdown fence、snapshot/ref 过期、自纠路径、注入样本的 Gatekeeper 硬闸、引擎重建 snapshot 和附件配额。它们不能证明 CH/OP/AP/RL 表中的百分比、延迟或真实站点成功率已经达标。
+当前自动化测试覆盖若干**机制不变量**：流式 Markdown fence、snapshot/ref 过期与受限恢复、actionability、结构化动作失败、快照 diff、自纠路径、注入样本的 Gatekeeper 硬闸、引擎重建 snapshot 和附件配额。它们不能证明 CH/OP/AP/RL 表中的百分比、延迟或真实站点成功率已经达标。
 
-明确未完成：
+仍需自动化覆盖：
 
-- 本地 mock OpenAI/Anthropic/MCP fixture 矩阵、真实 Provider/MCP 人工兼容矩阵、20×3 prompt 回归集与性能跑分；
-- 首答时间 OB-1、审批理解 AP-1、真实站点成功率 OP-2 等人工/外部依赖指标；
 - AP-4 已接入待审批/恢复通知并点击直达对应会话；通知到卡片的跳数与 5 分钟超时仍需扩展 E2E 验证；
 - Plugin 安装前的独立确认页与内置精选内容；当前安装器会原子校验/写入并在安装后展示完整资产清单；
 - i18n：对话核心组件已 key 化，设置页文案尚未收编。

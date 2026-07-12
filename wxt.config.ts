@@ -1,7 +1,7 @@
 import { defineConfig } from 'wxt';
 import tailwindcss from '@tailwindcss/vite';
 
-// See DESIGN.md §11 for the permission rationale. All host permissions are
+// See docs/06-permissions.md for the permission rationale. All host permissions are
 // requested dynamically at runtime (chrome.permissions.request).
 export default defineConfig({
   modules: ['@wxt-dev/module-react'],
@@ -35,6 +35,11 @@ export default defineConfig({
       'clipboardWrite',
       'notifications',
       'offscreen',
+      'bookmarks',
+      'history',
+      'sessions',
+      'tabGroups',
+      'topSites',
     ],
     optional_host_permissions: ['<all_urls>'],
     host_permissions: [],

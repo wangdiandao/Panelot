@@ -16,6 +16,11 @@ import {
   BRAND_PRIMARY,
   BRAND_PRIMARY_HALO,
 } from '../../styles/brand';
+import { actionError } from '../action/errors';
+import { ActionDeadline } from '../action/deadline';
+import { ensureActionable } from './actionability';
+import type { ActionEvidence } from '../action/types';
+import { diffSnapshotYaml } from '../snapshot/diff';
 
 // ---------------------------------------------------------------------------
 // State (per tab, in-memory only — docs/02 §2.2 "not persisted")
@@ -23,6 +28,7 @@ import {
 
 let currentSnapshot: SnapshotResult | null = null;
 let snapshotCounter = 0;
+const priorHints = new Map<string, import('../snapshot/engine').LocatorHint>();
 
 const WAIT_DEFAULTS = {
   minWaitMs: 250,
@@ -45,12 +51,49 @@ class StaleRefError extends Error {
 }
 
 function resolveRef(ref: string): Element {
-  if (!currentSnapshot) throw new StaleRefError(ref);
+  if (!currentSnapshot) {
+    throw actionError('stale_ref', new StaleRefError(ref).message, 'resolve', true);
+  }
   const prefix = `s${currentSnapshot.snapshotId}_`;
-  if (!ref.startsWith(prefix)) throw new StaleRefError(ref);
+  if (!ref.startsWith(prefix)) {
+    throw actionError('stale_ref', new StaleRefError(ref).message, 'resolve', true);
+  }
   const el = currentSnapshot.refMap.get(ref);
-  if (!el || !el.isConnected) throw new StaleRefError(ref);
+  if (!el || !el.isConnected) {
+    throw actionError('stale_ref', new StaleRefError(ref).message, 'resolve', true);
+  }
   return el;
+}
+
+function resolveRefWithRecovery(
+  ref: string,
+  allowRecovery = false,
+): { element: Element; recoveredRef?: string } {
+  try {
+    return { element: resolveRef(ref) };
+  } catch (error) {
+    if (!allowRecovery) throw error;
+    const hint = priorHints.get(ref);
+    if (!hint || !currentSnapshot) throw error;
+    const matches = [...currentSnapshot.hintMap.entries()].filter(
+      ([, candidate]) =>
+        candidate.role === hint.role &&
+        candidate.name === hint.name &&
+        candidate.tagName === hint.tagName &&
+        candidate.inputType === hint.inputType &&
+        candidate.label === hint.label &&
+        candidate.placeholder === hint.placeholder,
+    );
+    if (matches.length !== 1) {
+      throw actionError(
+        'ambiguous_target',
+        `旧 ref ${ref} 无法唯一恢复（候选 ${matches.length} 个），请重新 read_page。`,
+        'recover',
+      );
+    }
+    const [recoveredRef] = matches[0]!;
+    return { element: currentSnapshot.refMap.get(recoveredRef)!, recoveredRef };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -139,6 +182,32 @@ export function hideIndicator(): void {
   overlayHost?.shadowRoot?.getElementById('indicator')?.remove();
 }
 
+function annotateRefs(): string {
+  if (!currentSnapshot) takeSnapshot({});
+  const shadow = getOverlay();
+  shadow.getElementById('ref-annotations')?.remove();
+  const layer = document.createElement('div');
+  layer.id = 'ref-annotations';
+  const legend: string[] = [];
+  for (const [ref, element] of currentSnapshot!.refMap) {
+    const rect = element.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) continue;
+    const badge = document.createElement('div');
+    badge.textContent = ref;
+    badge.style.cssText = `position:fixed;left:${Math.max(2, rect.left)}px;top:${Math.max(2, rect.top)}px;background:${BADGE_BG};color:${BADGE_FG};border:1px solid ${BADGE_BORDER};border-radius:4px;padding:1px 4px;font:10px ui-monospace,monospace;pointer-events:none;`;
+    layer.appendChild(badge);
+    legend.push(
+      `${ref}: ${element.tagName.toLowerCase()} ${element.getAttribute('aria-label') ?? element.textContent?.trim().slice(0, 60) ?? ''}`.trim(),
+    );
+  }
+  shadow.appendChild(layer);
+  return legend.join('\n');
+}
+
+function clearRefAnnotations(): void {
+  overlayHost?.shadowRoot?.getElementById('ref-annotations')?.remove();
+}
+
 // ---------------------------------------------------------------------------
 // Manual-operation detection (docs/05 §5): trusted user events → auto-pause
 // ---------------------------------------------------------------------------
@@ -209,24 +278,15 @@ async function doClick(params: {
   ref: string;
   button?: 'left' | 'right';
   doubleClick?: boolean;
+  allowRecovery?: boolean;
 }): Promise<string> {
-  const el = resolveRef(params.ref) as HTMLElement;
+  const { element: resolved, recoveredRef } = resolveRefWithRecovery(
+    params.ref,
+    params.allowRecovery,
+  );
+  const el = resolved as HTMLElement;
   el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' as ScrollBehavior });
-  // Occlusion check: a covered element would silently "succeed" while a real
-  // user couldn't reach it. Hit-test the element's center.
-  const rect = el.getBoundingClientRect();
-  const doc = el.ownerDocument;
-  const hit = doc.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
-  if (hit && hit !== el && !el.contains(hit) && !hit.contains(el)) {
-    const hitRoot = hit.getRootNode();
-    // The hit target may be inside the element's shadow root — that still counts.
-    const insideShadow = hitRoot instanceof ShadowRoot && el.contains(hitRoot.host);
-    if (!insideShadow) {
-      throw new Error(
-        `元素被 <${hit.tagName.toLowerCase()}${hit.id ? ` id="${hit.id}"` : ''}> 遮挡，真实用户无法点到。可能有弹层/遮罩——先处理遮挡物（关闭弹窗/滚动），或 read_page 查看当前状态。`,
-      );
-    }
-  }
+  await ensureActionable(el, 'click', new ActionDeadline(1500));
   highlight(el);
   const opts = { bubbles: true, cancelable: true, view: window };
   if (params.button === 'right') {
@@ -240,7 +300,7 @@ async function doClick(params: {
     el.dispatchEvent(new MouseEvent('mouseup', opts));
     el.click();
   }
-  return `已点击`;
+  return `已点击${recoveredRef ? `（目标已恢复为 ${recoveredRef}）` : ''}`;
 }
 
 async function doType(params: {
@@ -249,9 +309,15 @@ async function doType(params: {
   mode?: 'replace' | 'append';
   submit?: boolean;
   slowly?: boolean;
+  allowRecovery?: boolean;
 }): Promise<string> {
-  const el = resolveRef(params.ref) as HTMLElement;
+  const { element: resolved, recoveredRef } = resolveRefWithRecovery(
+    params.ref,
+    params.allowRecovery,
+  );
+  const el = resolved as HTMLElement;
   el.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior });
+  await ensureActionable(el, 'type', new ActionDeadline(1500));
   highlight(el);
   el.focus();
 
@@ -272,7 +338,7 @@ async function doType(params: {
     }
     // Verify the value stuck (framework may have swallowed synthetic events).
     if (el.value !== base + params.text && !params.slowly) {
-      throw new Error('输入未生效（框架可能吞掉了合成事件）。可尝试 slowly:true 或升级 L2。');
+      throw actionError('l1_not_effective', '输入未生效（页面可能忽略合成事件）。', 'verify', true);
     }
   } else if (el.isContentEditable) {
     if (params.mode !== 'append') el.textContent = '';
@@ -294,12 +360,19 @@ async function doType(params: {
     el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
     (el.closest('form') as HTMLFormElement | null)?.requestSubmit?.();
   }
-  return `已输入${params.submit ? '并提交' : ''}`;
+  return `已输入${params.submit ? '并提交' : ''}${recoveredRef ? `（目标已恢复为 ${recoveredRef}）` : ''}`;
 }
 
-async function doSelect(params: { ref: string; values: string[] }): Promise<string> {
-  const el = resolveRef(params.ref);
-  if (!(el instanceof HTMLSelectElement)) throw new Error(`ref ${params.ref} 不是 select 元素`);
+async function doSelect(params: {
+  ref: string;
+  values: string[];
+  allowRecovery?: boolean;
+}): Promise<string> {
+  const { element: el, recoveredRef } = resolveRefWithRecovery(params.ref, params.allowRecovery);
+  await ensureActionable(el, 'select', new ActionDeadline(1500));
+  if (!(el instanceof HTMLSelectElement)) {
+    throw actionError('not_editable', `ref ${params.ref} 不是 select 元素`, 'precheck');
+  }
   highlight(el);
   const matched: string[] = [];
   for (const option of el.options) {
@@ -316,7 +389,7 @@ async function doSelect(params: { ref: string; values: string[] }): Promise<stri
     throw new Error(`未匹配到选项。可用选项：${available}`);
   }
   dispatchInputEvents(el);
-  return `已选择 ${matched.join(', ')}`;
+  return `已选择 ${matched.join(', ')}${recoveredRef ? `（目标已恢复为 ${recoveredRef}）` : ''}`;
 }
 
 async function doPressKey(params: { key: string }): Promise<string> {
@@ -449,6 +522,10 @@ function doFindInPage(params: { query: string }): string {
 // ---------------------------------------------------------------------------
 
 function takeSnapshot(params: { maxTokens?: number }): string {
+  if (currentSnapshot) {
+    for (const [ref, hint] of currentSnapshot.hintMap) priorHints.set(ref, hint);
+    while (priorHints.size > 500) priorHints.delete(priorHints.keys().next().value!);
+  }
   snapshotCounter++;
   currentSnapshot = buildSnapshot(window, {
     snapshotId: snapshotCounter,
@@ -614,6 +691,7 @@ export interface ExecuteResult {
   snapshot?: string;
   pageStabilized?: boolean;
   rect?: { x: number; y: number; width: number; height: number };
+  evidence?: ActionEvidence;
 }
 
 const WRITE_ACTIONS = new Set([
@@ -633,6 +711,8 @@ export async function executeContentTool(tool: string, params: unknown): Promise
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const p = (params ?? {}) as any;
     let resultText: string;
+    const actionStart = Date.now();
+    const actionGeneration = currentSnapshot?.snapshotId;
 
     switch (tool) {
       case 'read_page': {
@@ -649,16 +729,22 @@ export async function executeContentTool(tool: string, params: unknown): Promise
       case 'get_rect': {
         const element = resolveRef(p.ref);
         const rect = element.getBoundingClientRect();
+        const documentCoordinates = p.coordinateSpace !== 'viewport';
         return {
           resultText: `Bounds for ${p.ref}`,
           rect: {
-            x: rect.left + window.scrollX,
-            y: rect.top + window.scrollY,
+            x: rect.left + (documentCoordinates ? window.scrollX : 0),
+            y: rect.top + (documentCoordinates ? window.scrollY : 0),
             width: rect.width,
             height: rect.height,
           },
         };
       }
+      case 'annotate_refs':
+        return { resultText: annotateRefs() };
+      case 'clear_annotations':
+        clearRefAnnotations();
+        return { resultText: 'annotations cleared' };
       case 'click':
         resultText = await doClick(p);
         break;
@@ -703,11 +789,32 @@ export async function executeContentTool(tool: string, params: unknown): Promise
       const { timedOut } = await stabilize();
       stabilized = !timedOut;
     }
-    const snapshot = takeSnapshot({ maxTokens: 1500 });
+    const previousSnapshot = currentSnapshot?.yaml;
+    const fullSnapshot = takeSnapshot({ maxTokens: 1500 });
+    const snapshot = diffSnapshotYaml(previousSnapshot, fullSnapshot).text;
+    const evidence: ActionEvidence | undefined = WRITE_ACTIONS.has(tool)
+      ? {
+          attemptId: crypto.randomUUID(),
+          generationBefore: actionGeneration,
+          generationAfter: currentSnapshot?.snapshotId,
+          attempts: [
+            {
+              phase: 'execute',
+              strategy: 'l1',
+              startedAt: actionStart,
+              durationMs: Date.now() - actionStart,
+            },
+          ],
+          observedEffects:
+            currentSnapshot?.snapshotId !== actionGeneration ? ['snapshot_changed'] : [],
+          outcome: 'verified',
+        }
+      : undefined;
     return {
       resultText: resultText + drainDialogReports() + (stabilized ? '' : '\n[页面可能未完全加载]'),
       snapshot,
       pageStabilized: stabilized,
+      ...(evidence ? { evidence } : {}),
     };
   } finally {
     agentActing = false;

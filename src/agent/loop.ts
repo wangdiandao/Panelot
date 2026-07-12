@@ -25,6 +25,7 @@ import type {
 } from '../messaging/protocol';
 import type { ProviderAdapter, GenParams, ToolSchema } from '../providers/types';
 import { ProviderError } from '../providers/types';
+import { ActionError } from '../tools/action/errors';
 import { validateParams, type ToolRegistry } from './tool';
 import {
   CONSECUTIVE_FAILURE_REMIND,
@@ -644,6 +645,85 @@ export function runTurn(
               stopReason = 'interrupted';
               await fail('interrupted', false, 'streaming_model');
               break loop;
+            }
+            const escalationName =
+              e instanceof ActionError && typeof e.failure.details?.escalationTool === 'string'
+                ? e.failure.details.escalationTool
+                : undefined;
+            const escalationTool = escalationName ? env.tools.get(escalationName) : undefined;
+            if (escalationTool) {
+              const escalationValidation = validateParams(escalationTool, call.params);
+              if (!escalationValidation.ok) {
+                await fail(escalationValidation.error);
+                continue;
+              }
+              const escalationTarget = await escalationTool.resolveTarget?.(
+                escalationValidation.params as never,
+              );
+              const escalationVerdict = await env.gatekeeper.check(
+                {
+                  toolName: escalationTool.name,
+                  params: escalationValidation.params,
+                  effects: escalationTool.effects,
+                  target: escalationTarget,
+                },
+                threadId,
+              );
+              if (escalationVerdict.verdict === 'deny') {
+                await fail(`L2 escalation denied by policy: ${escalationVerdict.reason}`, false);
+                continue;
+              }
+              if (escalationVerdict.verdict === 'ask') {
+                const decision = await env.requestApproval(turnId, escalationVerdict.request);
+                if (decision.kind === 'decline' || decision.kind === 'cancel') {
+                  await fail('The user declined the trusted-input escalation.', false);
+                  if (decision.kind === 'cancel') {
+                    stopReason = 'interrupted';
+                    break loop;
+                  }
+                  continue;
+                }
+              }
+              try {
+                const escalated = await escalationTool.execute(
+                  callItemId,
+                  escalationValidation.params as never,
+                  abort.signal,
+                );
+                const escalationDetails = {
+                  ...(escalated.details && typeof escalated.details === 'object'
+                    ? escalated.details
+                    : {}),
+                  escalatedFrom: call.name,
+                  escalatedTo: escalationTool.name,
+                };
+                await env.tree.appendNode(threadId, {
+                  type: 'tool_result',
+                  payload: {
+                    itemId: callItemId,
+                    ok: true,
+                    contentForLlm: escalated.content,
+                    details: escalationDetails,
+                    trust: escalationTool.resultTrust ?? 'untrusted',
+                    provenance: escalationTool.resultProvenance ?? 'page',
+                    origin: escalationTarget?.origin,
+                  },
+                });
+                await env.setRunState?.('streaming_model', { pendingTool: undefined });
+                env.emit({
+                  type: 'item.complete',
+                  threadId,
+                  itemId: callItemId,
+                  result: { ok: true, details: escalationDetails },
+                });
+                consecutiveFailures = 0;
+                continue;
+              } catch (escalationError) {
+                await fail(
+                  `Trusted-input escalation failed: ${escalationError instanceof Error ? escalationError.message : String(escalationError)}`,
+                );
+                continue;
+              }
             }
             // Tool errors go back to the model for self-correction (docs/04 §2).
             await fail(`Tool failed: ${e instanceof Error ? e.message : String(e)}`);

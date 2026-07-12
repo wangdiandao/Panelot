@@ -33,7 +33,18 @@ export interface SnapshotResult {
   yaml: string;
   /** ref → element, kept by the content script for execution. */
   refMap: Map<string, Element>;
+  /** Stable, non-sensitive identity hints used for one high-confidence recovery. */
+  hintMap: Map<string, LocatorHint>;
   truncatedNodes: number;
+}
+
+export interface LocatorHint {
+  role: string;
+  name: string;
+  tagName: string;
+  inputType?: string;
+  label?: string;
+  placeholder?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +317,7 @@ const MAX_IFRAME_DEPTH = 4;
 export function buildSnapshot(win: Window, opts: BuildOptions): SnapshotResult {
   const doc = win.document;
   const refMap = new Map<string, Element>();
+  const hintMap = new Map<string, LocatorHint>();
   let refIndex = 0;
   let iframeDepth = 0;
   const sid = opts.snapshotId;
@@ -382,6 +394,16 @@ export function buildSnapshot(win: Window, opts: BuildOptions): SnapshotResult {
         refIndex++;
         node.ref = `s${sid}_${refIndex}`;
         refMap.set(node.ref, el);
+        hintMap.set(node.ref, {
+          role,
+          name: node.name,
+          tagName: tag,
+          ...(el.getAttribute('type') ? { inputType: el.getAttribute('type')! } : {}),
+          ...(el.getAttribute('aria-label') ? { label: el.getAttribute('aria-label')! } : {}),
+          ...(el.getAttribute('placeholder')
+            ? { placeholder: el.getAttribute('placeholder')! }
+            : {}),
+        });
       }
       // Interactive leaf: don't descend (name already summarizes content).
       // Structural/containers: descend for children. A shadow host that is
@@ -432,6 +454,7 @@ export function buildSnapshot(win: Window, opts: BuildOptions): SnapshotResult {
     title: doc.title,
     yaml: header + yaml + (truncated > 0 ? `\n[已截断: ${truncated} 个节点]` : ''),
     refMap,
+    hintMap,
     truncatedNodes: truncated,
   };
 }

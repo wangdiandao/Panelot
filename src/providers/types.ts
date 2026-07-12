@@ -185,6 +185,8 @@ export type ProviderErrorReason =
 
 export interface ProviderErrorDetails {
   status?: number;
+  /** Provider-issued request identifier for support and diagnostics. */
+  requestId?: string;
   reason?: ProviderErrorReason;
   upstreamCode?: string;
   upstreamMessage?: string;

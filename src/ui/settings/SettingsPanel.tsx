@@ -12,7 +12,6 @@ import {
   Cog,
   Database,
   Globe2,
-  Info,
   Plug,
   Package,
   Paperclip,
@@ -55,7 +54,7 @@ const SECTIONS = [
   { id: 'plugins', label: 'Plugins', Icon: Package },
   { id: 'mcp', label: 'MCP 服务器', Icon: Plug },
   { id: 'data', label: '数据', Icon: Database },
-  { id: 'about', label: '关于', Icon: Info },
+  { id: 'about', label: '关于', Icon: Cog },
 ] as const;
 
 export type SettingsSectionId = (typeof SECTIONS)[number]['id'];

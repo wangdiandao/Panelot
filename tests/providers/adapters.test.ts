@@ -224,6 +224,7 @@ describe('AnthropicAdapter streaming', () => {
       .final();
 
     const body = JSON.parse(spy.mock.calls[0]![1]!.body as string);
+    expect(body.cache_control).toEqual({ type: 'ephemeral' });
     expect(body.system[0].cache_control).toEqual({ type: 'ephemeral' });
     expect(body.tools[0].cache_control).toBeUndefined();
     expect(body.tools[1].cache_control).toEqual({ type: 'ephemeral' });

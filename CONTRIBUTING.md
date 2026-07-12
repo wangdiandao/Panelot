@@ -1,6 +1,6 @@
 # Contributing to Panelot
 
-Panelot is a WXT, React, and TypeScript Chrome MV3 extension. Read `AGENTS.md`, `DESIGN.md`, and the relevant file under `docs/` before changing behavior.
+Panelot is a WXT, React, and TypeScript Chrome MV3 extension. Read the relevant architecture and behavior contract under `docs/` before changing behavior.
 
 ## Development
 

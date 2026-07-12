@@ -1,6 +1,6 @@
 # 02 — 数据模型与存储
 
-> 上级文档：[DESIGN.md](../DESIGN.md) · 关联：[01 架构](./01-architecture.md) · [04 Agent 引擎](./04-agent-engine.md)
+> 文档索引：[README.md](../README.md) · 关联：[01 架构](./01-architecture.md) · [04 Agent 引擎](./04-agent-engine.md)
 > 借鉴来源：OpenWebUI 消息树（及其双份存储的反面教训）、Pi Agent 会话树、Codex rollout（SessionMeta 头 + 重放式恢复）
 
 ---

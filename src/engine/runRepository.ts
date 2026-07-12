@@ -218,88 +218,80 @@ export class RunRepository {
     attachmentLink?: AttachmentLink,
     admissionSequence?: number,
   ): Promise<RunRecord> {
-    return this.db.transaction(
-      'rw',
-      [this.db.runs, this.db.attachments],
-      async () => {
-        const current = await this.db.runs.get(id);
-        if (!current) throw new Error(`Run not found: ${id}`);
-        if (!steerableStates.includes(current.state)) {
-          throw new Error(`Run ${id} does not accept steering in state ${current.state}`);
-        }
-        if (node.type !== 'user_message' || !node.id) {
-          throw new Error('Steer must be a user_message with a stable node id');
-        }
-        if (attachmentLink && node.id !== attachmentLink.nodeId) {
-          throw new Error('Attachment link nodeId must match the appended node');
-        }
+    return this.db.transaction('rw', [this.db.runs, this.db.attachments], async () => {
+      const current = await this.db.runs.get(id);
+      if (!current) throw new Error(`Run not found: ${id}`);
+      if (!steerableStates.includes(current.state)) {
+        throw new Error(`Run ${id} does not accept steering in state ${current.state}`);
+      }
+      if (node.type !== 'user_message' || !node.id) {
+        throw new Error('Steer must be a user_message with a stable node id');
+      }
+      if (attachmentLink && node.id !== attachmentLink.nodeId) {
+        throw new Error('Attachment link nodeId must match the appended node');
+      }
 
-        await this.linkAttachments(current, attachmentLink);
+      await this.linkAttachments(current, attachmentLink);
 
-        const updated: RunRecord = {
-          ...current,
-          pendingSteers: [
-            ...(current.pendingSteers ?? []),
-            {
-              nodeId: node.id,
-              payload: structuredClone(node.payload as UserMessagePayload),
-              attachmentIds: attachmentLink?.attachmentIds
-                ? [...attachmentLink.attachmentIds]
-                : undefined,
-              acceptedAt: this.now(),
-              admissionSequence:
-                admissionSequence ??
-                (current.pendingSteers ?? []).reduce(
-                  (maximum, steer) => Math.max(maximum, steer.admissionSequence ?? -1),
-                  -1,
-                ) + 1,
-            },
-          ],
-          revision: current.revision + 1,
-          updatedAt: this.now(),
-        };
-        await this.db.runs.put(updated);
-        return updated;
-      },
-    );
+      const updated: RunRecord = {
+        ...current,
+        pendingSteers: [
+          ...(current.pendingSteers ?? []),
+          {
+            nodeId: node.id,
+            payload: structuredClone(node.payload as UserMessagePayload),
+            attachmentIds: attachmentLink?.attachmentIds
+              ? [...attachmentLink.attachmentIds]
+              : undefined,
+            acceptedAt: this.now(),
+            admissionSequence:
+              admissionSequence ??
+              (current.pendingSteers ?? []).reduce(
+                (maximum, steer) => Math.max(maximum, steer.admissionSequence ?? -1),
+                -1,
+              ) + 1,
+          },
+        ],
+        revision: current.revision + 1,
+        updatedAt: this.now(),
+      };
+      await this.db.runs.put(updated);
+      return updated;
+    });
   }
 
   async materializeSteers(id: string, nodeIds: readonly string[]): Promise<RunRecord> {
-    return this.db.transaction(
-      'rw',
-      [this.db.runs, this.db.threads, this.db.nodes],
-      async () => {
-        const current = await this.db.runs.get(id);
-        if (!current) throw new Error(`Run not found: ${id}`);
-        if (closedSteerStates.includes(current.state)) {
-          throw new Error(`Run ${id} is terminal in state ${current.state}`);
-        }
-        const requested = new Set(nodeIds);
-        const pending = current.pendingSteers ?? [];
-        const pendingById = new Map(pending.map((steer) => [steer.nodeId, steer]));
-        const selected = nodeIds.map((nodeId) => pendingById.get(nodeId));
-        if (selected.some((steer) => !steer) || selected.length !== requested.size) {
-          throw new Error(`Run ${id} has missing pending steer nodes`);
-        }
-        const tree = new ThreadTree(this.db);
-        for (const steer of selected) {
-          if (!steer) continue;
-          await tree.appendNode(current.threadId, {
-            id: steer.nodeId,
-            type: 'user_message',
-            payload: steer.payload,
-          });
-        }
-        const updated: RunRecord = {
-          ...current,
-          pendingSteers: pending.filter((steer) => !requested.has(steer.nodeId)),
-          revision: current.revision + 1,
-          updatedAt: this.now(),
-        };
-        await this.db.runs.put(updated);
-        return updated;
-      },
-    );
+    return this.db.transaction('rw', [this.db.runs, this.db.threads, this.db.nodes], async () => {
+      const current = await this.db.runs.get(id);
+      if (!current) throw new Error(`Run not found: ${id}`);
+      if (closedSteerStates.includes(current.state)) {
+        throw new Error(`Run ${id} is terminal in state ${current.state}`);
+      }
+      const requested = new Set(nodeIds);
+      const pending = current.pendingSteers ?? [];
+      const pendingById = new Map(pending.map((steer) => [steer.nodeId, steer]));
+      const selected = nodeIds.map((nodeId) => pendingById.get(nodeId));
+      if (selected.some((steer) => !steer) || selected.length !== requested.size) {
+        throw new Error(`Run ${id} has missing pending steer nodes`);
+      }
+      const tree = new ThreadTree(this.db);
+      for (const steer of selected) {
+        if (!steer) continue;
+        await tree.appendNode(current.threadId, {
+          id: steer.nodeId,
+          type: 'user_message',
+          payload: steer.payload,
+        });
+      }
+      const updated: RunRecord = {
+        ...current,
+        pendingSteers: pending.filter((steer) => !requested.has(steer.nodeId)),
+        revision: current.revision + 1,
+        updatedAt: this.now(),
+      };
+      await this.db.runs.put(updated);
+      return updated;
+    });
   }
 
   async appendNodesAndTransition(

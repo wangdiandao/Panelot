@@ -41,6 +41,17 @@ beforeEach(() => {
 });
 
 describe('BrowserToolGateway.getTargetTab fallback', () => {
+  it('routes an explicit background tab without changing the fallback target', async () => {
+    tabs = [
+      { id: 2, url: 'https://visible.example.com/', active: true, lastAccessed: 2000 },
+      { id: 7, url: 'https://background.example.com/', active: false },
+    ];
+    const gw = new BrowserToolGateway();
+    await expect(gw.getOperationTab('t1', 7)).resolves.toBe(7);
+    expect(gw.touchedTabs('t1')).toEqual([7]);
+    await expect(gw.getTargetTab('t1')).resolves.toBe(2);
+  });
+
   it('skips the extension page and picks the most recent active web tab', async () => {
     tabs = [
       // The chat page itself — active in the current window, most recent.
@@ -60,16 +71,6 @@ describe('BrowserToolGateway.getTargetTab fallback', () => {
     ];
     const gw = new BrowserToolGateway();
     await expect(gw.getTargetTab('t1')).rejects.toThrow(/网页标签页/);
-  });
-
-  it('keeps an explicitly pinned tab as the target', async () => {
-    tabs = [
-      { id: 1, url: 'chrome-extension://abcdef/chat.html', active: true, lastAccessed: 3000 },
-      { id: 5, url: 'https://attached.example.com/', active: false },
-    ];
-    const gw = new BrowserToolGateway();
-    gw.pinTarget('t1', 5);
-    await expect(gw.getTargetTab('t1')).resolves.toBe(5);
   });
 
   it('suppresses manual-operation reports during the agent-input window', () => {
@@ -94,28 +95,40 @@ describe('BrowserToolGateway.getTargetTab fallback', () => {
     expect(gw.droveThisTurn('t1', 5)).toBe(false);
   });
 
-  it('a pinned target survives releaseFloatingTarget; an auto-discovered one is released', async () => {
-    tabs = [
-      { id: 2, url: 'https://example.com/', active: true, lastAccessed: 2000 },
-      { id: 5, url: 'https://pinned.example.com/', active: false },
-    ];
+  it('releases an auto-discovered fallback at the turn boundary', async () => {
+    tabs = [{ id: 2, url: 'https://example.com/', active: true, lastAccessed: 2000 }];
     const gw = new BrowserToolGateway();
-    // Auto-discovered target (unpinned): released at the turn boundary.
     await expect(gw.getTargetTab('t1')).resolves.toBe(2);
     gw.releaseFloatingTarget('t1');
-    expect(gw.currentTarget('t1')).toBeUndefined();
-    // Pinned target: persists across the boundary.
-    gw.pinTarget('t2', 5);
-    gw.releaseFloatingTarget('t2');
-    expect(gw.currentTarget('t2')).toBe(5);
+    await expect(gw.getTargetTab('t1')).resolves.toBe(2);
   });
 });
 
 describe('navigation-aware dispatch (click → page change ≠ failure)', () => {
+  it('dispatches directly to an explicit inactive tab', async () => {
+    tabs = [
+      { id: 2, url: 'https://visible.example.com/', active: true },
+      { id: 7, url: 'https://background.example.com/', active: false },
+    ];
+    const gw = new BrowserToolGateway();
+    sendMessage.mockImplementation(async (tabId: number, op: { tool: string }) => {
+      if (op.tool === '__ping') return 'pong';
+      return { requestId: 'x', ok: true, result: { resultText: `clicked ${tabId}` } };
+    });
+
+    const result = await gw.callContentTool('t1', 'click', { ref: 's1_1' }, 7);
+
+    expect(result.resultText).toBe('clicked 7');
+    expect(sendMessage).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ tool: 'click', params: { ref: 's1_1' } }),
+    );
+    await expect(gw.getTargetTab('t1')).resolves.toBe(2);
+  });
+
   it('a channel error with a changed URL is reported as successful navigation', async () => {
     tabs = [{ id: 5, url: 'https://shop.example.com/list', active: true, title: '列表' }];
     const gw = new BrowserToolGateway();
-    gw.pinTarget('t1', 5);
 
     let calls = 0;
     sendMessage.mockImplementation(async (_tabId: number, op: { tool: string }) => {
@@ -147,7 +160,6 @@ describe('navigation-aware dispatch (click → page change ≠ failure)', () => 
   it('a genuine failure with an unchanged URL still surfaces as an error', async () => {
     tabs = [{ id: 5, url: 'https://shop.example.com/list', active: true }];
     const gw = new BrowserToolGateway();
-    gw.pinTarget('t1', 5);
     sendMessage.mockImplementation(async (_tabId: number, op: { tool: string }) => {
       if (op.tool === '__ping') return 'pong';
       return { requestId: 'x', ok: false, error: '快照已过期：ref "s0_1" 不属于当前快照' };
@@ -161,7 +173,6 @@ describe('navigation-aware dispatch (click → page change ≠ failure)', () => 
     // false "navigation succeeded".
     tabs = [{ id: 5, url: 'https://shop.example.com/list', active: true }];
     const gw = new BrowserToolGateway();
-    gw.pinTarget('t1', 5);
     sendMessage.mockImplementation(async (_tabId: number, op: { tool: string }) => {
       if (op.tool === '__ping') return 'pong';
       // A background redirect fires while the tool reports failure.
@@ -174,7 +185,6 @@ describe('navigation-aware dispatch (click → page change ≠ failure)', () => 
   it('a timeout with an UNCHANGED url stays a timeout (not a fake navigation)', async () => {
     tabs = [{ id: 5, url: 'https://shop.example.com/list', active: true, status: 'loading' }];
     const gw = new BrowserToolGateway();
-    gw.pinTarget('t1', 5);
     let pinged = false;
     sendMessage.mockImplementation(async (_tabId: number, op: { tool: string }) => {
       if (op.tool === '__ping') {

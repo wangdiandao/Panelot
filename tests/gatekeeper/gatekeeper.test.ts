@@ -109,6 +109,8 @@ describe('pattern matching', () => {
     expect(toolMatches('category:eval', 'run_javascript')).toBe(true);
     expect(toolMatches('category:eval', 'click')).toBe(false);
     expect(toolMatches('category:navigate', 'tab_open')).toBe(true);
+    expect(toolMatches('category:navigate', 'session_restore')).toBe(true);
+    expect(toolMatches('category:organize', 'tabs_group')).toBe(true);
     expect(toolMatches('category:fill', 'type')).toBe(true);
     expect(toolMatches('category:mcp', 'mcp__github__create_issue')).toBe(true);
     expect(categoryOf('drag')).toBe('interact');

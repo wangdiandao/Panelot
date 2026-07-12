@@ -300,10 +300,14 @@ export function normalizeHttpError(
   status: number,
   bodyText: string,
   retryAfterHeader?: string | null,
+  requestId?: string | null,
 ): ProviderError {
-  const retryAfterMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 || undefined : undefined;
+  const retryAfterMs = parseRetryAfter(retryAfterHeader);
   const upstream = readUpstreamDetails(bodyText);
-  const details = upstream.details;
+  const details = {
+    ...upstream.details,
+    requestId: requestId ? sanitizeUpstreamText(requestId) || undefined : undefined,
+  };
   const searchableText = upstream.searchableText.replace(/[_-]+/g, ' ');
 
   if (!isQuotaError(status, searchableText) && isContextLengthError(status, searchableText)) {
@@ -340,6 +344,16 @@ export function normalizeHttpError(
   return new ProviderError('protocol', `unexpected HTTP ${status}`, undefined, diagnosticDetails);
 }
 
+/** Retry-After accepts either delta-seconds or an HTTP-date (RFC 9110). */
+export function parseRetryAfter(value?: string | null, now = Date.now()): number | undefined {
+  if (!value?.trim()) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const date = Date.parse(value);
+  if (!Number.isFinite(date)) return undefined;
+  return Math.max(0, date - now);
+}
+
 export interface RetryOptions {
   /** Base delay 1s, ×2, cap 32s, max 4 attempts (docs/03 §7). */
   maxAttempts?: number;
@@ -348,6 +362,8 @@ export interface RetryOptions {
   signal?: AbortSignal;
   /** Injectable clock for tests. */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  /** Injectable entropy for deterministic tests. */
+  random?: () => number;
 }
 
 const defaultSleep = (ms: number, signal?: AbortSignal) =>
@@ -383,6 +399,7 @@ export async function withRetry<T>(
   const base = opts.baseDelayMs ?? 1000;
   const cap = opts.capDelayMs ?? 32_000;
   const sleep = opts.sleep ?? defaultSleep;
+  const random = opts.random ?? Math.random;
 
   let lastError: unknown;
   for (let i = 0; i < maxAttempts; i++) {
@@ -405,12 +422,12 @@ export async function withRetry<T>(
         case 'rate_limit':
         case 'overloaded': {
           if (keys.advance()) continue; // failover first when multi-key
-          const delay = e.retryAfterMs ?? Math.min(base * 2 ** i, cap);
+          const delay = e.retryAfterMs ?? jitteredBackoff(base, cap, i, random);
           await sleep(delay, opts.signal);
           continue;
         }
         case 'network': {
-          const delay = Math.min(base * 2 ** i, cap);
+          const delay = jitteredBackoff(base, cap, i, random);
           await sleep(delay, opts.signal);
           continue;
         }
@@ -420,4 +437,9 @@ export async function withRetry<T>(
     }
   }
   throw lastError;
+}
+
+function jitteredBackoff(base: number, cap: number, attempt: number, random: () => number): number {
+  const ceiling = Math.min(base * 2 ** attempt, cap);
+  return Math.floor(ceiling * (0.5 + Math.min(1, Math.max(0, random())) * 0.5));
 }

@@ -137,6 +137,8 @@ export class AnthropicAdapter implements ProviderAdapter {
       stream: true,
       // Anthropic requires max_tokens; default generously when unset.
       max_tokens: req.params.maxTokens ?? 8192,
+      // Advance the cache point through growing conversation history.
+      cache_control: { type: 'ephemeral' },
     };
     if (req.system) {
       // Cache breakpoint at the end of the stable system layer (docs/10 §1).
@@ -203,6 +205,7 @@ export class AnthropicAdapter implements ProviderAdapter {
               res.status,
               await res.text().catch(() => ''),
               res.headers.get('retry-after'),
+              res.headers.get('request-id'),
             );
           }
           if (!res.body) {
@@ -408,7 +411,13 @@ export class AnthropicAdapter implements ProviderAdapter {
       headers: this.headers(keys.current()),
       signal: AbortSignal.timeout(4000),
     });
-    if (!res.ok) throw normalizeHttpError(res.status, await res.text().catch(() => ''), null);
+    if (!res.ok)
+      throw normalizeHttpError(
+        res.status,
+        await res.text().catch(() => ''),
+        res.headers.get('retry-after'),
+        res.headers.get('request-id'),
+      );
     const json = (await res.json()) as { data?: { id: string }[] };
     return (json.data ?? []).map((m) => m.id);
   }

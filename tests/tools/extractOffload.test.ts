@@ -17,6 +17,7 @@ let db: PanelotDB;
 
 function makeGateway(resultText: string): BrowserToolGateway {
   return {
+    getOperationTab: vi.fn(async (_threadId: string, tabId?: number) => tabId ?? 5),
     callContentTool: vi.fn(async () => ({ resultText })),
     getTabOrigin: vi.fn(async () => 'https://example.com'),
   } as unknown as BrowserToolGateway;

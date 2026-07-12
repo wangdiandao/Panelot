@@ -1,6 +1,6 @@
 # 06 — 权限与安全模型
 
-> 上级文档：[DESIGN.md](../DESIGN.md) · 关联：[01 架构](./01-architecture.md) · [04 Agent 引擎](./04-agent-engine.md) · [05 浏览器工具](./05-browser-tools.md) · [10 提示词](./10-prompts.md)
+> 文档索引：[README.md](../README.md) · 关联：[01 架构](./01-architecture.md) · [04 Agent 引擎](./04-agent-engine.md) · [05 浏览器工具](./05-browser-tools.md) · [10 提示词](./10-prompts.md)
 > 借鉴来源：Codex 两轴安全模型（approval policy × sandbox）；弃用其已废弃的 on-failure 档；记取其「档位语义必须在协议层唯一定义」的教训
 
 ---
@@ -89,7 +89,8 @@ interface PermissionRule {
 
 | 类别 | 工具 |
 |---|---|
-| `navigate` | navigate, tab_open, tab_activate, tab_close, go_back, go_forward |
+| `navigate` | navigate, tab_open, tab_focus, tab_close, go_back, go_forward, session_restore |
+| `organize` | tabs_group, tab_group_update |
 | `click` | click, click_xy |
 | `fill` | type, select_option, press_key, batch_actions |
 | `eval` | run_javascript |
@@ -132,7 +133,7 @@ type ApprovalDecision =
 - 挂起的审批有超时（默认 5 分钟）→ 超时解析为带说明的 decline，随后作为工具拒绝结果回给模型；当前不会另写一条 `system_notice`；
 - 审批期间 loop 挂起，tool_call 已落库；待审批请求本身只存在 SW 内存。SW 存活时重连 UI 会从 snapshot 取回 pending approval；若 SW 在审批期间被杀，只能按“轮次被中断”恢复，原审批请求不会重建；
 - **审批 UI 只出现在扩展自有页面**（侧边栏/全屏页），绝不在网页内渲染——网页仿冒的审批框对引擎无效（引擎只认 Port 上的 `approval.response`）；
-- ask 请求写入 `approvals` 表并随 ThreadSnapshot 恢复；无 UI 时不会丢失。当前仍没有 `chrome.notifications.create` 或点击直达审批卡片的实现。
+- ask 请求写入 `approvals` 表并随 ThreadSnapshot 恢复；无 UI 时不会丢失。后台会为待审批和暂停任务创建浏览器通知，点击通知会打开对应 Thread；通知只带状态摘要，不带工具参数或网页内容。
 
 ## 5. debugger / L2 提示语义
 

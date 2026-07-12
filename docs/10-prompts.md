@@ -1,6 +1,6 @@
 # 10 — 提示词工程
 
-> 上级文档：[DESIGN.md](../DESIGN.md) · 关联：[04 Agent 引擎](./04-agent-engine.md) · [05 浏览器工具](./05-browser-tools.md) · [06 权限](./06-permissions.md) · [08 Skills](./08-skills-plugins.md)
+> 文档索引：[README.md](../README.md) · 关联：[04 Agent 引擎](./04-agent-engine.md) · [05 浏览器工具](./05-browser-tools.md) · [06 权限](./06-permissions.md) · [08 Skills](./08-skills-plugins.md)
 > 哲学：Pi Agent 路线——能力靠工具与渐进披露，不靠堆提示词。~1500 tokens 是设计目标，当前没有构建时 token 计数门禁，工具全集下不能把它当成已验证上限。
 
 ---

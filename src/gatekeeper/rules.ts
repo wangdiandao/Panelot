@@ -27,9 +27,18 @@ export interface PermissionRule {
 // ---------------------------------------------------------------------------
 
 export const ACTION_CATEGORIES: Readonly<Record<string, readonly string[]>> = {
-  navigate: ['navigate', 'tab_open', 'tab_activate', 'tab_close', 'go_back', 'go_forward'],
-  click: ['click', 'click_xy'],
-  fill: ['type', 'select_option', 'press_key', 'batch_actions'],
+  navigate: [
+    'navigate',
+    'tab_open',
+    'tab_focus',
+    'tab_close',
+    'go_back',
+    'go_forward',
+    'session_restore',
+  ],
+  organize: ['tabs_group', 'tab_group_update'],
+  click: ['click', 'click_xy', 'click_trusted'],
+  fill: ['type', 'type_trusted', 'select_option', 'press_key', 'batch_actions'],
   eval: ['run_javascript'],
   download: ['download'],
   upload: ['upload_file'],

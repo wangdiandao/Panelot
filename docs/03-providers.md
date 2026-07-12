@@ -1,6 +1,6 @@
 # 03 — Provider 体系
 
-> 上级文档：[DESIGN.md](../DESIGN.md) · 关联：[01 架构](./01-architecture.md) · [04 Agent 引擎](./04-agent-engine.md)
+> 文档索引：[README.md](../README.md) · 关联：[01 架构](./01-architecture.md) · [04 Agent 引擎](./04-agent-engine.md)
 > 借鉴来源：OpenWebUI 的协议优先抽象 / 模型预设 / task model（并补其 customHeaders、多 key、并发拉取三处短板）
 
 ---
@@ -124,7 +124,7 @@ interface FinalResult {
 ### 3.2 AnthropicAdapter（`POST {baseUrl}/v1/messages`）
 
 - 事件类型：`message_start / content_block_start / content_block_delta(text_delta | input_json_delta | thinking_delta) / content_block_stop / message_delta / message_stop`；按 `content_block index` 聚合。
-- **Prompt caching**：system prompt 与 tools 定义打 `cache_control: {type:'ephemeral'}`——Agent 场景每 turn 多次调用，缓存收益极大；布局配合 10 §6 的分层拼装（稳定层在前）。
+- **Prompt caching**：system prompt 与 tools 定义使用显式 `cache_control: {type:'ephemeral'}`，请求顶层同时启用自动缓存，使缓存点随多轮消息历史前移；布局配合 10 §6 的分层拼装（稳定层在前）。
 - 头：`x-api-key` + `anthropic-version`；扩展环境直连需 `anthropic-dangerous-direct-browser-access: true`。
 
 ## 4. URL 规范化与预置模板
@@ -161,13 +161,14 @@ interface QuirkFlags {
 ```ts
 type ProviderError =
   | { kind: 'auth' }               // 401/403 → 换下一个 key；全失败则提示用户
-  | { kind: 'rate_limit'; retryAfterMs?: number }  // 429 → 尊重 retry-after，指数退避（1s 起 ×2 上限 32s，最多 4 次）；多 key 时先 failover
+  | { kind: 'rate_limit'; retryAfterMs?: number }  // 429 → 尊重 retry-after（秒或 HTTP 日期），带抖动的指数退避（1s 起 ×2 上限 32s，最多 4 次）；多 key 时先 failover
   | { kind: 'overloaded' }         // 529/503 → 同 429 策略
   | { kind: 'context_too_long' }   // → 不重试，直接报错并建议用户新开会话
   | { kind: 'content_filter' } | { kind: 'network' } | { kind: 'protocol'; raw: string };
 ```
 
 重试只发生在「本次 LLM 调用」层；工具执行错误不在此层（那是模型自纠的领域）。
+错误详情保留 OpenAI `x-request-id` 或 Anthropic `request-id`，用于问题定位；不记录 API Key 或完整响应体。
 
 ## 8. 已定事项
 

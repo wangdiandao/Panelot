@@ -1,6 +1,6 @@
 # 01 — 整体架构与消息协议
 
-> 上级文档：[DESIGN.md](../DESIGN.md) · 关联：[02 数据模型](./02-data-model.md) · [04 Agent 引擎](./04-agent-engine.md) · [06 权限](./06-permissions.md)
+> 文档索引：[README.md](../README.md) · 关联：[02 数据模型](./02-data-model.md) · [04 Agent 引擎](./04-agent-engine.md) · [06 权限](./06-permissions.md)
 > 借鉴来源：Codex CLI 的 SQ/EQ 双队列与 app-server JSON-RPC 协议、Pi Agent 的 transport 抽象（详见 [11 参考项目](./11-references.md)）
 
 ---

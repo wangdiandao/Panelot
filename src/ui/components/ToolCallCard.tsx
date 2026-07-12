@@ -15,6 +15,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collap
 import { Badge } from './ui/badge';
 import { cn } from '../lib/utils';
 import { t } from '../i18n';
+import { ActionEvidenceDetails, isActionEvidence } from './ActionEvidenceDetails';
 
 export interface ToolCardData {
   itemId: string;
@@ -115,6 +116,19 @@ export function ToolCallCard({ card }: { card: ToolCardData }) {
                 {card.resultText}
               </pre>
             </section>
+          )}
+          {isActionEvidence(
+            (card.details as { actionEvidence?: unknown } | undefined)?.actionEvidence,
+          ) && (
+            <ActionEvidenceDetails
+              evidence={
+                (
+                  card.details as {
+                    actionEvidence: import('../../tools/action/types').ActionEvidence;
+                  }
+                ).actionEvidence
+              }
+            />
           )}
         </div>
       </CollapsibleContent>

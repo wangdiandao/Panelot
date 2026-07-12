@@ -51,6 +51,7 @@ export function userMessageToUnifiedMessage(
     const mustFence =
       ctx.trust === 'untrusted' ||
       ['page', 'selection', 'screenshot', 'tab', 'mcp_resource', 'file'].includes(ctx.kind);
+    blocks.push({ type: 'text', text: contextHeader(ctx) });
     blocks.push(
       ...(mustFence
         ? fenceBlocks(
@@ -62,6 +63,13 @@ export function userMessageToUnifiedMessage(
     );
   }
   return { role: 'user', content: blocks };
+}
+
+function contextHeader(ctx: import('../messaging/protocol').ContextBlock): string {
+  const fields = [`kind=${ctx.kind}`, `label=${JSON.stringify(ctx.label)}`];
+  if (ctx.sourceRef) fields.push(`source=${JSON.stringify(ctx.sourceRef)}`);
+  if (ctx.origin) fields.push(`origin=${JSON.stringify(ctx.origin)}`);
+  return `[Panelot context: ${fields.join(' ')}]`;
 }
 
 export async function buildSessionContext(

@@ -1,6 +1,6 @@
 # 04 — Agent 核心引擎
 
-> 上级文档：[DESIGN.md](../DESIGN.md) · 关联：[01 架构](./01-architecture.md) · [02 数据模型](./02-data-model.md) · [06 权限](./06-permissions.md) · [10 提示词](./10-prompts.md)
+> 文档索引：[README.md](../README.md) · 关联：[01 架构](./01-architecture.md) · [02 数据模型](./02-data-model.md) · [06 权限](./06-permissions.md) · [10 提示词](./10-prompts.md)
 > 借鉴来源：Pi Agent 的极简 loop / AgentTool 双通道；Codex 的 steering-queueing-interrupt 三通路与 turnKind
 
 ---

@@ -11,6 +11,7 @@ import { AttachmentRepository } from '../src/data/attachments';
 import { listEnabledPluginSiteInstructions } from '../src/plugins/assets';
 import { BrowserToolGateway } from '../src/tools/gateway';
 import { createL0Tools, createL1Tools } from '../src/tools/browserTools';
+import { createBrowserDataTools } from '../src/tools/browserDataTools';
 import { createL2Tools } from '../src/tools/l2Tools';
 import { CdpManager } from '../src/tools/cdp/debugger';
 import {
@@ -104,6 +105,7 @@ async function startBackground(): Promise<void> {
       registry.register(tool);
     };
     for (const tool of createL0Tools(gateway, getThreadId)) add(tool);
+    for (const tool of createBrowserDataTools()) add(tool);
     for (const tool of createL1Tools(gateway, getThreadId, {
       axTreeFallback: (tabId) => cdp.getAxTreeText(tabId),
       getTabId: (tid) => gateway.getTargetTab(tid),
@@ -209,9 +211,8 @@ async function startBackground(): Promise<void> {
 
   const host = new EngineHost(core);
   core.onBroadcast = (ev) => {
-    // Turn boundary: an auto-discovered (unpinned) target only lives for the
-    // turn — release it so the next turn follows the tab the user is looking
-    // at. Agent-pinned targets (tab_open/tab_activate) persist.
+    // A call without tabId locks its fallback for one turn so a user tab switch
+    // cannot redirect an in-flight sequence. Explicit tabId calls bypass it.
     if (ev.type === 'turn.complete') gateway.releaseFloatingTarget(ev.threadId);
     if (ev.type === 'approval.request') {
       notifyThread(ev.threadId, 'approval', ev.approvalId);

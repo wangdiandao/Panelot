@@ -1,16 +1,25 @@
 /**
  * BrowserToolGateway (docs/01 §5): engine-side router for browser tools.
  * L0 → chrome.tabs API directly; L1 → content script messaging with idempotent
- * injection + one retry; per-thread target tab + touched-tab audit (docs/05 §6).
+ * injection + one retry; explicit tab routing + touched-tab audit (docs/05 §6).
  */
 
 import type { ContentScriptOp, ContentScriptResult } from '../messaging/protocol';
 import type { ExecuteResult } from './content/executor';
+import { ActionError } from './action/errors';
+import type { ActionFailure } from './action/types';
 
 const CS_TIMEOUT_MS = 15_000;
 
 /** A response arrived reporting failure — a genuine tool error, not navigation. */
-class ToolReportedError extends Error {}
+class ToolReportedError extends Error {
+  constructor(
+    message: string,
+    readonly failure?: ActionFailure,
+  ) {
+    super(message);
+  }
+}
 
 /**
  * MAIN-world dialog patch (serialized by chrome.scripting — must be fully
@@ -94,14 +103,12 @@ export class BrowserToolGateway {
    * Browser-level control model (2026-07-06): the agent may target ANY tab —
    * the safety gates are write approvals + the sensitive-origin blacklist
    * (docs/06), not tab membership. Per thread we keep:
-   *  - target: the tab page tools operate on. `pinned` when the agent chose
-   *    it explicitly (tab_open/tab_activate); unpinned targets follow the
-   *    user's current tab BETWEEN turns but stay fixed DURING a turn (so a
-   *    mid-task user tab-switch never redirects clicks to the wrong page).
+   *  - fallback target: the user-visible web tab selected when a call omits
+   *    tabId. It stays fixed during one turn, then follows the user again.
    *  - touched: audit trail of tabs the agent has operated on — drives the
    *    task-panel display, never a permission boundary.
    */
-  private target = new Map<string, { tabId: number; pinned: boolean }>();
+  private target = new Map<string, number>();
   private touched = new Map<string, Set<number>>();
   /**
    * tabId → timestamp until which trusted input on that tab is the AGENT's
@@ -138,8 +145,8 @@ export class BrowserToolGateway {
         for (const [threadId, set] of this.touched) {
           if (set.delete(tabId)) this.onTabsChanged(threadId);
         }
-        for (const [threadId, t] of this.target) {
-          if (t.tabId === tabId) this.target.delete(threadId);
+        for (const [threadId, targetTabId] of this.target) {
+          if (targetTabId === tabId) this.target.delete(threadId);
         }
       });
     }
@@ -152,16 +159,10 @@ export class BrowserToolGateway {
     return [...(this.touched.get(threadId) ?? [])];
   }
 
-  /** The thread's current target tab id, if any (no discovery). */
-  currentTarget(threadId: string): number | undefined {
-    return this.target.get(threadId)?.tabId;
-  }
-
   /**
    * The tab the USER is looking at (active tab of the last focused window).
-   * Distinct from the agent's target tab — tool results report view-state
-   * changes against THIS, so the model never conflates "my working tab
-   * changed" with "the user's screen changed".
+   * Distinct from any explicit operation tab. Tool results compare visible
+   * state against this tab so the model does not invent a foreground change.
    */
   async getUserActiveTab(): Promise<chrome.tabs.Tab | undefined> {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
@@ -199,27 +200,19 @@ export class BrowserToolGateway {
     return this.drivenTabs.get(threadId)?.has(tabId) ?? false;
   }
 
-  /** Explicit target choice (tab_open / tab_activate): survives across turns. */
-  pinTarget(threadId: string, tabId: number): void {
-    this.target.set(threadId, { tabId, pinned: true });
-    this.markTouched(threadId, tabId);
-  }
-
-  /** Drop the target (closed / navigated to a dead end). */
+  /** Drop the fallback target when it closes or becomes unusable. */
   clearTarget(threadId: string, tabId?: number): void {
     const t = this.target.get(threadId);
-    if (t && (tabId === undefined || t.tabId === tabId)) this.target.delete(threadId);
+    if (t !== undefined && (tabId === undefined || t === tabId)) this.target.delete(threadId);
   }
 
   /**
-   * Turn boundary hook: an auto-discovered (unpinned) target is released when
-   * the turn ends, so the NEXT turn follows the tab the user is looking at by
-   * then. Pinned targets persist — the agent chose them deliberately. The
-   * driven-tab set resets too: auto-pause is a mid-turn conflict guard, and
-   * touching a page after the turn finished is not a conflict.
+   * Turn boundary hook: the fallback is released so the next call without an
+   * explicit tabId follows the user again. Explicitly routed calls never write
+   * this state. The driven-tab set also resets at the turn boundary.
    */
   releaseFloatingTarget(threadId: string): void {
-    if (this.target.get(threadId)?.pinned === false) this.target.delete(threadId);
+    this.target.delete(threadId);
     this.drivenTabs.delete(threadId);
   }
 
@@ -239,8 +232,8 @@ export class BrowserToolGateway {
     const existing = this.target.get(threadId);
     if (existing !== undefined) {
       try {
-        await chrome.tabs.get(existing.tabId);
-        return existing.tabId;
+        await chrome.tabs.get(existing);
+        return existing;
       } catch {
         this.target.delete(threadId);
       }
@@ -264,14 +257,25 @@ export class BrowserToolGateway {
       );
     // Unpinned: locked for this turn, released at turn end (see
     // releaseFloatingTarget) so the next turn follows the user again.
-    this.target.set(threadId, { tabId: tab.id, pinned: false });
+    this.target.set(threadId, tab.id);
     this.markTouched(threadId, tab.id);
     return tab.id;
   }
 
-  async getTabOrigin(threadId: string): Promise<string> {
+  /** Resolve an explicit per-call tab without changing the fallback target. */
+  async getOperationTab(threadId: string, requestedTabId?: number): Promise<number> {
+    if (requestedTabId === undefined) return this.getTargetTab(threadId);
+    const tab = await chrome.tabs.get(requestedTabId);
+    if (!tab.url || !/^https?:/.test(tab.url)) {
+      throw new Error(`标签页 [${requestedTabId}] 不是可操作的 http(s) 网页。`);
+    }
+    this.markTouched(threadId, requestedTabId);
+    return requestedTabId;
+  }
+
+  async getTabOrigin(threadId: string, requestedTabId?: number): Promise<string> {
     try {
-      const tabId = await this.getTargetTab(threadId);
+      const tabId = await this.getOperationTab(threadId, requestedTabId);
       const tab = await chrome.tabs.get(tabId);
       return tab.url ? new URL(tab.url).origin : '';
     } catch {
@@ -292,8 +296,13 @@ export class BrowserToolGateway {
     'upload',
   ]);
 
-  async callContentTool(threadId: string, tool: string, params: unknown): Promise<ExecuteResult> {
-    const tabId = await this.getTargetTab(threadId);
+  async callContentTool(
+    threadId: string,
+    tool: string,
+    params: unknown,
+    requestedTabId?: number,
+  ): Promise<ExecuteResult> {
+    const tabId = await this.getOperationTab(threadId, requestedTabId);
     if (BrowserToolGateway.WRITE_CONTENT_TOOLS.has(tool)) this.markDriven(threadId, tabId);
     await this.ensureInjected(tabId);
     await this.setDialogInterception(tabId, true);
@@ -307,8 +316,15 @@ export class BrowserToolGateway {
   async getElementRect(
     threadId: string,
     ref: string,
+    requestedTabId?: number,
+    coordinateSpace: 'document' | 'viewport' = 'document',
   ): Promise<{ x: number; y: number; width: number; height: number }> {
-    const result = await this.callContentTool(threadId, 'get_rect', { ref });
+    const result = await this.callContentTool(
+      threadId,
+      'get_rect',
+      { ref, coordinateSpace },
+      requestedTabId,
+    );
     if (!result.rect) throw new Error(`Element ${ref} has no visible bounds`);
     return result.rect;
   }
@@ -338,10 +354,13 @@ export class BrowserToolGateway {
       // A response ARRIVED reporting failure (stale ref, element not found):
       // that's a genuine tool error, never navigation. Mark it so the catch
       // below doesn't reframe it as a successful page change.
-      if (!result.ok) throw new ToolReportedError(result.error);
+      if (!result.ok) throw new ToolReportedError(result.error, result.failure);
       return result.result as ExecuteResult;
     } catch (e) {
-      if (e instanceof ToolReportedError) throw new Error(e.message);
+      if (e instanceof ToolReportedError) {
+        if (e.failure) throw new ActionError(e.failure);
+        throw new Error(e.message);
+      }
       const message = (e as Error).message ?? String(e);
       // No response arrived (timeout / torn-down channel). The action may have
       // navigated the page — the content script gets destroyed mid-call, so

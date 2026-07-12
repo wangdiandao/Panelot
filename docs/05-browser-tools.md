@@ -1,9 +1,9 @@
 # 05 — 浏览器工具集
 
-> 上级文档：[DESIGN.md](../DESIGN.md) · 关联：[04 Agent 引擎](./04-agent-engine.md) · [06 权限](./06-permissions.md) · [10 提示词](./10-prompts.md)
+> 文档索引：[README.md](../README.md) · 关联：[04 Agent 引擎](./04-agent-engine.md) · [06 权限](./06-permissions.md) · [10 提示词](./10-prompts.md)
 > 借鉴来源：Playwright MCP 的快照格式与 element+ref 双参数；Chrome DevTools MCP 的版本化 uid；browser-use 的分层等待与"变化即中断"；nanobrowser 的漏检/死循环反面教训
 
-> **实现状态**：L0、L1 以及 viewport/fullpage/ref 元素截图、坐标点击、拖拽、用户附件上传与 trusted `press_key` 已接入。跨域 iframe/closed shadow backend-node ref、事件监听器探测、精确网络空闲和通用 L1→L2 自动升级仍是目标规格。
+> **实现状态**：L0、L1、actionability 检查、结构化动作错误、一次高置信 ref 恢复、动作后快照 diff，以及 viewport/fullpage/ref 元素截图、标注截图、坐标点击、拖拽、用户附件上传与 trusted 输入工具已接入。合成输入明确失效时，ActionRunner 可在同一工具调用内请求 `type_trusted`，且升级会单独经过 Gatekeeper。`read_page_deep` 通过 CDP AXTree 为跨域 iframe/closed shadow 中可访问的控件生成 deep ref，并对有界 DOM 样本补充事件监听器目标；trusted click/type 使用 CDP Network 事件做有上限的静默判定。
 
 ---
 
@@ -33,7 +33,7 @@ Title: 登录 - Example
 
 规则：
 
-- **ref = `s{snapshotId}_{nodeIndex}`**：snapshotId 为 tab 内单调递增的快照版本号。**执行层校验 ref 前缀必须等于该 tab 当前最新快照 id，过期直接拒绝**并返回「快照已过期，请重新 read_page」——从协议层杜绝 state divergence（nanobrowser/browser-use 的顽疾）。
+- **ref = `s{snapshotId}_{nodeIndex}`**：snapshotId 为 tab 内单调递增的快照版本号。普通执行首先拒绝过期 ref；ActionRunner 可用不含 value 的内部 hint 做一次严格恢复，仅当 role/name/tag/type/label/placeholder 唯一完全匹配时继续，否则返回歧义错误要求重新读取。
 - 交互后**填值回显**：`[value="..."]`；ARIA 状态方括号表示：`[checked]` `[disabled]` `[expanded]` `[selected]` `[invalid]`。
 - 纯文本节点 `- text: "..."`，多行压平空白。
 - **ref map**（内存态，不落库）：content script 内 `Map<ref, Element>`（强引用；快照更新即整体替换，元素随页面变更自然失效）；L2 需要时另存 `ref → backendNodeId`（经 `DOM.pushNodesByBackendIdsToFrontend` 翻译），构成 L1↔L2 的统一定位层。
@@ -52,7 +52,7 @@ Title: 登录 - Example
 ### 1.3 体积控制
 
 - 视口内元素全量 + 视口外交互元素保留（截断其文本）；单快照目标 ≤ 3000 tokens，超限从「视口外非交互文本」开始丢弃并在快照尾部注明 `[已截断: N 个节点]`（不静默截断）；
-- 交互工具执行后当前返回一个新的、最多约 1500 tokens 的**截断全量快照**和新 snapshotId；尚未实现只返回变化子树的结构化 diff。
+- 交互工具执行后生成新的、最多约 1500 tokens 的快照，并向模型返回结构化行级 diff 加当前全部交互 ref；generation 链的正确性仍以完整内存快照为准。
 
 ### 1.4 感知降级链
 
@@ -69,33 +69,43 @@ L1 DOM 遍历建树
 | 能力 | 当前实现 | 目标/限制 |
 |---|---|---|
 | DOM 快照/正文抽取 | L1 DOM 遍历；空树时 CDP `Accessibility.getFullAXTree` 返回粗粒度文本 | AXTree fallback 不生成可交互 ref |
-| click / 填表 / select | L1 `element.click()`、value 设置及 input/change 事件 | 尚无按 ref 自动升级为 CDP trusted click/type |
-| 跨域 iframe / closed shadow root | L1 不可达 | 尚未接入 `DOM.getDocument{pierce}` |
+| click / 填表 / select | L1 actionability + 合成事件 + 结果验证；合成 type 明确失效时可自动请求 `type_trusted`；`click_trusted` 也可显式调用 | 自动升级重新经过 Gatekeeper，最多一次；click 尚无足够确定的“合成点击未生效”判据，不自动升级 |
+| 跨域 iframe / closed shadow root | L1 标注不可见；L2 `read_page_deep` 从完整 AXTree 生成 `cN_M` deep ref，并以 backend node 执行 trusted click/type；Chrome 125+ 用 flat child sessions 递归附着 OOPIF | 仅覆盖进入 AXTree 或有界事件监听器扫描且具有 backend node 的控件；非可访问 DOM/Canvas 仍需 screenshot；旧版 Chrome 只获得 root target 能力 |
 | 按键 | `press_key` 明确为 L2，通过 CDP `Input.dispatchKeyEvent` 发送 trusted 输入 | 测试/无 CDP 降级才使用合成事件并明确提示 |
-| 坐标点击 / 拖拽 | L2 `Input.dispatchMouseEvent` | 仅 vision 坐标模式，不与 ref 定位层互通 |
-| 截图 | L2 viewport/fullpage/ref 元素区域截图 | fullpage 临时覆盖 metrics，并在 finally 清除 |
+| 坐标点击 / 拖拽 | L2 `Input.dispatchMouseEvent`；deep ref 通过 `DOM.getBoxModel` 解析中心点 | Canvas 仍使用 vision 坐标模式 |
+| 截图 | L2 viewport/fullpage/ref 元素区域截图；`annotate:true` 叠加与当前 ref 对齐的标签 | fullpage 临时覆盖 metrics，标注与 metrics 都在 finally 清除 |
 | 文件上传 | `upload_file` 标为 L2，但通过 content script + `DataTransfer` 设置用户附件 | 尚未使用 `DOM.setFileInputFiles` |
-| 事件监听器探测 | 未实现 | `DOMDebugger.getEventListeners` 为目标能力 |
-| 网络静默判定 | L1 用 MutationObserver 静默窗口近似 | `Network.*` 精确判定未实现 |
+| 事件监听器探测 | `read_page_deep` 对 pierced DOM 中最多 120 个非 AX 控件候选调用 `DOMDebugger.getEventListeners` | 有界扫描防止复杂/恶意页面造成无上限 CDP 工作；未扫描节点仍可能遗漏 |
+| 网络静默判定 | L1 用 MutationObserver 静默窗口近似；trusted click/type 在动作前启用 CDP Network 追踪，500ms idle / 5s cap | 常驻连接不会无限阻塞；超时以 `networkSettled:false` 进入 details |
 
-当前自动使用 CDP 的路径包括：L1 `read_page` 空树时取 AXTree、`press_key` trusted 输入，以及模型显式调用 screenshot/click_xy/drag 等 L2 工具。L1 click/type 失败后的通用自动升级与跨 iframe ref 定位尚未实现，失败会作为 tool_result 回给模型。attach 按 tab 粒度串行化，空闲 30s 自动 detach；当前没有 turn-complete 立即 detach。**debugger 单 target 约束**：一次只 attach 一个 tab，多 tab 任务按需切换。
+当前自动使用 CDP 的路径包括：L1 `read_page` 空树时取 AXTree、`press_key` trusted 输入，以及合成 type 明确失效后的 `type_trusted` 升级；模型也可显式调用 read_page_deep/screenshot/click_xy/drag/click_trusted/type_trusted 等 L2 工具。升级重新经过 Gatekeeper，拒绝后不会执行或原样重试。deep ref 只在 tab 最新 CDP generation 内有效，过期硬拒绝。attach 按 tab 粒度串行化，空闲 30s 自动 detach；当前没有 turn-complete 立即 detach。**debugger 单 target 约束**：一次只 attach 一个 tab，多 tab 任务按需切换。
 
 ## 3. 工具清单与 Schema
 
 交互工具统一 **`element`（人类可读描述，供审批展示与模型自核）+ `ref`（精确定位）双参数**。zod 定义即真相，下表为摘要：
 
+所有读取、交互、导航和截图工具都接受可选 `tabId`。跨标签任务应始终传入 `tabs_list` 返回的 id；省略时才使用用户当前可见的网页标签页作为 turn 内默认值。工具结果以 `[tabId=N]` 标明来源。
+
 ### L0 —— 标签页（无注入）
 
 | 工具 | 参数 | effects |
 |---|---|---|
-| `tabs_list` | `{ all? }` — 当前窗口全部 tab（`all:true` 跨窗口），标注「用户正在看」与「当前操作目标」 | read |
+| `tabs_list` | `{ all? }` — 当前窗口全部 tab（`all:true` 跨窗口），标注「用户正在看」 | read |
 | `tab_open` | `{ url }` — 后台打开/复用，不抢用户前台 | write |
-| `tab_activate` | `{ tabId, focus? }` — 默认仅后台换操作目标；`focus:true` 才切用户前台 | write |
+| `tab_focus` | `{ tabId }` — 仅当用户明确要求查看页面时切到前台 | write |
 | `tab_close` | `{ tabId }` — 任意 tab（经审批）；结果显式说明用户视图是否变化 | write |
-| `navigate` | `{ url }`（当前操作目标 tab） | write |
-| `go_back` / `go_forward` | — | write |
+| `navigate` | `{ tabId?, url }` — 指定 tab 时在后台导航 | write |
+| `go_back` / `go_forward` | `{ tabId? }` | write |
+| `history_search` | `{ query?, startTime?, endTime?, maxResults? }` — 检索浏览历史 | read |
+| `bookmarks_search` | `{ query, maxResults? }` — 检索已保存书签 | read |
+| `top_sites` | `{ maxResults? }` — 读取浏览器提供的常用站点 | read |
+| `sessions_recently_closed` | `{ maxResults? }` — 列出最近关闭的标签页/窗口及 session id | read |
+| `session_restore` | `{ sessionId }` — 恢复最近关闭项，会改变浏览器会话 | write |
+| `tab_groups_list` | `{ all? }` — 列出当前窗口或全部窗口的标签组 | read |
+| `tabs_group` | `{ tabIds, groupId? }` — 将标签页归入新组或已有组 | write |
+| `tab_group_update` | `{ groupId, title?, color?, collapsed? }` — 更新标签组外观与折叠状态 | write |
 
-**视图状态诚实契约**：Agent 的「操作目标 tab」与用户的「可见 tab」是两回事。tab 工具默认后台工作，每个结果显式说明用户看到的页面有没有变——模型不得在结果声明「用户视图未变」后再提议"切换回原页面"。
+**视图状态诚实契约**：整个浏览器是 Agent 的工作区，用户的「可见 tab」只是未传 `tabId` 时的默认值。页面工具直接接收 `tabId` 并在结果中回显 `[tabId=N]`；后台操作不得改变用户可见页面，也不得随后提议“切换回原页面”。只有 `tab_focus` 会主动切换前台。
 
 ### L1 —— 感知与交互
 
@@ -157,9 +167,10 @@ L1 DOM 遍历建树
 
 ## 6. 多标签管理（浏览器级控制权，2026-07-06）
 
-Agent 的控制权是**整个浏览器**，不是某个标签页子集——安全闸是写操作审批 + 敏感域名黑名单（06），不是 tab 成员资格。Thread 级维护两个概念：
+Agent 的控制权是**整个浏览器**，不是某个标签页子集——安全闸是写操作审批 + 敏感域名黑名单（06），不是 tab 成员资格。工具调用按以下方式路由：
 
-- **操作目标（target）**：页面工具当下作用的 tab。Agent 显式选择的目标（`tab_open`/`tab_activate`）**钉住**、跨 turn 持续；未显式选择时自动取用户当前所在的网页 tab，且 turn 内锁定（用户中途切 tab 不会把点击重定向到错误页面）、turn 结束释放（下一轮重新跟随用户）。
+- **显式路由**：`read_page`、`click`、`type`、`navigate`、`screenshot` 等页面工具都接受 `tabId`，直接作用于该标签页，不维护全局 Agent 目标，也不要求先调用切换工具。
+- **默认路由**：未传 `tabId` 时，自动取用户当前所在的网页 tab，并在当前 turn 内锁定；turn 结束后释放，下一轮重新跟随用户。
 - **触达痕迹（touched）**：Agent 操作过的 tab 集合——纯审计展示（任务面板"Agent 操作过的标签页"），**不是权限边界**。
 
 其他行为：tab 被关闭（用户或 Agent）→ 从目标与痕迹中移除；用户在 Agent **正在操作的目标 tab** 上手动输入 → 自动暂停该 thread（在别的曾操作过的 tab 上操作不算冲突）。

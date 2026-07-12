@@ -17,7 +17,7 @@ export interface SkillIndexEntry {
 
 export interface AssembleOptions {
   userGlobalPrompt?: string;
-  /** Site-level prompts matching the current target tab (docs/08 §6). */
+  /** Site-level prompts matching the default user-visible web tab (docs/08 §6). */
   sitePrompts?: { pattern: string; prompt: string }[];
   skillsIndex?: SkillIndexEntry[];
   activeSkills?: { name: string; body: string }[];

@@ -128,10 +128,14 @@ describe('buildSessionContext basics', () => {
     const first = await buildSessionContext(tree, t.id, leaf.id);
     const second = await buildSessionContext(tree, t.id, leaf.id);
     const firstBlocks = first.messages[0]!.content;
-    const firstFenced = (firstBlocks[1] as { type: 'text'; text: string }).text;
-    const secondFenced = (second.messages[0]!.content[1] as { type: 'text'; text: string }).text;
+    const firstFenced = (firstBlocks[2] as { type: 'text'; text: string }).text;
+    const secondFenced = (second.messages[0]!.content[2] as { type: 'text'; text: string }).text;
 
     expect(firstBlocks[0]).toEqual({ type: 'text', text: 'Summarize the page.' });
+    expect(firstBlocks[1]).toEqual({
+      type: 'text',
+      text: '[Panelot context: kind=page label="Example page" origin="https://example.test"]',
+    });
     expect(firstFenced).toMatch(/^<<<web_content_[a-f0-9]+ origin="https:\/\/example\.test"/);
     expect(firstFenced).not.toContain('<<<end_web_content_fake>>>');
     expect(secondFenced).not.toBe(firstFenced);

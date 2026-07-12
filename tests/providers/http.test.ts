@@ -3,6 +3,7 @@ import {
   createKeyRing,
   createProviderFrameError,
   normalizeHttpError,
+  parseRetryAfter,
   withRetry,
 } from '../../src/providers/http';
 import { ProviderError } from '../../src/providers/types';
@@ -400,6 +401,13 @@ describe('normalizeHttpError (docs/03 §7)', () => {
   it('parses retry-after seconds', () => {
     expect(normalizeHttpError(429, '', '5').retryAfterMs).toBe(5000);
   });
+
+  it('parses Retry-After HTTP dates and preserves provider request ids', () => {
+    expect(
+      parseRetryAfter('Wed, 21 Oct 2015 07:28:00 GMT', Date.parse('2015-10-21T07:27:55Z')),
+    ).toBe(5000);
+    expect(normalizeHttpError(429, '', '1', 'req_123').details.requestId).toBe('req_123');
+  });
 });
 
 describe('key failover (docs/03 §8, sticky + failover)', () => {
@@ -454,6 +462,7 @@ describe('key failover (docs/03 §8, sticky + failover)', () => {
       sleep: async (ms) => {
         delays.push(ms);
       },
+      random: () => 1,
     });
     expect(result).toBe('ok');
     expect(delays).toEqual([1000, 2000]);
@@ -469,6 +478,21 @@ describe('key failover (docs/03 §8, sticky + failover)', () => {
     });
     await withRetry(keys, attempt, { sleep: async (ms) => void delays.push(ms) });
     expect(delays).toEqual([7000]);
+  });
+
+  it('adds bounded jitter to transient retry delays', async () => {
+    const delays: number[] = [];
+    const keys = createKeyRing(['k']);
+    let calls = 0;
+    await withRetry(
+      keys,
+      async () => {
+        if (calls++ === 0) throw new ProviderError('network', 'down');
+        return 'ok';
+      },
+      { sleep: async (ms) => void delays.push(ms), random: () => 0 },
+    );
+    expect(delays).toEqual([500]);
   });
 
   it('does not retry context_too_long (not a transient failure)', async () => {

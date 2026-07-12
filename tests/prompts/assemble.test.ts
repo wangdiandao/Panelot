@@ -42,6 +42,15 @@ describe('assembleSystemPrompt (docs/10 §1 layering)', () => {
     // The kernel has its own "# Skills" section; the INDEX block must be absent.
     expect(prompt).not.toContain('The following skills are available');
   });
+
+  it('keeps the kernel compact and defines real capability boundaries', () => {
+    expect(KERNEL_PROMPT.length).toBeLessThan(7500);
+    expect(KERNEL_PROMPT).toContain('You are Panelot');
+    expect(KERNEL_PROMPT).toContain('complete source of truth');
+    expect(KERNEL_PROMPT).toContain('Do not invent tools');
+    expect(KERNEL_PROMPT).toContain('MCP resources are referenced context, not tools');
+    expect(KERNEL_PROMPT).toContain('[Panelot context: ...]');
+  });
 });
 
 describe('fenceUntrusted (docs/10 §4)', () => {

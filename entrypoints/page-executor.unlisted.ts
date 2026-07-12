@@ -10,6 +10,7 @@ import {
   showIndicator,
   watchManualOperation,
 } from '../src/tools/content/executor';
+import { serializeActionFailure } from '../src/tools/action/errors';
 
 export default defineUnlistedScript({
   main() {
@@ -30,9 +31,15 @@ export default defineUnlistedScript({
         showIndicator('Panelot 正在操作…');
         void executeContentTool(op.tool, op.params)
           .then((result) => sendResponse({ requestId: op.requestId, ok: true, result }))
-          .catch((error: Error) =>
-            sendResponse({ requestId: op.requestId, ok: false, error: error.message }),
-          )
+          .catch((error: unknown) => {
+            const failure = serializeActionFailure(error);
+            sendResponse({
+              requestId: op.requestId,
+              ok: false,
+              error: failure.message,
+              failure,
+            });
+          })
           .finally(() => hideIndicator());
         return true;
       },

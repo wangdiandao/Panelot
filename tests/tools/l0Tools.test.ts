@@ -134,7 +134,7 @@ describe('tab_close view-state honesty', () => {
   });
 });
 
-describe('tab_activate background vs foreground', () => {
+describe('tab_focus foreground-only behavior', () => {
   it('prepares the selected tab and URL destination before permission checks', async () => {
     tabs = [
       { id: 1, url: 'https://a.com/', active: true, lastFocused: true },
@@ -142,7 +142,7 @@ describe('tab_activate background vs foreground', () => {
     ];
     const { tool } = toolset();
 
-    await expect(tool('tab_activate').resolveTarget!({ tabId: 2 } as never)).resolves.toEqual({
+    await expect(tool('tab_focus').resolveTarget!({ tabId: 2 } as never)).resolves.toEqual({
       tabId: 2,
       origin: 'https://b.com',
     });
@@ -151,35 +151,13 @@ describe('tab_activate background vs foreground', () => {
     ).resolves.toEqual({ origin: 'https://new.example' });
   });
 
-  it('default retarget is background-only and says the user view is unchanged', async () => {
-    tabs = [
-      { id: 1, url: 'https://a.com/', title: 'A', active: true, lastFocused: true },
-      { id: 2, url: 'https://b.com/', title: 'B', active: false },
-    ];
-    const { gw, tool } = toolset();
-    const result = await tool('tab_activate').execute(
-      'c1',
-      { tabId: 2 } as never,
-      abort(),
-      undefined,
-    );
-    expect(gw.currentTarget('t1')).toBe(2);
-    expect(updated).toEqual([]); // no chrome.tabs.update — nothing focused
-    expect(text(result)).toContain('用户看到的页面没有变化');
-  });
-
-  it('focus:true brings the tab to the foreground and says so', async () => {
+  it('brings the tab to the foreground and says so', async () => {
     tabs = [
       { id: 1, url: 'https://a.com/', title: 'A', active: true, lastFocused: true, windowId: 10 },
       { id: 2, url: 'https://b.com/', title: 'B', active: false, windowId: 10 },
     ];
     const { tool } = toolset();
-    const result = await tool('tab_activate').execute(
-      'c1',
-      { tabId: 2, focus: true } as never,
-      abort(),
-      undefined,
-    );
+    const result = await tool('tab_focus').execute('c1', { tabId: 2 } as never, abort(), undefined);
     expect(updated).toEqual([{ tabId: 2, props: { active: true } }]);
     expect(windowsUpdated).toEqual([10]);
     expect(text(result)).toContain('前台');
@@ -187,16 +165,16 @@ describe('tab_activate background vs foreground', () => {
 });
 
 describe('tabs_list user-view marking', () => {
-  it("marks the user's visible tab distinctly from the agent's target tab", async () => {
+  it("marks the user's visible tab without declaring a global agent target", async () => {
     tabs = [
       { id: 1, url: 'https://a.com/', title: 'A', active: true, lastFocused: true },
       { id: 2, url: 'https://b.com/', title: 'B', active: false },
     ];
-    const { gw, tool } = toolset();
-    gw.pinTarget('t1', 2);
+    const { tool } = toolset();
     const result = await tool('tabs_list').execute('c1', {} as never, abort(), undefined);
     expect(text(result)).toContain('[1] (用户正在看) A');
-    expect(text(result)).toContain('[2] (当前操作目标) B');
+    expect(text(result)).toContain('[2] B');
+    expect(text(result)).not.toContain('当前操作目标');
   });
 
   it('lists ALL tabs in the window — the whole browser is in scope', async () => {
@@ -243,5 +221,29 @@ describe('tab_open stays in the background', () => {
     expect(updated).toEqual([]); // never touches active state
     expect(text(result)).toContain('复用');
     expect(text(result)).toContain('没有变化');
+  });
+});
+
+describe('per-call tab routing', () => {
+  it('navigates an inactive tab directly without focusing it', async () => {
+    tabs = [
+      { id: 1, url: 'https://visible.example/', title: 'Visible', active: true, lastFocused: true },
+      { id: 2, url: 'https://background.example/', title: 'Background', active: false },
+    ];
+    const { tool } = toolset();
+
+    const result = await tool('navigate').execute(
+      'c1',
+      { tabId: 2, url: 'https://destination.example/' } as never,
+      abort(),
+      undefined,
+    );
+
+    expect(updated).toContainEqual({
+      tabId: 2,
+      props: { url: 'https://destination.example/' },
+    });
+    expect(updated).not.toContainEqual({ tabId: 2, props: { active: true } });
+    expect(text(result)).toContain('[tabId=2]');
   });
 });

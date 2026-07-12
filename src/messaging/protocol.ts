@@ -460,7 +460,13 @@ export interface ContentScriptOp {
 
 export type ContentScriptResult =
   | { requestId: string; ok: true; result: unknown }
-  | { requestId: string; ok: false; error: string };
+  | {
+      requestId: string;
+      ok: false;
+      /** Kept for one compatibility cycle while callers adopt structured failures. */
+      error: string;
+      failure?: import('../tools/action/types').ActionFailure;
+    };
 
 // ---------------------------------------------------------------------------
 // Type guards / helpers

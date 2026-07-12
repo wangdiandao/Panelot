@@ -269,6 +269,7 @@ export class OpenAiAdapter implements ProviderAdapter {
               res.status,
               await res.text().catch(() => ''),
               res.headers.get('retry-after'),
+              res.headers.get('x-request-id'),
             );
           }
           if (!res.body) {
@@ -467,7 +468,13 @@ export class OpenAiAdapter implements ProviderAdapter {
       headers: this.headers(keys.current()),
       signal: AbortSignal.timeout(4000),
     });
-    if (!res.ok) throw normalizeHttpError(res.status, await res.text().catch(() => ''), null);
+    if (!res.ok)
+      throw normalizeHttpError(
+        res.status,
+        await res.text().catch(() => ''),
+        res.headers.get('retry-after'),
+        res.headers.get('x-request-id'),
+      );
     const json = (await res.json()) as { data?: { id: string }[] };
     return (json.data ?? []).map((m) => m.id);
   }

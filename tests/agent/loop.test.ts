@@ -15,6 +15,7 @@ import type {
   StreamRequest,
 } from '../../src/providers/types';
 import { ProviderError } from '../../src/providers/types';
+import { actionError } from '../../src/tools/action/errors';
 
 // ---------------------------------------------------------------------------
 // Mock provider: scripted responses, records every request it receives.
@@ -383,6 +384,82 @@ describe('agent loop (docs/04 §2)', () => {
 });
 
 describe('gatekeeper integration', () => {
+  it('rechecks Gatekeeper before an automatic trusted-input escalation', async () => {
+    const trusted = vi.fn(async () => ({ content: [{ type: 'text' as const, text: 'trusted' }] }));
+    tools.register({
+      name: 'type',
+      label: 'Type',
+      description: 'type',
+      parameters: z.object({ element: z.string(), ref: z.string(), text: z.string() }),
+      level: 'L1',
+      effects: 'write',
+      execute: async () => {
+        throw actionError('l1_not_effective', 'ignored', 'verify', true, {
+          escalationTool: 'type_trusted',
+        });
+      },
+    });
+    tools.register({
+      name: 'type_trusted',
+      label: 'Trusted type',
+      description: 'trusted type',
+      parameters: z.object({ element: z.string(), ref: z.string(), text: z.string() }),
+      level: 'L2',
+      effects: 'write',
+      execute: trusted,
+    });
+    const checked: string[] = [];
+    const gatekeeper: GatekeeperCheck = {
+      check: async (call) => {
+        checked.push(call.toolName);
+        return call.toolName === 'type_trusted'
+          ? {
+              verdict: 'ask',
+              request: {
+                tool: call.toolName,
+                label: 'Trusted type',
+                params: call.params,
+                targetOrigin: 'https://example.com',
+                flags: ['escalation_l2'],
+              },
+            }
+          : { verdict: 'allow' };
+      },
+    };
+    const approvals: string[] = [];
+    const thread = await tree.createThread({});
+    provider.queue(
+      {
+        toolCalls: [
+          {
+            id: 'c1',
+            name: 'type',
+            params: { element: 'Name', ref: 's1_1', text: 'Ada' },
+          },
+        ],
+      },
+      { streamText: ['done'] },
+    );
+
+    await runTurn(
+      makeEnv({
+        gatekeeper,
+        requestApproval: async (_turnId, request) => {
+          approvals.push(request.tool);
+          return { kind: 'accept' };
+        },
+      }),
+      thread.id,
+      { text: 'fill the form' },
+    ).done;
+
+    expect(checked).toEqual(['type', 'type_trusted']);
+    expect(approvals).toEqual(['type_trusted']);
+    expect(trusted).toHaveBeenCalledOnce();
+    const result = provider.requests[1]!.messages.find((message) => message.role === 'tool_result');
+    expect((result?.content[0] as { text?: string }).text).toContain('trusted');
+  });
+
   it('deny → tool_result explains the denial, loop continues', async () => {
     tools.register(makeEchoTool({ effects: 'write' }));
     const gatekeeper: GatekeeperCheck = {

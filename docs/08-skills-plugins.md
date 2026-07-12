@@ -1,6 +1,6 @@
 # 08 — Skills 与 Plugin 体系
 
-> 上级文档：[DESIGN.md](../DESIGN.md) · 关联：[04 Agent 引擎](./04-agent-engine.md) · [09 界面](./09-ui.md) · [10 提示词](./10-prompts.md)
+> 文档索引：[README.md](../README.md) · 关联：[04 Agent 引擎](./04-agent-engine.md) · [09 界面](./09-ui.md) · [10 提示词](./10-prompts.md)
 > 格式决策：兼容 Claude Code 的 SKILL.md（社区生态可直接导入）；斜杠命令的变量表单借鉴 OpenWebUI
 
 > **实现状态**：单文件 SKILL.md 的解析、编辑、文件/URL 导入、冲突处理、导出、渐进披露和 Skill 斜杠命令已接入。数据型 Plugin 支持本地 ZIP/普通 GitHub 仓库或 archive URL 安装、整体启停与卸载；精选索引随构建内置但当前为空。
@@ -55,7 +55,7 @@ interface SkillRecord {
 
 ## 2. 渐进披露（与 Claude Code 行为一致）
 
-1. **索引常驻**：所有 enabled Skill 的 `name + description` 拼入 system prompt 的 Skills 区块（10 §6）；有 `sites` 作用域的 Skill 仅在当前操作目标 tab 匹配时进入索引（省 prompt 空间）；
+1. **索引常驻**：所有 enabled Skill 的 `name + description` 拼入 system prompt 的 Skills 区块（10 §6）；有 `sites` 作用域的 Skill 仅在当前默认网页 tab 匹配时进入索引（省 prompt 空间）；显式 `tabId` 工具调用仍由工具与权限层按实际目标裁决；
 2. **按需加载**：模型判断相关时调用内置工具 `load_skill{name}` → 返回完整 body 作为 tool_result 进入上下文；
 3. `load_skill` effects:'read'、默认 allow；同一 Skill 每 Thread 只完整加载一次（重复调用返回「已加载」提示）；
 4. `auto_suggest`：`SkillManager.suggestionsFor(url)` 已实现并有单测，但 content script URL 变化 → 侧边栏建议胶囊的 UI 链路尚未接入。
