@@ -25,8 +25,23 @@ function redactCredentials(value: string): string {
     .replace(/\bsk-[A-Za-z0-9_-]{6,}\b/gi, '[REDACTED]');
 }
 
+function stripUnsafeControlCharacters(value: string): string {
+  let visible = '';
+  for (const character of value) {
+    const codePoint = character.codePointAt(0)!;
+    const isUnsafeControl =
+      codePoint <= 0x08 ||
+      codePoint === 0x0b ||
+      codePoint === 0x0c ||
+      (codePoint >= 0x0e && codePoint <= 0x1f) ||
+      codePoint === 0x7f;
+    if (!isUnsafeControl) visible += character;
+  }
+  return visible;
+}
+
 function sanitizeUpstreamText(value: string): string {
-  const visible = value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
+  const visible = stripUnsafeControlCharacters(value);
   return redactCredentials(visible).trim().slice(0, MAX_UPSTREAM_TEXT);
 }
 

@@ -88,6 +88,12 @@ describe('normalizeHttpError (docs/03 §7)', () => {
     expect(longCode).toHaveLength(2000);
   });
 
+  it('strips non-whitespace control characters while preserving tab and line breaks', () => {
+    const body = 'a\u0000\u0008\u000b\u000c\u000e\u001f\u007fb\t\n\rc';
+
+    expect(normalizeHttpError(400, body).details.upstreamMessage).toBe('ab\t\n\rc');
+  });
+
   it.each([
     ['insufficient_quota', 'quota_exceeded'],
     ['insufficient_balance', 'quota_exceeded'],
