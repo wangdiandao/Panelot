@@ -4,12 +4,30 @@
  * auth (bearer/OAuth with refresh), and connection state.
  */
 
-import { z } from 'zod';
+import { schema, type RuntimeSchema } from '../agent/schema';
 import type { AnyAgentTool } from '../agent/tool';
-import type { McpWorkerClient } from './workerClient';
-import { discoverAuthServer, authorize, refreshTokens, registerClient } from './oauth';
-import type { McpConnectionState, McpServerConfig } from './types';
+import { McpWorkerClient } from './workerClient';
 import {
+  discoverAuthServer,
+  authorize,
+  refreshTokens,
+  registerClient,
+  type OAuthDiscovery,
+  type OAuthFetchPermissionContext,
+  type OAuthFetchPermissionGuard,
+} from './oauth';
+import type {
+  McpConnectionState,
+  McpOAuthChallenge,
+  McpOAuthCredentialBinding,
+  McpOAuthFlowResult,
+  McpOAuthPermissionApproval,
+  McpOAuthPermissionRequired,
+  McpOAuthPermissionStage,
+  McpServerConfig,
+} from './types';
+import {
+  deleteMcpAccess,
   MCP_SERVERS_KEY,
   listMcpServers,
   protectMcpServer,
@@ -20,25 +38,53 @@ import {
 } from './store';
 import { onStorageChange } from '../settings/store';
 import type { ContentBlock, ContextBlock } from '../messaging/protocol';
+import { normalizeEndpointUrl } from '../security/endpointUrl';
+import { HostPermissionBroker, hostPermissionBroker } from '../permissions/hostPermissionBroker';
+
+const MCP_OAUTH_PERMISSION_PLAN_TTL_MS = 5 * 60_000;
+
+interface PermissionStageInput {
+  stage: McpOAuthPermissionStage;
+  originReasons: { origin: string; reason: string }[];
+  summary: McpOAuthPermissionRequired['summary'];
+  fingerprint?: unknown;
+  planDigest?: string;
+  forceReview?: boolean;
+  invalidateOnChange?: boolean;
+}
+
+export class McpOAuthPermissionRequiredError extends Error {
+  constructor(readonly permissionRequired: McpOAuthPermissionRequired) {
+    super(`MCP OAuth host permission required: ${permissionRequired.origins.join(', ')}`);
+    this.name = 'McpOAuthPermissionRequiredError';
+  }
+}
+
+export function permissionRequiredFromError(
+  error: unknown,
+): McpOAuthPermissionRequired | undefined {
+  return error instanceof McpOAuthPermissionRequiredError ? error.permissionRequired : undefined;
+}
 
 /** json-schema-to-zod would be ideal; a pragmatic passthrough keeps the bridge small.
  *  The raw JSON Schema is forwarded to the provider unchanged (docs/07 §4). */
-function schemaToZod(inputSchema: Record<string, unknown>): z.ZodType {
+function schemaToZod(_inputSchema: Record<string, unknown>): RuntimeSchema {
   // We validate loosely here (real validation is server-side); the provider
-  // receives the raw JSON Schema via the AgentTool.parameters → toJSONSchema
-  // path, so we wrap in a passthrough object preserving the shape.
-  return z.object({}).passthrough().describe(JSON.stringify(inputSchema));
+  // receives the raw JSON Schema via AgentTool.inputSchema, so runtime only
+  // needs to enforce the tool-argument object boundary.
+  return schema.looseObject({});
 }
 
 export class McpManager {
   private clients = new Map<string, McpWorkerClient>();
   private configs = new Map<string, McpServerConfig>();
   private states = new Map<string, McpConnectionState>();
+  private pendingPermissionPlans = new Map<string, McpOAuthPermissionRequired>();
   onStateChange: (id: string, state: McpConnectionState) => void = () => {};
   /** Notifies when the tool registry should be rebuilt (list_changed). */
   onToolsChanged: () => void = () => {};
 
-  constructor() {
+  constructor(private readonly permissionBroker: HostPermissionBroker = hostPermissionBroker) {
     onStorageChange(MCP_SERVERS_KEY, () => void this.reconcileStorage());
   }
 
@@ -60,6 +106,8 @@ export class McpManager {
   async removeServer(id: string): Promise<void> {
     await this.disconnect(id);
     const servers = await this.listServers();
+    const removed = servers.find((server) => server.id === id);
+    if (removed) await deleteMcpAccess(removed);
     await saveMcpServers(servers.filter((s) => s.id !== id));
   }
 
@@ -82,20 +130,35 @@ export class McpManager {
 
     this.setState(id, { status: 'connecting' });
     try {
-      const { McpWorkerClient } = await import('./workerClient');
+      const url = normalizeEndpointUrl(config.url, { label: `MCP 服务器 ${config.name} 的 URL` });
+      const resourcePermission = await this.preparePermissionStage(id, undefined, {
+        stage: 'resource',
+        originReasons: [{ origin: new URL(url).origin, reason: '连接 MCP 资源服务器' }],
+        summary: { resource: url },
+        fingerprint: ['resource', url],
+      });
+      if (resourcePermission.required) {
+        throw new McpOAuthPermissionRequiredError(resourcePermission.required);
+      }
+      this.configs.set(id, { ...config, url });
       const client = new McpWorkerClient(config.id, () => {
         this.setState(config.id, { status: 'ready', toolCount: client.tools.length });
         this.onToolsChanged();
       });
       await client.connect({
-        url: config.url,
+        url,
         authorization: await this.authHeaderFor(config.id),
       });
       this.clients.set(id, client);
       this.setState(id, { status: 'ready', toolCount: client.tools.length });
       this.onToolsChanged();
     } catch (e) {
-      this.setState(id, { status: 'error', reason: attributeError((e as Error).message) });
+      const permissionRequired = permissionRequiredFromError(e);
+      this.setState(id, {
+        status: 'error',
+        reason: permissionRequired ? '需要额外主机权限' : attributeError((e as Error).message),
+        permissionRequired,
+      });
       throw e;
     }
   }
@@ -147,63 +210,376 @@ export class McpManager {
     return null;
   }
 
-  private async validOAuthToken(config: McpServerConfig): Promise<string | null> {
-    if (config.auth.kind !== 'oauth' || !config.auth.tokens) return null;
+  private async validOAuthToken(
+    config: McpServerConfig,
+    approval?: McpOAuthPermissionApproval,
+  ): Promise<string | null> {
+    if (config.auth.kind !== 'oauth' || !config.auth.tokens || !config.auth.binding) return null;
     const { tokens } = config.auth;
-    const access = await readMcpAccess(config.id);
-    if (tokens.expiresAt > Date.now() + 30_000 && access) return access;
-    // Refresh silently (docs/07 §3).
-    const refresh = await readMcpRefresh(config);
-    if (refresh && config.auth.clientId) {
-      try {
-        const meta = await discoverAuthServer(config.url);
-        const fresh = await refreshTokens(meta.token_endpoint, config.auth.clientId, refresh);
-        await this.persistTokens(config.id, fresh);
-        return fresh.access;
-      } catch {
+    try {
+      const discovery = await discoverAuthServer(config.url, {
+        preferredIssuer: config.auth.binding.issuer,
+        permissionGuard: this.discoveryPermissionGuard(config.id, approval),
+      });
+      const endpointStage = await this.prepareOAuthEndpointStage(
+        config.id,
+        config,
+        discovery,
+        approval,
+        false,
+      );
+      if (endpointStage.required) {
+        this.setPermissionRequiredState(config.id, endpointStage.required);
         return null;
       }
+      if (!sameBinding(config.auth.binding, endpointStage.binding)) return null;
+      const access = await readMcpAccess(config.id);
+      if (tokens.expiresAt > Date.now() + 30_000 && access) return access;
+
+      const refresh = await readMcpRefresh(config);
+      if (refresh && config.auth.clientId) {
+        const refreshStage = await this.preparePermissionStage(config.id, approval, {
+          stage: 'token_refresh',
+          originReasons: [
+            {
+              origin: new URL(discovery.metadata.token_endpoint).origin,
+              reason: '刷新 MCP OAuth access token',
+            },
+          ],
+          summary: oauthSummary(discovery),
+          fingerprint: [
+            'token_refresh',
+            endpointStage.binding.planDigest,
+            discovery.metadata.token_endpoint,
+          ],
+        });
+        if (refreshStage.required) {
+          this.setPermissionRequiredState(config.id, refreshStage.required);
+          return null;
+        }
+        const fresh = await refreshTokens(
+          discovery.metadata.token_endpoint,
+          config.auth.clientId,
+          refresh,
+          discovery.binding.resource,
+          this.endpointFetchGuard(
+            config.id,
+            'token_refresh',
+            refreshStage.planDigest,
+            oauthSummary(discovery),
+          ),
+          discovery.binding.issuer,
+        );
+        await this.persistTokens(config.id, fresh, config.auth.clientId, endpointStage.binding);
+        return fresh.access;
+      }
+      return null;
+    } catch (error) {
+      const permissionRequired = permissionRequiredFromError(error);
+      if (permissionRequired) this.setPermissionRequiredState(config.id, permissionRequired);
+      return null;
     }
-    return null;
   }
 
   /** Full OAuth flow (discovery → DCR → PKCE → token) for the settings page. */
-  async runOAuthFlow(id: string): Promise<void> {
+  async runOAuthFlow(
+    id: string,
+    challenge: McpOAuthChallenge = {},
+    approval?: McpOAuthPermissionApproval,
+  ): Promise<McpOAuthFlowResult> {
     const servers = await this.listServers();
     const config = servers.find((s) => s.id === id);
     if (!config || config.auth.kind !== 'oauth') throw new Error('not an oauth server');
-    const meta = await discoverAuthServer(config.url);
-    const clientId = config.auth.clientId ?? (await registerClient(meta));
-    const tokens = await authorize(meta, clientId, config.auth.scopes);
-    await this.persistTokens(id, tokens, clientId);
-  }
-
-  private async reauth(id: string): Promise<boolean> {
     try {
-      await this.runOAuthFlow(id);
-      return true;
-    } catch {
-      this.setState(id, { status: 'error', reason: '需要重新授权' });
-      return false;
+      if (approval?.stage === 'token_refresh') {
+        const access = await this.validOAuthToken(config, approval);
+        if (access) return { status: 'complete' };
+        const pending = this.permissionRequiredState(id);
+        if (pending) return pending;
+      }
+
+      const discovery = await discoverAuthServer(config.url, {
+        resourceMetadataUrl: challenge.resourceMetadataUrl,
+        scope: challenge.scope,
+        preferredIssuer: config.auth.binding?.issuer,
+        permissionGuard: this.discoveryPermissionGuard(id, approval, challenge),
+      });
+      const endpointStage = await this.prepareOAuthEndpointStage(id, config, discovery, approval);
+      if (endpointStage.required) {
+        this.setPermissionRequiredState(id, endpointStage.required);
+        return endpointStage.required;
+      }
+
+      const scopes = discovery.scopes ?? config.auth.scopes;
+      const fetchGuard = this.endpointFetchGuard(
+        id,
+        'oauth_endpoints',
+        endpointStage.planDigest,
+        oauthSummary(discovery),
+      );
+      const clientId = endpointStage.reuseClient
+        ? config.auth.clientId!
+        : await registerClient(discovery.metadata, scopes, fetchGuard, discovery.binding.resource);
+      const tokens = await authorize(
+        discovery.metadata,
+        clientId,
+        discovery.binding.resource,
+        scopes,
+        fetchGuard,
+      );
+      await this.persistTokens(id, tokens, clientId, endpointStage.binding);
+      this.clearPermissionState(id);
+      return { status: 'complete' };
+    } catch (error) {
+      const permissionRequired = permissionRequiredFromError(error);
+      if (permissionRequired) {
+        this.setPermissionRequiredState(id, permissionRequired);
+        return permissionRequired;
+      }
+      this.setState(id, {
+        status: 'error',
+        reason: attributeError(error instanceof Error ? error.message : String(error)),
+      });
+      throw error;
     }
   }
 
-  async reauthorizeWorker(id: string): Promise<string | null> {
+  async reauthorizeWorker(
+    id: string,
+    challenge: McpOAuthChallenge = {},
+  ): Promise<{
+    authorization: string | null;
+    permissionRequired?: McpOAuthPermissionRequired;
+  }> {
     const config = (await this.listServers()).find((server) => server.id === id);
-    if (!config || config.auth.kind !== 'oauth' || !(await this.reauth(id))) return null;
-    return this.authHeaderFor(id);
+    if (!config || config.auth.kind !== 'oauth') return { authorization: null };
+    try {
+      const result = await this.runOAuthFlow(id, challenge);
+      if (result.status === 'permission_required') {
+        return { authorization: null, permissionRequired: result };
+      }
+      return { authorization: await this.authHeaderFor(id) };
+    } catch {
+      return { authorization: null };
+    }
   }
 
   private async persistTokens(
     id: string,
     tokens: { access: string; refresh?: string; expiresAt: number },
-    clientId?: string,
+    clientId: string,
+    binding: McpOAuthCredentialBinding,
   ): Promise<void> {
     const servers = await this.listServers();
     const config = servers.find((s) => s.id === id);
     if (!config || config.auth.kind !== 'oauth') return;
+    const hasCredentialResidue = Boolean(
+      config.auth.binding || config.auth.tokens || config.auth.clientId,
+    );
+    if (hasCredentialResidue && !sameBinding(config.auth.binding, binding)) {
+      await deleteMcpAccess(config);
+    }
     config.auth.tokens = tokens;
-    if (clientId) config.auth.clientId = clientId;
+    config.auth.clientId = clientId;
+    config.auth.binding = binding;
+    await saveMcpServers(servers);
+  }
+
+  async checkWorkerFetchPermission(id: string, value: string): Promise<McpOAuthFlowResult> {
+    const config = (await this.listServers()).find((server) => server.id === id);
+    if (!config) throw new Error(`MCP server not found: ${id}`);
+    const configured = new URL(
+      normalizeEndpointUrl(config.url, { label: `MCP 服务器 ${config.name} 的 URL` }),
+    );
+    const target = new URL(normalizeEndpointUrl(value, { label: 'MCP worker 请求 URL' }));
+    if (target.origin !== configured.origin) {
+      throw new Error(`MCP worker 拒绝跨源请求: ${target.origin}`);
+    }
+    const stage = await this.preparePermissionStage(id, undefined, {
+      stage: 'resource',
+      originReasons: [{ origin: target.origin, reason: '访问 MCP 资源服务器' }],
+      summary: { resource: configured.toString() },
+      fingerprint: ['resource', configured.toString()],
+    });
+    if (stage.required) {
+      this.setPermissionRequiredState(id, stage.required);
+      return stage.required;
+    }
+    return { status: 'complete' };
+  }
+
+  private discoveryPermissionGuard(
+    id: string,
+    approval?: McpOAuthPermissionApproval,
+    challenge: McpOAuthChallenge = {},
+  ): OAuthFetchPermissionGuard {
+    return async (url, context) => {
+      const stage: McpOAuthPermissionStage =
+        context.stage === 'resource_metadata' ? 'resource' : 'authorization_server';
+      const reason =
+        stage === 'resource' ? '读取 MCP 保护资源元数据' : '读取 OAuth 授权服务器元数据';
+      const prepared = await this.preparePermissionStage(id, approval, {
+        stage,
+        originReasons: [{ origin: url.origin, reason }],
+        summary: { resource: context.resource, issuer: context.issuer },
+        fingerprint: discoveryPermissionFingerprint(stage, context, challenge),
+      });
+      if (prepared.required) throw new McpOAuthPermissionRequiredError(prepared.required);
+    };
+  }
+
+  private async prepareOAuthEndpointStage(
+    id: string,
+    config: McpServerConfig,
+    discovery: OAuthDiscovery,
+    approval?: McpOAuthPermissionApproval,
+    requireEndpointPermissions = true,
+  ): Promise<{
+    planDigest: string;
+    binding: McpOAuthCredentialBinding;
+    reuseClient: boolean;
+    required?: McpOAuthPermissionRequired;
+  }> {
+    if (config.auth.kind !== 'oauth') throw new Error('not an oauth server');
+    const fingerprint = oauthEndpointFingerprint(discovery);
+    const planDigest = await permissionPlanDigest(fingerprint);
+    const binding = { ...discovery.binding, planDigest };
+    const bindingMatches = sameBinding(config.auth.binding, binding);
+    const unboundConfiguredClient = Boolean(
+      config.auth.clientId && !config.auth.binding && !config.auth.tokens,
+    );
+    const reuseClient = Boolean(
+      config.auth.clientId && (bindingMatches || unboundConfiguredClient),
+    );
+    if (!requireEndpointPermissions && bindingMatches) {
+      return { planDigest, binding, reuseClient };
+    }
+    const originReasons = [
+      {
+        origin: new URL(discovery.metadata.authorization_endpoint).origin,
+        reason: '打开 OAuth 授权页面',
+      },
+      {
+        origin: new URL(discovery.metadata.token_endpoint).origin,
+        reason: '交换或刷新 MCP OAuth token',
+      },
+    ];
+    if (!reuseClient && discovery.metadata.registration_endpoint) {
+      originReasons.push({
+        origin: new URL(discovery.metadata.registration_endpoint).origin,
+        reason: '动态注册 Panelot OAuth 客户端',
+      });
+    }
+    const prepared = await this.preparePermissionStage(id, approval, {
+      stage: 'oauth_endpoints',
+      originReasons,
+      summary: oauthSummary(discovery),
+      planDigest,
+      forceReview: Boolean(config.auth.binding && !bindingMatches),
+      invalidateOnChange: true,
+    });
+    return { planDigest, binding, reuseClient, required: prepared.required };
+  }
+
+  private endpointFetchGuard(
+    id: string,
+    stage: 'oauth_endpoints' | 'token_refresh',
+    planDigest: string,
+    summary: McpOAuthPermissionRequired['summary'],
+  ): OAuthFetchPermissionGuard {
+    return async (url, context) => {
+      const reason = endpointReason(context);
+      const prepared = await this.preparePermissionStage(id, undefined, {
+        stage,
+        originReasons: [{ origin: url.origin, reason }],
+        summary,
+        planDigest,
+      });
+      if (prepared.required) throw new McpOAuthPermissionRequiredError(prepared.required);
+    };
+  }
+
+  private async preparePermissionStage(
+    id: string,
+    approval: McpOAuthPermissionApproval | undefined,
+    input: PermissionStageInput,
+  ): Promise<{ planDigest: string; required?: McpOAuthPermissionRequired }> {
+    const originReasons = mergeOriginReasons(input.originReasons);
+    const statuses = await this.permissionBroker.inspectAll(
+      originReasons.map(({ origin }) => origin),
+    );
+    const missing = new Set(statuses.filter(({ granted }) => !granted).map(({ origin }) => origin));
+    const planDigest =
+      input.planDigest ??
+      (await permissionPlanDigest(
+        input.fingerprint ?? [input.stage, input.summary, originReasons],
+      ));
+    const key = permissionPlanKey(id, input.stage);
+    const pending = this.pendingPermissionPlans.get(key);
+    let reason: McpOAuthPermissionRequired['reason'] | undefined;
+
+    if (input.forceReview) {
+      reason = 'plan_changed';
+    } else if (approval?.stage === input.stage) {
+      if (!pending || pending.expiresAt <= Date.now()) reason = 'plan_expired';
+      else if (pending.planDigest !== approval.planDigest || approval.planDigest !== planDigest) {
+        reason = 'plan_changed';
+      } else if (missing.size > 0) {
+        reason = 'permission_denied';
+      }
+    } else if (missing.size > 0) {
+      reason = 'host_permission_required';
+    }
+
+    if (!reason) {
+      if (approval?.stage === input.stage) this.pendingPermissionPlans.delete(key);
+      return { planDigest };
+    }
+    if (reason === 'plan_changed' && input.invalidateOnChange) {
+      await this.invalidateOAuthCredentials(id);
+    }
+    const requiredOrigins = [...missing].sort();
+    const required: McpOAuthPermissionRequired = {
+      status: 'permission_required',
+      stage: input.stage,
+      origins: requiredOrigins,
+      originReasons: originReasons.filter(({ origin }) => missing.has(origin)),
+      reason,
+      summary: input.summary,
+      planDigest,
+      expiresAt: Date.now() + MCP_OAUTH_PERMISSION_PLAN_TTL_MS,
+    };
+    this.pendingPermissionPlans.set(key, required);
+    return { planDigest, required };
+  }
+
+  private setPermissionRequiredState(id: string, permissionRequired: McpOAuthPermissionRequired) {
+    this.setState(id, {
+      status: 'error',
+      reason: '需要额外主机权限',
+      permissionRequired,
+    });
+  }
+
+  private permissionRequiredState(id: string): McpOAuthPermissionRequired | undefined {
+    const state = this.getState(id);
+    return state.status === 'error' ? state.permissionRequired : undefined;
+  }
+
+  private clearPermissionState(id: string): void {
+    const state = this.getState(id);
+    if (state.status === 'error' && state.permissionRequired) {
+      this.setState(id, { status: 'disconnected' });
+    }
+  }
+
+  private async invalidateOAuthCredentials(id: string): Promise<void> {
+    const servers = await this.listServers();
+    const config = servers.find((server) => server.id === id);
+    if (!config || config.auth.kind !== 'oauth') return;
+    const scopes = config.auth.scopes;
+    await deleteMcpAccess(config);
+    config.auth = { kind: 'oauth', scopes };
     await saveMcpServers(servers);
   }
 
@@ -217,19 +593,37 @@ export class McpManager {
       for (const tool of client.tools) {
         if (config?.disabledTools.includes(tool.name)) continue;
         const fqName = `mcp__${serverId}__${tool.name}`;
-        // annotations.readOnlyHint → read; unstated defaults to write (docs/07 §4).
-        const effects = tool.annotations?.readOnlyHint ? 'read' : 'write';
+        const auth = config?.auth;
         out.push({
           name: fqName,
           label: tool.annotations?.title ?? tool.name,
           description: tool.description ?? `MCP tool ${tool.name}`,
           parameters: schemaToZod(tool.inputSchema),
           level: 'mcp',
-          effects,
-          recovery: effects === 'read' ? 'retry-safe' : 'never-retry',
+          effects: 'write',
+          recovery: 'never-retry',
           resultTrust: 'untrusted',
           resultProvenance: 'mcp',
           inputSchema: tool.inputSchema,
+          executionBinding: {
+            kind: 'mcp',
+            id: fqName,
+            serverId,
+            endpoint: config?.url,
+            auth:
+              auth?.kind === 'bearer'
+                ? { kind: 'bearer', credentialRef: `mcp:${serverId}:bearer` }
+                : auth?.kind === 'oauth'
+                  ? {
+                      kind: 'oauth',
+                      credentialRef: `mcp:${serverId}:oauth`,
+                      resource: auth.binding?.resource,
+                      issuer: auth.binding?.issuer,
+                      clientId: auth.clientId,
+                      scopes: auth.scopes ? [...auth.scopes].sort() : undefined,
+                    }
+                  : { kind: 'none' },
+          },
           resolveTarget: async () => ({
             origin: new URL(
               (await this.listServers()).find((server) => server.id === serverId)!.url,
@@ -390,6 +784,89 @@ export class McpManager {
       content,
     };
   }
+}
+
+function sameBinding(
+  left: McpOAuthCredentialBinding | undefined,
+  right: McpOAuthCredentialBinding,
+): boolean {
+  return (
+    left?.resource === right.resource &&
+    left.issuer === right.issuer &&
+    left.planDigest === right.planDigest
+  );
+}
+
+function permissionPlanKey(id: string, stage: McpOAuthPermissionStage): string {
+  return `${id}:${stage}`;
+}
+
+async function permissionPlanDigest(value: unknown): Promise<string> {
+  const bytes = new Uint8Array(
+    await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(value))),
+  );
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function discoveryPermissionFingerprint(
+  stage: McpOAuthPermissionStage,
+  context: OAuthFetchPermissionContext,
+  challenge: McpOAuthChallenge,
+): unknown {
+  return [
+    stage,
+    context.resource,
+    context.issuer ?? '',
+    [...(context.authorizationServers ?? [])].sort(),
+    [...(context.scopes ?? [])].sort(),
+    challenge.resourceMetadataUrl ?? '',
+    challenge.scope ?? '',
+  ];
+}
+
+function oauthEndpointFingerprint(discovery: OAuthDiscovery): unknown {
+  return [
+    'oauth_endpoints',
+    discovery.binding.resource,
+    discovery.binding.issuer,
+    [...discovery.resourceMetadata.authorization_servers].sort(),
+    [...(discovery.resourceMetadata.scopes_supported ?? [])].sort(),
+    [...(discovery.scopes ?? [])].sort(),
+    discovery.metadata.authorization_endpoint,
+    discovery.metadata.token_endpoint,
+    discovery.metadata.registration_endpoint ?? '',
+  ];
+}
+
+function oauthSummary(discovery: OAuthDiscovery): McpOAuthPermissionRequired['summary'] {
+  return {
+    resource: discovery.binding.resource,
+    issuer: discovery.binding.issuer,
+    authorizationEndpoint: discovery.metadata.authorization_endpoint,
+    tokenEndpoint: discovery.metadata.token_endpoint,
+    registrationEndpoint: discovery.metadata.registration_endpoint,
+  };
+}
+
+function mergeOriginReasons(
+  values: { origin: string; reason: string }[],
+): { origin: string; reason: string }[] {
+  const reasons = new Map<string, Set<string>>();
+  for (const value of values) {
+    const origin = new URL(value.origin).origin;
+    const entries = reasons.get(origin) ?? new Set<string>();
+    entries.add(value.reason);
+    reasons.set(origin, entries);
+  }
+  return [...reasons]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([origin, entries]) => ({ origin, reason: [...entries].join('；') }));
+}
+
+function endpointReason(context: OAuthFetchPermissionContext): string {
+  if (context.stage === 'registration') return '动态注册 Panelot OAuth 客户端';
+  if (context.stage === 'token') return '交换或刷新 MCP OAuth token';
+  return '访问 MCP OAuth endpoint';
 }
 
 function attributeError(message: string): string {

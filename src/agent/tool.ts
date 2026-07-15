@@ -7,8 +7,8 @@
  * leak into the other — that's a hard rule.
  */
 
-import { z } from 'zod';
-import type { ToolRecoveryPolicy } from '../db/types';
+import { schema, type RuntimeSchema } from './schema';
+import type { ToolExecutionBinding, ToolRecoveryPolicy } from '../db/types';
 import type { ContentBlock, ToolLevel } from '../messaging/protocol';
 import type { ToolSchema } from '../providers/types';
 
@@ -31,7 +31,7 @@ export interface AgentTool<P = unknown, D = unknown> {
   label: string;
   /** For the LLM — one sentence of function + when to use + failure recovery (docs/10 §3). */
   description: string;
-  parameters: z.ZodType<P>;
+  parameters: RuntimeSchema<P>;
   /** Provider-facing schema is preserved when a remote tool supplies one. */
   inputSchema?: Record<string, unknown>;
   level: ToolLevel;
@@ -40,6 +40,8 @@ export interface AgentTool<P = unknown, D = unknown> {
   recovery?: ToolRecoveryPolicy;
   resultTrust?: 'trusted' | 'untrusted';
   resultProvenance?: 'user' | 'page' | 'mcp' | 'tool' | 'import' | 'plugin';
+  /** Stable identity for recovery-time execution binding validation. */
+  executionBinding?: ToolExecutionBinding;
   resolveTarget?: (params: P) => Promise<{
     tabId?: number;
     frameId?: number;
@@ -95,7 +97,8 @@ export class ToolRegistry {
       name: t.name,
       description: t.description,
       parameters:
-        t.inputSchema ?? (z.toJSONSchema(t.parameters, { io: 'input' }) as Record<string, unknown>),
+        t.inputSchema ??
+        (schema.toJSONSchema(t.parameters, { io: 'input' }) as Record<string, unknown>),
     }));
   }
 }
@@ -113,7 +116,7 @@ export function validateParams<P>(
   tool: AgentTool<P, unknown>,
   raw: unknown,
 ): { ok: true; params: P } | { ok: false; error: string } {
-  const result = tool.parameters.safeParse(raw);
+  const result = schema.safeParse(tool.parameters, raw);
   if (result.success) return { ok: true, params: result.data };
   const issues = result.error.issues
     .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)

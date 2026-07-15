@@ -47,6 +47,7 @@ import {
 } from '../components/ui/field';
 import { InputGroup, InputGroupAddon, InputGroupInput } from '../components/ui/input-group';
 import { Textarea } from '../components/ui/textarea';
+import { t } from '../i18n';
 
 type EditableInstruction = SiteInstruction & { originalPattern?: string };
 const db = new PanelotDB();
@@ -83,7 +84,7 @@ export function SiteInstructionsPage() {
           );
           await persist([...withoutOriginal, candidate]);
           setEditing(null);
-          toast.success('Site instruction saved');
+          toast.success(t('settings.sites.saved'));
         }}
       />
     );
@@ -93,11 +94,8 @@ export function SiteInstructionsPage() {
     <div className="flex max-w-3xl flex-col gap-4">
       <div className="flex items-start gap-3">
         <div>
-          <h2 className="text-[15px] font-semibold">Site instructions</h2>
-          <p className="mt-1 text-[12px] text-muted-foreground">
-            Add trusted instructions to the system prompt only when the active tab matches the
-            hostname.
-          </p>
+          <h2 className="text-[15px] font-semibold">{t('settings.sites.title')}</h2>
+          <p className="mt-1 text-[12px] text-muted-foreground">{t('settings.sites.summary')}</p>
         </div>
         <Button
           className="ml-auto"
@@ -105,7 +103,7 @@ export function SiteInstructionsPage() {
           onClick={() => setEditing({ pattern: '', prompt: '' })}
         >
           <Plus data-icon="inline-start" />
-          New instruction
+          {t('settings.sites.new')}
         </Button>
       </div>
 
@@ -115,16 +113,13 @@ export function SiteInstructionsPage() {
             <EmptyMedia variant="icon">
               <Globe2 />
             </EmptyMedia>
-            <EmptyTitle>No site instructions</EmptyTitle>
-            <EmptyDescription>
-              Use an exact hostname or a wildcard such as *.example.com. URL paths are intentionally
-              unsupported.
-            </EmptyDescription>
+            <EmptyTitle>{t('settings.sites.emptyTitle')}</EmptyTitle>
+            <EmptyDescription>{t('settings.sites.emptyHint')}</EmptyDescription>
           </EmptyHeader>
           <EmptyContent>
             <Button size="sm" onClick={() => setEditing({ pattern: '', prompt: '' })}>
               <Plus data-icon="inline-start" />
-              New instruction
+              {t('settings.sites.new')}
             </Button>
           </EmptyContent>
         </Empty>
@@ -143,14 +138,14 @@ export function SiteInstructionsPage() {
                     size="sm"
                     onClick={() => setEditing({ ...entry, originalPattern: entry.pattern })}
                   >
-                    Edit
+                    {t('settings.sites.edit')}
                   </Button>
                 </CardAction>
               </CardHeader>
               <CardFooter>
-                <Button variant="ghost" size="sm" onClick={() => setDeleting(entry)}>
+                <Button variant="destructive" size="sm" onClick={() => setDeleting(entry)}>
                   <Trash2 data-icon="inline-start" />
-                  Delete
+                  {t('settings.sites.delete')}
                 </Button>
               </CardFooter>
             </Card>
@@ -160,7 +155,7 @@ export function SiteInstructionsPage() {
 
       {pluginEntries.length > 0 && (
         <div className="flex flex-col gap-3">
-          <h3 className="text-sm font-medium">Plugin site instructions</h3>
+          <h3 className="text-sm font-medium">{t('settings.sites.pluginTitle')}</h3>
           {pluginEntries.map((entry) => (
             <Card key={`${entry.assetId}:${entry.pattern}`}>
               <CardHeader>
@@ -177,7 +172,7 @@ export function SiteInstructionsPage() {
                     size="sm"
                     onClick={() => setEditing({ pattern: entry.pattern, prompt: entry.prompt })}
                   >
-                    Copy and edit
+                    {t('settings.sites.copyEdit')}
                   </Button>
                 </CardAction>
               </CardHeader>
@@ -189,13 +184,11 @@ export function SiteInstructionsPage() {
       <AlertDialog open={deleting !== null} onOpenChange={(open) => !open && setDeleting(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete this site instruction?</AlertDialogTitle>
-            <AlertDialogDescription>
-              The instruction will stop being included on matching pages.
-            </AlertDialogDescription>
+            <AlertDialogTitle>{t('settings.sites.deleteTitle')}</AlertDialogTitle>
+            <AlertDialogDescription>{t('settings.sites.deleteHint')}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{t('app.cancel')}</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
               onClick={() => {
@@ -204,7 +197,7 @@ export function SiteInstructionsPage() {
                 setDeleting(null);
               }}
             >
-              Delete
+              {t('settings.sites.delete')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -229,16 +222,16 @@ function InstructionForm({
     <Card className="max-w-2xl">
       <CardHeader>
         <CardTitle>
-          {instruction.originalPattern ? 'Edit site instruction' : 'Create site instruction'}
+          {instruction.originalPattern
+            ? t('settings.sites.editTitle')
+            : t('settings.sites.createTitle')}
         </CardTitle>
-        <CardDescription>
-          Patterns match hostname boundaries, never arbitrary suffixes.
-        </CardDescription>
+        <CardDescription>{t('settings.sites.patternHint')}</CardDescription>
       </CardHeader>
       <CardContent>
         <FieldGroup>
           <Field data-invalid={Boolean(error && !draft.pattern.trim())}>
-            <FieldLabel htmlFor="site-pattern">Hostname pattern</FieldLabel>
+            <FieldLabel htmlFor="site-pattern">{t('settings.sites.hostname')}</FieldLabel>
             <InputGroup>
               <InputGroupInput
                 id="site-pattern"
@@ -252,10 +245,10 @@ function InstructionForm({
                 <Globe2 />
               </InputGroupAddon>
             </InputGroup>
-            <FieldDescription>Exact host: example.com · wildcard: *.example.com</FieldDescription>
+            <FieldDescription>{t('settings.sites.hostnameHint')}</FieldDescription>
           </Field>
           <Field data-invalid={Boolean(error && !draft.prompt.trim())}>
-            <FieldLabel htmlFor="site-prompt">Instruction</FieldLabel>
+            <FieldLabel htmlFor="site-prompt">{t('settings.sites.instruction')}</FieldLabel>
             <Textarea
               id="site-prompt"
               rows={8}
@@ -277,10 +270,10 @@ function InstructionForm({
             );
           }}
         >
-          Save instruction
+          {t('settings.sites.save')}
         </Button>
         <Button variant="outline" onClick={onCancel}>
-          Cancel
+          {t('app.cancel')}
         </Button>
       </CardFooter>
     </Card>

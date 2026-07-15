@@ -37,10 +37,10 @@ test.describe('snapshot engine in a real browser', () => {
       return { yaml: snap.yaml, refCount: snap.refMap.size };
     }, engineSrc);
 
-    expect(result.yaml).toContain('# Page Snapshot (s1)');
+    expect(result.yaml).toMatch(/# Page Snapshot \(s[a-z0-9]+_1\)/i);
     expect(result.yaml).toContain('textbox "姓名"');
     expect(result.yaml).toContain('button "提交"');
-    expect(result.yaml).toContain('[ref=s1_');
+    expect(result.yaml).toMatch(/\[ref=s[a-z0-9]+_1_\d+\]/i);
     // name, email, topic, checkbox, button → at least 5 interactive refs.
     expect(result.refCount).toBeGreaterThanOrEqual(5);
   });

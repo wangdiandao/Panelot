@@ -49,7 +49,7 @@ Panelot 是一款在浏览器内运行 Agent 的 Chrome/Edge（MV3）扩展：
 | 会话 = 消息树（`{id, parentId}` + leaf 游标，append-only + 墓碑删除） | 编辑重发 / 重新生成天然是兄弟分支；恢复 = 回放。 |
 | 自定义 Op / AgentEvent 协议（Thread/Turn/Item 三层原语） | 流式 + 审批 + 断线重连需要专用的引擎↔UI 通道，MCP 不适合这个位置。 |
 | 极简 Agent loop：循环到模型不再调工具 | 复杂度放在 loop 外层（Gatekeeper、UI）；当前第 25 次工具调用提醒，达到 60 次时暂停，token 预算耗尽也会暂停。 |
-| 感知用可访问性快照（`role "name" [ref=sN_M]`，ref 版本化、过期即拒） | 带语义、几百 tokens、不依赖视觉；过期引用在协议层拒绝。 |
+| 感知用可访问性快照（`role "name" [ref=<snapshot-ref>]`，ref 是不透明、版本化标识，过期即拒） | 带语义、几百 tokens、不依赖视觉；调用方原样复制最新 ref，过期引用在协议层拒绝。 |
 | 浏览器级控制权：Agent 可指向任意标签页；安全闸由 Gatekeeper 与敏感域名黑名单执行 | 是否弹出审批取决于所选策略和规则；标签页归属只是审计痕迹，不是权限边界。 |
 | 工具结果不说谎 | 无法触发原生行为的合成按键会自我声明；导航 ≠ 失败；跨域 iframe 报告为不可见而非不存在。 |
 
@@ -96,7 +96,7 @@ Panelot 是一款在浏览器内运行 Agent 的 Chrome/Edge（MV3）扩展：
 
 环境要求：
 
-- Node.js **20.12 或更高版本**（当前 WXT 依赖的最低要求）。
+- Node.js **20.19 或更高版本**（当前 WXT 依赖的最低要求）。
 - pnpm 9.12.3（已由 `packageManager` 固定）。
 - 加载扩展需要 Chrome 116 或更高版本；只有执行 `pnpm e2e` 时才需要 Playwright Chromium。
 

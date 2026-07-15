@@ -29,7 +29,7 @@ export function QueueDock({ runs, paused, onUpdate, onRemove }: Props) {
           </span>
         )}
       </div>
-      <div className="mt-1 max-h-32 space-y-1 overflow-y-auto">
+      <div className="mt-1 flex max-h-32 flex-col gap-1 overflow-y-auto">
         {runs.map((run) => {
           const isEditing = editing?.runId === run.runId;
           return (
@@ -61,8 +61,7 @@ export function QueueDock({ runs, paused, onUpdate, onRemove }: Props) {
                 <>
                   <Button
                     variant="ghost"
-                    size="icon"
-                    className="size-7"
+                    size="icon-sm"
                     aria-label={t('app.save')}
                     disabled={!editing.text.trim()}
                     onClick={() => {
@@ -70,37 +69,36 @@ export function QueueDock({ runs, paused, onUpdate, onRemove }: Props) {
                       setEditing(null);
                     }}
                   >
-                    <Check className="size-3" />
+                    <Check />
                   </Button>
                   <Button
                     variant="ghost"
-                    size="icon"
-                    className="size-7"
+                    size="icon-sm"
                     aria-label={t('app.cancel')}
                     onClick={() => setEditing(null)}
                   >
-                    <X className="size-3" />
+                    <X />
                   </Button>
                 </>
               ) : (
                 <>
                   <Button
                     variant="ghost"
-                    size="icon"
-                    className="size-7 opacity-70 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+                    size="icon-sm"
+                    className="opacity-70 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
                     aria-label={t('queue.edit')}
                     onClick={() => setEditing({ runId: run.runId, text: run.input.text })}
                   >
-                    <Pencil className="size-3" />
+                    <Pencil />
                   </Button>
                   <Button
                     variant="ghost"
-                    size="icon"
-                    className="size-7 text-destructive opacity-70 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+                    size="icon-sm"
+                    className="opacity-70 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
                     aria-label={t('queue.remove')}
                     onClick={() => onRemove(run.runId)}
                   >
-                    <Trash2 className="size-3" />
+                    <Trash2 />
                   </Button>
                 </>
               )}

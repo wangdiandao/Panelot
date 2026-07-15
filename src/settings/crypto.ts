@@ -1,5 +1,5 @@
 /**
- * API key obfuscation (DESIGN §7): AES-GCM at rest in storage.local.
+ * API key obfuscation (docs/development.md §5): AES-GCM at rest in storage.local.
  *
  * Honest boundary: a device-derived key stored alongside the ciphertext is
  * obfuscation, not protection against an attacker with full disk + extension

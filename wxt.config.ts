@@ -1,5 +1,24 @@
 import { defineConfig } from 'wxt';
 import tailwindcss from '@tailwindcss/vite';
+import { minify } from 'terser';
+import type { Plugin } from 'vite';
+
+function compactJavaScript(): Plugin {
+  return {
+    name: 'panelot-compact-javascript',
+    apply: 'build',
+    enforce: 'post',
+    async renderChunk(code, _chunk, options) {
+      const result = await minify(code, {
+        compress: { ecma: 2022, passes: 3 },
+        format: { comments: false, ecma: 2022 },
+        module: options.format === 'es',
+      });
+      if (result.code === undefined) throw new Error('Terser returned no JavaScript output.');
+      return { code: result.code, map: null };
+    },
+  };
+}
 
 // See docs/06-permissions.md for the permission rationale. All host permissions are
 // requested dynamically at runtime (chrome.permissions.request).
@@ -8,7 +27,13 @@ export default defineConfig({
   srcDir: '.',
   outDir: 'dist',
   vite: () => ({
-    plugins: [tailwindcss()],
+    plugins: [tailwindcss(), compactJavaScript()],
+    // Chrome 116+ supports modulepreload natively. Vite's HTML polyfill touches
+    // `document` at module scope and can be pulled into shared MV3 worker chunks.
+    build: {
+      modulePreload: { polyfill: false },
+      target: 'chrome116',
+    },
     resolve: {
       alias: {
         dexie: 'dexie/dist/modern/dexie.min.mjs',

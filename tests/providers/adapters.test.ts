@@ -47,6 +47,53 @@ const baseReq = {
   signal: new AbortController().signal,
 };
 
+describe('Provider request redirect policy', () => {
+  const adapters = [
+    {
+      name: 'OpenAI',
+      make: () => new OpenAiAdapter(conn()),
+      stream: [
+        'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n',
+        'data: [DONE]\n\n',
+      ],
+    },
+    {
+      name: 'Anthropic',
+      make: () =>
+        new AnthropicAdapter(conn({ kind: 'anthropic', baseUrl: 'https://api.anthropic.com' })),
+      stream: [
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+      ],
+    },
+  ] as const;
+
+  it.each(adapters)(
+    'refuses automatic redirects for $name credentials and content',
+    async (test) => {
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(sseResponse([...test.stream]))
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ data: [] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        );
+      const adapter = test.make();
+
+      await adapter.stream(baseReq).final();
+      await adapter.listModels();
+
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      for (const [, init] of fetchSpy.mock.calls) {
+        expect(init).toEqual(expect.objectContaining({ redirect: 'error' }));
+      }
+    },
+  );
+});
+
 describe('OpenAiAdapter streaming', () => {
   it('streams text deltas and aggregates the final message + usage', async () => {
     mockFetchOnce(
@@ -75,7 +122,7 @@ describe('OpenAiAdapter streaming', () => {
       sseResponse([
         'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"click","arguments":""}}]}}]}\n\n',
         'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"ref\\":"}}]}}]}\n\n',
-        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"s1_2\\"}"}}]}}],"finish_reason":"tool_calls"}\n\n',
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"s1_2\\"}"}}]},"finish_reason":"tool_calls"}]}\n\n',
         'data: [DONE]\n\n',
       ]),
     );
@@ -90,6 +137,7 @@ describe('OpenAiAdapter streaming', () => {
     mockFetchOnce(
       sseResponse([
         'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"click","arguments":"{broken"}}]}}]}\n\n',
+        'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
         'data: [DONE]\n\n',
       ]),
     );
@@ -102,6 +150,7 @@ describe('OpenAiAdapter streaming', () => {
       sseResponse([
         'data: {"choices":[{"delta":{"reasoning_content":"thinking..."}}]}\n\n',
         'data: {"choices":[{"delta":{"content":"answer"}}]}\n\n',
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
         'data: [DONE]\n\n',
       ]),
     );
@@ -201,6 +250,7 @@ describe('AnthropicAdapter streaming', () => {
       sseResponse([
         'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hmm"}}\n\n',
         'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"done"}}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n',
         'event: message_stop\ndata: {"type":"message_stop"}\n\n',
       ]),
     );
@@ -210,7 +260,10 @@ describe('AnthropicAdapter streaming', () => {
 
   it('sets cache_control breakpoints on system and last tool', async () => {
     const spy = mockFetchOnce(
-      sseResponse(['event: message_stop\ndata: {"type":"message_stop"}\n\n']),
+      sseResponse([
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+      ]),
     );
     await new AnthropicAdapter(aconn)
       .stream({
@@ -416,6 +469,160 @@ describe('provider response-format diagnostics', () => {
     });
   });
 
+  it('rejects OpenAI clean EOF after text as an incomplete protocol response', async () => {
+    mockFetchOnce(sseResponse(['data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'], 206));
+
+    await expect(new OpenAiAdapter(conn()).stream(baseReq).final()).rejects.toMatchObject({
+      kind: 'protocol',
+      details: {
+        status: 206,
+        reason: 'response_format',
+        upstreamMessage: 'provider stream ended before [DONE]',
+      },
+    });
+  });
+
+  it('requires both OpenAI finish_reason and [DONE]', async () => {
+    mockFetchOnce(sseResponse(['data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n']));
+    await expect(new OpenAiAdapter(conn()).stream(baseReq).final()).rejects.toMatchObject({
+      kind: 'protocol',
+      details: { reason: 'response_format' },
+    });
+
+    mockFetchOnce(
+      sseResponse(['data: {"choices":[{"delta":{"content":"partial"}}]}\n\n', 'data: [DONE]\n\n']),
+    );
+    await expect(new OpenAiAdapter(conn()).stream(baseReq).final()).rejects.toMatchObject({
+      kind: 'protocol',
+      details: {
+        reason: 'response_format',
+        upstreamMessage: 'provider stream ended without finish_reason',
+      },
+    });
+  });
+
+  it.each(['future_reason', 'function_call'])(
+    'fails closed for unsupported OpenAI finish_reason %s',
+    async (finishReason) => {
+      mockFetchOnce(
+        sseResponse([
+          `data: {"choices":[{"delta":{},"finish_reason":"${finishReason}"}]}\n\n`,
+          'data: [DONE]\n\n',
+        ]),
+      );
+
+      await expect(new OpenAiAdapter(conn()).stream(baseReq).final()).rejects.toMatchObject({
+        kind: 'protocol',
+        details: { reason: 'response_format' },
+      });
+    },
+  );
+
+  it('rejects deprecated OpenAI delta.function_call instead of ignoring it', async () => {
+    mockFetchOnce(
+      sseResponse([
+        'data: {"choices":[{"delta":{"function_call":{"name":"legacy"}}}]}\n\n',
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+        'data: [DONE]\n\n',
+      ]),
+    );
+
+    await expect(new OpenAiAdapter(conn()).stream(baseReq).final()).rejects.toMatchObject({
+      kind: 'protocol',
+      details: { reason: 'response_format' },
+    });
+  });
+
+  it('requires Anthropic stop_reason and message_stop terminal frames', async () => {
+    const anthropic = () =>
+      new AnthropicAdapter(conn({ kind: 'anthropic', baseUrl: 'https://api.anthropic.com' }));
+
+    mockFetchOnce(
+      sseResponse([
+        'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}\n\n',
+      ]),
+    );
+    await expect(anthropic().stream(baseReq).final()).rejects.toMatchObject({
+      kind: 'protocol',
+      details: { upstreamMessage: 'provider stream ended without message_delta.stop_reason' },
+    });
+
+    mockFetchOnce(
+      sseResponse([
+        'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n',
+      ]),
+    );
+    await expect(anthropic().stream(baseReq).final()).rejects.toMatchObject({
+      kind: 'protocol',
+      details: { upstreamMessage: 'provider stream ended before message_stop' },
+    });
+
+    mockFetchOnce(sseResponse(['data: {"type":"message_stop"}\n\n']));
+    await expect(anthropic().stream(baseReq).final()).rejects.toMatchObject({
+      kind: 'protocol',
+      details: { upstreamMessage: 'provider stream ended without message_delta.stop_reason' },
+    });
+  });
+
+  it.each([
+    'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n',
+    'data: {"type":"future_terminal"}\n\n',
+    'data: {"type":"message_stop"}\n\n',
+  ])('fails closed for a non-ping event after Anthropic message_stop', async (trailingEvent) => {
+    mockFetchOnce(
+      sseResponse([
+        'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n',
+        'data: {"type":"message_stop"}\n\n',
+        trailingEvent,
+      ]),
+    );
+
+    await expect(
+      new AnthropicAdapter(conn({ kind: 'anthropic', baseUrl: 'https://api.anthropic.com' }))
+        .stream(baseReq)
+        .final(),
+    ).rejects.toMatchObject({
+      kind: 'protocol',
+      details: {
+        reason: 'response_format',
+        upstreamMessage: expect.stringContaining('after message_stop'),
+      },
+    });
+  });
+
+  it.each(['future_reason', 'pause_turn'])(
+    'fails closed for unsupported Anthropic stop_reason %s',
+    async (stopReason) => {
+      mockFetchOnce(
+        sseResponse([
+          `data: {"type":"message_delta","delta":{"stop_reason":"${stopReason}"},"usage":{"output_tokens":1}}\n\n`,
+          'data: {"type":"message_stop"}\n\n',
+        ]),
+      );
+
+      await expect(
+        new AnthropicAdapter(conn({ kind: 'anthropic', baseUrl: 'https://api.anthropic.com' }))
+          .stream(baseReq)
+          .final(),
+      ).rejects.toMatchObject({ kind: 'protocol', details: { reason: 'response_format' } });
+    },
+  );
+
+  it('maps Anthropic model_context_window_exceeded to an incomplete max_tokens result', async () => {
+    mockFetchOnce(
+      sseResponse([
+        'data: {"type":"message_delta","delta":{"stop_reason":"model_context_window_exceeded"},"usage":{"output_tokens":4}}\n\n',
+        'data: {"type":"message_stop"}\n\n',
+      ]),
+    );
+
+    await expect(
+      new AnthropicAdapter(conn({ kind: 'anthropic', baseUrl: 'https://api.anthropic.com' }))
+        .stream(baseReq)
+        .final(),
+    ).resolves.toMatchObject({ stopReason: 'max_tokens', usage: { output: 4 } });
+  });
+
   it.each(adapters)('rejects an empty readable %s response body', async (_name, make) => {
     mockFetchOnce(new Response('', { status: 200 }));
 
@@ -500,6 +707,8 @@ describe('provider response-format diagnostics', () => {
       sseResponse([
         'data: {"usage":{"prompt_tokens":99,"completion_tokens":{},"prompt_tokens_details":{"cached_tokens":"7"}}}\n\n',
         'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+        'data: [DONE]\n\n',
       ]),
     );
 
@@ -527,6 +736,7 @@ describe('provider response-format diagnostics', () => {
       sseResponse([
         'data: {"usage":{}}\n\n',
         'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n',
+        'data: [DONE]\n\n',
       ]),
     );
 
@@ -568,6 +778,8 @@ describe('provider response-format diagnostics', () => {
       sseResponse([
         'data: {"choices":[{"delta":{"tool_calls":[null,{"index":0,"function":"bad"}]}}]}\n\n',
         'data: {"choices":[{"delta":{"content":"still works"}}]}\n\n',
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+        'data: [DONE]\n\n',
       ]),
     );
 
@@ -582,6 +794,8 @@ describe('provider response-format diagnostics', () => {
         'data: {bad json}\n\n',
         'data: {"unknown":"frame"}\n\n',
         'data: {"usage":{"prompt_tokens":3,"completion_tokens":1}}\n\n',
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+        'data: [DONE]\n\n',
       ]),
     );
 
@@ -596,6 +810,7 @@ describe('provider response-format diagnostics', () => {
         'data: {bad json}\n\n',
         'data: {"unknown":"frame"}\n\n',
         'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":3}}}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0}}\n\n',
         'event: message_stop\ndata: {"type":"message_stop"}\n\n',
       ]),
     );
@@ -655,6 +870,7 @@ describe('provider response-format diagnostics', () => {
           '\n\n',
         'data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":2}}' +
           '\n\n',
+        'data: {"type":"message_stop"}\n\n',
       ]),
     );
 
@@ -693,6 +909,7 @@ describe('provider response-format diagnostics', () => {
     mockFetchOnce(
       sseResponse([
         'data: {"type":"message_start","message":{"usage":{"input_tokens":0}}}\n\n',
+        'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0}}\n\n',
         'data: {"type":"message_stop"}\n\n',
       ]),
     );

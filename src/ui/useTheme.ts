@@ -5,7 +5,8 @@
  */
 
 import { useEffect } from 'react';
-import { SettingsStore } from '../settings/store';
+import type { GlobalSettings } from '../settings/store';
+import { useStorageValue } from './useStorageValue';
 
 type Theme = 'system' | 'dark' | 'light';
 
@@ -20,31 +21,18 @@ function apply(theme: Theme): void {
 }
 
 export function useTheme(): void {
+  const settings = useStorageValue<GlobalSettings | null>('global_settings', null);
+  const theme = (settings?.theme as Theme) ?? 'system';
+
   useEffect(() => {
-    let current: Theme = 'system';
     const mq = matchMedia('(prefers-color-scheme: light)');
-    const onSystemChange = () => current === 'system' && apply('system');
+    const onSystemChange = () => theme === 'system' && apply('system');
 
-    void SettingsStore.global.get().then((s) => {
-      current = (s.theme as Theme) ?? 'system';
-      apply(current);
-    });
-
+    apply(theme);
     mq.addEventListener('change', onSystemChange);
-
-    // React to setting changes across the extension (chrome.storage events).
-    const onStorage = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
-      if (area !== 'local' || !changes.global_settings) return;
-      const next =
-        (changes.global_settings.newValue as { theme?: Theme } | undefined)?.theme ?? 'system';
-      current = next;
-      apply(next);
-    };
-    chrome.storage?.onChanged?.addListener(onStorage);
 
     return () => {
       mq.removeEventListener('change', onSystemChange);
-      chrome.storage?.onChanged?.removeListener(onStorage);
     };
-  }, []);
+  }, [theme]);
 }

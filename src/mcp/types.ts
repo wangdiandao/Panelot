@@ -2,6 +2,48 @@
  * MCP server config & JSON import (docs/07 §2).
  */
 
+import { normalizeEndpointUrl } from '../security/endpointUrl';
+
+export interface McpOAuthCredentialBinding {
+  resource: string;
+  issuer: string;
+  /** Binds reusable credentials to the exact PRM and authorization endpoint plan. */
+  planDigest?: string;
+}
+
+export interface McpOAuthChallenge {
+  resourceMetadataUrl?: string;
+  scope?: string;
+  error?: string;
+}
+
+export type McpOAuthPermissionStage =
+  'resource' | 'authorization_server' | 'oauth_endpoints' | 'token_refresh';
+
+export interface McpOAuthPermissionApproval {
+  stage: McpOAuthPermissionStage;
+  planDigest: string;
+}
+
+export interface McpOAuthPermissionRequired {
+  status: 'permission_required';
+  stage: McpOAuthPermissionStage;
+  origins: string[];
+  originReasons: { origin: string; reason: string }[];
+  reason: 'host_permission_required' | 'permission_denied' | 'plan_changed' | 'plan_expired';
+  summary: {
+    resource: string;
+    issuer?: string;
+    authorizationEndpoint?: string;
+    tokenEndpoint?: string;
+    registrationEndpoint?: string;
+  };
+  planDigest: string;
+  expiresAt: number;
+}
+
+export type McpOAuthFlowResult = { status: 'complete' } | McpOAuthPermissionRequired;
+
 export interface McpServerConfig {
   id: string;
   name: string;
@@ -13,6 +55,7 @@ export interface McpServerConfig {
         kind: 'oauth';
         clientId?: string;
         scopes?: string[];
+        binding?: McpOAuthCredentialBinding;
         tokens?: { access: string; refresh?: string; expiresAt: number };
       };
   enabled: boolean;
@@ -25,7 +68,7 @@ export type McpConnectionState =
   | { status: 'disconnected' }
   | { status: 'connecting' }
   | { status: 'ready'; toolCount: number }
-  | { status: 'error'; reason: string };
+  | { status: 'error'; reason: string; permissionRequired?: McpOAuthPermissionRequired };
 
 /**
  * Parse a pasted JSON snippet (Claude Code `mcpServers` or Cursor config).
@@ -61,7 +104,7 @@ export function parseMcpJson(
     const bearer = authHeader?.match(/^Bearer\s+(.+)$/i)?.[1];
     results.push({
       name,
-      url: entry.url,
+      url: normalizeEndpointUrl(entry.url, { label: `MCP 服务器 ${name} 的 URL` }),
       auth: bearer ? { kind: 'bearer', token: bearer } : { kind: 'none' },
     });
   }

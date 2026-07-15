@@ -6,6 +6,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BrowserToolGateway } from '../../src/tools/gateway';
+import { CONTENT_SCRIPT_PROTOCOL, CONTENT_SCRIPT_SCHEMA_HASH } from '../../src/messaging/protocol';
 
 type TabStub = {
   id: number;
@@ -14,17 +15,55 @@ type TabStub = {
   lastAccessed?: number;
   status?: string;
   title?: string;
+  openerTabId?: number;
+  windowId?: number;
 };
 
 let tabs: TabStub[] = [];
 let sendMessage: ReturnType<typeof vi.fn>;
 let executeScript: ReturnType<typeof vi.fn>;
+let updateTab: ReturnType<typeof vi.fn>;
+let updateWindow: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   tabs = [];
   sendMessage = vi.fn();
   executeScript = vi.fn(async () => {});
+  updateTab = vi.fn(async (id: number, update: { active?: boolean }) => {
+    const tab = tabs.find((candidate) => candidate.id === id);
+    if (!tab) throw new Error('no tab');
+    if (update.active) {
+      for (const candidate of tabs) {
+        if (candidate.windowId === tab.windowId) candidate.active = false;
+      }
+      tab.active = true;
+    }
+    return tab;
+  });
+  updateWindow = vi.fn(async () => ({}));
+  const sendMessageWithEnvelope = async (tabId: number, op: { requestId: string }) => {
+    const result = await (sendMessage as (...args: unknown[]) => unknown)(tabId, op);
+    if (result === 'pong') {
+      return {
+        protocol: CONTENT_SCRIPT_PROTOCOL,
+        schemaHash: CONTENT_SCRIPT_SCHEMA_HASH,
+        requestId: op.requestId,
+        ok: true,
+        result,
+      };
+    }
+    if (typeof result === 'object' && result !== null && 'ok' in result) {
+      return {
+        protocol: CONTENT_SCRIPT_PROTOCOL,
+        schemaHash: CONTENT_SCRIPT_SCHEMA_HASH,
+        requestId: op.requestId,
+        ...result,
+      };
+    }
+    return result;
+  };
   (globalThis as unknown as { chrome: unknown }).chrome = {
+    runtime: { getURL: (path: string) => `chrome-extension://panelot${path}` },
     tabs: {
       query: vi.fn(async (q: { active?: boolean }) =>
         tabs.filter((t) => (q.active === undefined ? true : t.active === q.active)),
@@ -34,8 +73,10 @@ beforeEach(() => {
         if (!t) throw new Error('no tab');
         return { status: 'complete', ...t };
       }),
-      sendMessage,
+      update: updateTab,
+      sendMessage: sendMessageWithEnvelope,
     },
+    windows: { update: updateWindow },
     scripting: { executeScript },
   };
 });
@@ -50,6 +91,21 @@ describe('BrowserToolGateway.getTargetTab fallback', () => {
     await expect(gw.getOperationTab('t1', 7)).resolves.toBe(7);
     expect(gw.touchedTabs('t1')).toEqual([7]);
     await expect(gw.getTargetTab('t1')).resolves.toBe(2);
+  });
+
+  it('keeps omitted-tab calls on the submission tab after the active tab changes', async () => {
+    tabs = [
+      { id: 7, url: 'https://submitted.example.com/', active: false },
+      { id: 9, url: 'https://later-active.example.com/', active: true, lastAccessed: 3000 },
+    ];
+    const gw = new BrowserToolGateway();
+    gw.bindTurnTarget('t1', 7);
+
+    await expect(gw.getTargetTab('t1')).resolves.toBe(7);
+    tabs = tabs.filter((tab) => tab.id !== 7);
+    await expect(gw.getTargetTab('t1')).rejects.toThrow(
+      /submitted target tab \[7\].*no longer open/i,
+    );
   });
 
   it('skips the extension page and picks the most recent active web tab', async () => {
@@ -111,10 +167,12 @@ describe('navigation-aware dispatch (click → page change ≠ failure)', () => 
       { id: 7, url: 'https://background.example.com/', active: false },
     ];
     const gw = new BrowserToolGateway();
-    sendMessage.mockImplementation(async (tabId: number, op: { tool: string }) => {
-      if (op.tool === '__ping') return 'pong';
-      return { requestId: 'x', ok: true, result: { resultText: `clicked ${tabId}` } };
-    });
+    sendMessage.mockImplementation(
+      async (tabId: number, op: { kind: string; requestId: string; tool?: string }) => {
+        if (op.kind === 'ping') return 'pong';
+        return { requestId: op.requestId, ok: true, result: { resultText: `clicked ${tabId}` } };
+      },
+    );
 
     const result = await gw.callContentTool('t1', 'click', { ref: 's1_1' }, 7);
 
@@ -126,29 +184,52 @@ describe('navigation-aware dispatch (click → page change ≠ failure)', () => 
     await expect(gw.getTargetTab('t1')).resolves.toBe(2);
   });
 
+  it('rejects a response from a stale content-script schema', async () => {
+    tabs = [{ id: 7, url: 'https://background.example.com/', active: true }];
+    const gw = new BrowserToolGateway();
+    sendMessage.mockImplementation(
+      async (_tabId: number, op: { kind: string; requestId: string }) => {
+        if (op.kind === 'ping') return 'pong';
+        return {
+          protocol: CONTENT_SCRIPT_PROTOCOL,
+          schemaHash: 'stale-schema',
+          requestId: op.requestId,
+          ok: true,
+          result: { resultText: 'must not be accepted' },
+        };
+      },
+    );
+
+    await expect(gw.callContentTool('t1', 'read_page', {}, 7)).rejects.toThrow(
+      /Invalid content-script response/,
+    );
+  });
+
   it('a channel error with a changed URL is reported as successful navigation', async () => {
     tabs = [{ id: 5, url: 'https://shop.example.com/list', active: true, title: '列表' }];
     const gw = new BrowserToolGateway();
 
     let calls = 0;
-    sendMessage.mockImplementation(async (_tabId: number, op: { tool: string }) => {
-      calls++;
-      if (op.tool === '__ping') return 'pong';
-      if (op.tool === 'click') {
-        // The click navigates: content script torn down mid-call.
-        tabs[0]!.url = 'https://shop.example.com/item/42';
-        tabs[0]!.title = '商品详情';
-        throw new Error('The message channel closed before a response was received.');
-      }
-      if (op.tool === 'read_page') {
-        return {
-          requestId: 'x',
-          ok: true,
-          result: { resultText: '# Page Snapshot (s1)\n- button "买" [ref=s1_1]' },
-        };
-      }
-      throw new Error(`unexpected ${op.tool}`);
-    });
+    sendMessage.mockImplementation(
+      async (_tabId: number, op: { kind: string; requestId: string; tool?: string }) => {
+        calls++;
+        if (op.kind === 'ping') return 'pong';
+        if (op.tool === 'click') {
+          // The click navigates: content script torn down mid-call.
+          tabs[0]!.url = 'https://shop.example.com/item/42';
+          tabs[0]!.title = '商品详情';
+          throw new Error('The message channel closed before a response was received.');
+        }
+        if (op.tool === 'read_page') {
+          return {
+            requestId: op.requestId,
+            ok: true,
+            result: { resultText: '# Page Snapshot (s1)\n- button "买" [ref=s1_1]' },
+          };
+        }
+        throw new Error(`unexpected ${op.tool}`);
+      },
+    );
 
     const result = await gw.callContentTool('t1', 'click', { ref: 's0_1' });
     expect(result.resultText).toContain('页面已跳转到 https://shop.example.com/item/42');
@@ -157,13 +238,139 @@ describe('navigation-aware dispatch (click → page change ≠ failure)', () => 
     expect(calls).toBeGreaterThanOrEqual(2);
   });
 
+  it('adopts a link-opened child tab and foregrounds it when the user is on Panelot chat', async () => {
+    tabs = [
+      {
+        id: 1,
+        url: 'chrome-extension://panelot/chat.html?thread=t1',
+        active: true,
+        windowId: 3,
+      },
+      {
+        id: 5,
+        url: 'https://shop.example.com/list',
+        active: false,
+        windowId: 3,
+        status: 'complete',
+      },
+    ];
+    const gateway = new BrowserToolGateway();
+    gateway.bindTurnTarget('t1', 5);
+    sendMessage.mockImplementation(
+      async (tabId: number, op: { kind: string; requestId: string; tool?: string }) => {
+        if (op.kind === 'ping') return 'pong';
+        if (op.tool === 'click') {
+          tabs.push({
+            id: 8,
+            url: 'https://shop.example.com/item/42',
+            title: '商品详情',
+            active: false,
+            openerTabId: 5,
+            windowId: 3,
+            status: 'complete',
+          });
+          return {
+            requestId: op.requestId,
+            ok: true,
+            result: { resultText: '已点击，但原页面没有变化' },
+          };
+        }
+        if (op.tool === 'read_page' && tabId === 8) {
+          return {
+            requestId: op.requestId,
+            ok: true,
+            result: { resultText: '# 商品详情\n- button "购买" [ref=s1_1]' },
+          };
+        }
+        throw new Error(`unexpected ${op.tool}`);
+      },
+    );
+
+    const result = await gateway.callContentTool('t1', 'click', { ref: 's0_1' }, 5);
+
+    expect(result).toMatchObject({
+      resultTabId: 8,
+      pageStabilized: true,
+      evidence: { effectState: 'verified', observedEffects: ['tab_created'] },
+    });
+    expect(result.resultText).toContain('原标签页 [tabId=5] 保持不变');
+    expect(result.resultText).toContain('已从 Panelot 对话页切换');
+    expect(result.snapshot).toContain('商品详情');
+    expect(updateTab).toHaveBeenCalledWith(8, { active: true });
+    expect(updateWindow).toHaveBeenCalledWith(3, { focused: true });
+    await expect(gateway.getTargetTab('t1')).resolves.toBe(8);
+    expect(gateway.touchedTabs('t1')).toEqual([5, 8]);
+  });
+
+  it('detects a submit-created tab without stealing focus from a visible web page', async () => {
+    tabs = [
+      {
+        id: 5,
+        url: 'https://search.example.com/',
+        active: true,
+        windowId: 3,
+        status: 'complete',
+      },
+    ];
+    const gateway = new BrowserToolGateway();
+    gateway.bindTurnTarget('t1', 5);
+    sendMessage.mockImplementation(
+      async (tabId: number, op: { kind: string; requestId: string; tool?: string }) => {
+        if (op.kind === 'ping') return 'pong';
+        if (op.tool === 'type') {
+          tabs.push({
+            id: 8,
+            url: 'https://search.example.com/results?q=panelot',
+            active: false,
+            openerTabId: 5,
+            windowId: 3,
+            status: 'complete',
+          });
+          return {
+            requestId: op.requestId,
+            ok: true,
+            result: { resultText: '已输入并提交' },
+          };
+        }
+        if (op.tool === 'read_page' && tabId === 8) {
+          return {
+            requestId: op.requestId,
+            ok: true,
+            result: { resultText: '# Results' },
+          };
+        }
+        throw new Error(`unexpected ${op.tool}`);
+      },
+    );
+
+    const result = await gateway.callContentTool(
+      't1',
+      'type',
+      { ref: 's0_1', text: 'panelot', submit: true },
+      5,
+    );
+
+    expect(result).toMatchObject({
+      resultTabId: 8,
+      evidence: { observedEffects: ['tab_created'], outcome: 'verified' },
+    });
+    expect(updateTab).not.toHaveBeenCalled();
+    await expect(gateway.getTargetTab('t1')).resolves.toBe(8);
+  });
+
   it('a genuine failure with an unchanged URL still surfaces as an error', async () => {
     tabs = [{ id: 5, url: 'https://shop.example.com/list', active: true }];
     const gw = new BrowserToolGateway();
-    sendMessage.mockImplementation(async (_tabId: number, op: { tool: string }) => {
-      if (op.tool === '__ping') return 'pong';
-      return { requestId: 'x', ok: false, error: '快照已过期：ref "s0_1" 不属于当前快照' };
-    });
+    sendMessage.mockImplementation(
+      async (_tabId: number, op: { kind: string; requestId: string }) => {
+        if (op.kind === 'ping') return 'pong';
+        return {
+          requestId: op.requestId,
+          ok: false,
+          error: '快照已过期：ref "s0_1" 不属于当前快照',
+        };
+      },
+    );
     await expect(gw.callContentTool('t1', 'click', { ref: 's0_1' })).rejects.toThrow(/快照已过期/);
   });
 
@@ -173,12 +380,14 @@ describe('navigation-aware dispatch (click → page change ≠ failure)', () => 
     // false "navigation succeeded".
     tabs = [{ id: 5, url: 'https://shop.example.com/list', active: true }];
     const gw = new BrowserToolGateway();
-    sendMessage.mockImplementation(async (_tabId: number, op: { tool: string }) => {
-      if (op.tool === '__ping') return 'pong';
-      // A background redirect fires while the tool reports failure.
-      tabs[0]!.url = 'https://shop.example.com/promo';
-      return { requestId: 'x', ok: false, error: '元素被遮挡，真实用户无法点到' };
-    });
+    sendMessage.mockImplementation(
+      async (_tabId: number, op: { kind: string; requestId: string }) => {
+        if (op.kind === 'ping') return 'pong';
+        // A background redirect fires while the tool reports failure.
+        tabs[0]!.url = 'https://shop.example.com/promo';
+        return { requestId: op.requestId, ok: false, error: '元素被遮挡，真实用户无法点到' };
+      },
+    );
     await expect(gw.callContentTool('t1', 'click', { ref: 's1_1' })).rejects.toThrow(/元素被遮挡/);
   });
 
@@ -186,8 +395,8 @@ describe('navigation-aware dispatch (click → page change ≠ failure)', () => 
     tabs = [{ id: 5, url: 'https://shop.example.com/list', active: true, status: 'loading' }];
     const gw = new BrowserToolGateway();
     let pinged = false;
-    sendMessage.mockImplementation(async (_tabId: number, op: { tool: string }) => {
-      if (op.tool === '__ping') {
+    sendMessage.mockImplementation(async (_tabId: number, op: { kind: string }) => {
+      if (op.kind === 'ping') {
         pinged = true;
         return 'pong';
       }
@@ -197,4 +406,139 @@ describe('navigation-aware dispatch (click → page change ≠ failure)', () => 
     await expect(gw.callContentTool('t1', 'click', { ref: 's1_1' })).rejects.toThrow(/超时/);
     expect(pinged).toBe(true);
   }, 20_000);
+});
+
+describe('same-tab request serialization and cancellation', () => {
+  it('serializes the same tab across different thread owners', async () => {
+    tabs = [{ id: 7, url: 'https://queue.example.com/', active: true }];
+    const gateway = new BrowserToolGateway();
+    const executeOps: { requestId: string; params: unknown }[] = [];
+    let finishFirst!: () => void;
+    sendMessage.mockImplementation(
+      async (_tabId: number, op: { kind: string; requestId: string; params?: unknown }) => {
+        if (op.kind === 'ping') return { requestId: op.requestId, ok: true, result: 'pong' };
+        if (op.kind === 'cancel') {
+          return { requestId: op.requestId, ok: true, result: 'cancelled' };
+        }
+        executeOps.push({ requestId: op.requestId, params: op.params });
+        if (executeOps.length === 1) {
+          await new Promise<void>((resolve) => {
+            finishFirst = resolve;
+          });
+        }
+        return {
+          requestId: op.requestId,
+          ok: true,
+          result: { resultText: `done-${executeOps.length}` },
+        };
+      },
+    );
+
+    const first = gateway.callContentTool('thread-a', 'click', { ref: 's1_1' }, 7);
+    await vi.waitFor(() => expect(executeOps).toHaveLength(1));
+    const second = gateway.callContentTool('thread-b', 'click', { ref: 's1_2' }, 7);
+    await Promise.resolve();
+    expect(executeOps).toHaveLength(1);
+
+    finishFirst();
+    await expect(first).resolves.toMatchObject({ resultText: 'done-1' });
+    await expect(second).resolves.toMatchObject({ resultText: 'done-2' });
+    expect(executeOps.map((op) => op.params)).toEqual([{ ref: 's1_1' }, { ref: 's1_2' }]);
+  });
+
+  it('never dispatches a queued write after its signal is aborted', async () => {
+    tabs = [{ id: 7, url: 'https://queue.example.com/', active: true }];
+    const gateway = new BrowserToolGateway();
+    const executeOps: { requestId: string; params: unknown }[] = [];
+    let finishFirst!: () => void;
+    sendMessage.mockImplementation(
+      async (_tabId: number, op: { kind: string; requestId: string; params?: unknown }) => {
+        if (op.kind === 'ping') return { requestId: op.requestId, ok: true, result: 'pong' };
+        if (op.kind === 'cancel') {
+          return { requestId: op.requestId, ok: true, result: 'cancelled' };
+        }
+        executeOps.push({ requestId: op.requestId, params: op.params });
+        await new Promise<void>((resolve) => {
+          finishFirst = resolve;
+        });
+        return { requestId: op.requestId, ok: true, result: { resultText: 'done' } };
+      },
+    );
+
+    const first = gateway.callContentTool('thread-a', 'click', { ref: 's1_1' }, 7);
+    await vi.waitFor(() => expect(executeOps).toHaveLength(1));
+    const queuedController = new AbortController();
+    const queued = gateway.callContentTool(
+      'thread-b',
+      'type',
+      { ref: 's1_2', text: 'must-not-run' },
+      7,
+      queuedController.signal,
+    );
+    queuedController.abort();
+
+    await expect(queued).rejects.toThrow(/中断/);
+    finishFirst();
+    await expect(first).resolves.toMatchObject({ resultText: 'done' });
+    await Promise.resolve();
+    expect(executeOps).toHaveLength(1);
+    expect(executeOps[0]!.params).toEqual({ ref: 's1_1' });
+  });
+
+  it('cancels only the in-flight request id and reports write uncertainty', async () => {
+    tabs = [{ id: 7, url: 'https://queue.example.com/', active: true }];
+    const gateway = new BrowserToolGateway();
+    let executeRequestId = '';
+    let finishExecute!: () => void;
+    const cancelOps: { cancelRequestId: string }[] = [];
+    sendMessage.mockImplementation(
+      async (_tabId: number, op: { kind: string; requestId: string; cancelRequestId?: string }) => {
+        if (op.kind === 'ping') return { requestId: op.requestId, ok: true, result: 'pong' };
+        if (op.kind === 'cancel') {
+          cancelOps.push({ cancelRequestId: op.cancelRequestId! });
+          return { requestId: op.requestId, ok: true, result: 'cancelled' };
+        }
+        executeRequestId = op.requestId;
+        await new Promise<void>((resolve) => {
+          finishExecute = resolve;
+        });
+        return { requestId: op.requestId, ok: true, result: { resultText: 'late result' } };
+      },
+    );
+    const controller = new AbortController();
+
+    const running = gateway.callContentTool(
+      'thread-a',
+      'click',
+      { ref: 's1_1' },
+      7,
+      controller.signal,
+    );
+    await vi.waitFor(() => expect(executeRequestId).not.toBe(''));
+    controller.abort();
+
+    await expect(running).rejects.toMatchObject({
+      failure: {
+        code: 'aborted',
+        details: { dispatched: true, effectMayHaveOccurred: true },
+      },
+    });
+    expect(cancelOps).toEqual([{ cancelRequestId: executeRequestId }]);
+    finishExecute();
+  });
+
+  it('rejects a response owned by another request id', async () => {
+    tabs = [{ id: 7, url: 'https://queue.example.com/', active: true }];
+    const gateway = new BrowserToolGateway();
+    sendMessage.mockImplementation(
+      async (_tabId: number, op: { kind: string; requestId: string }) => {
+        if (op.kind === 'ping') return { requestId: op.requestId, ok: true, result: 'pong' };
+        return { requestId: 'another-request', ok: true, result: { resultText: 'wrong owner' } };
+      },
+    );
+
+    await expect(gateway.callContentTool('thread-a', 'read_page', {}, 7)).rejects.toThrow(
+      /requestId mismatch/,
+    );
+  });
 });

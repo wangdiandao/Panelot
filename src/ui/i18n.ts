@@ -4,7 +4,10 @@
  * with interpolation covers it.
  */
 
-type Lang = 'zh-CN' | 'en';
+import { useSyncExternalStore } from 'react';
+import { onStorageChange, SettingsStore, type GlobalSettings } from '../settings/store';
+
+export type Lang = 'zh-CN' | 'en';
 
 const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   // App chrome
@@ -16,44 +19,12 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   'app.noThreads': { 'zh-CN': '暂无历史会话', en: 'No chats yet' },
   'app.untitled': { 'zh-CN': '未命名会话', en: 'Untitled chat' },
   'app.attachPage': { 'zh-CN': '＋ 附着到对话', en: '+ Attach to chat' },
-  'app.taskPanel': { 'zh-CN': '任务面板', en: 'Task panel' },
-  'app.hideTaskPanel': { 'zh-CN': '隐藏任务面板', en: 'Hide task panel' },
   'app.pin': { 'zh-CN': '置顶', en: 'Pin' },
   'app.unpin': { 'zh-CN': '取消置顶', en: 'Unpin' },
   'app.rename': { 'zh-CN': '重命名', en: 'Rename' },
   'app.delete': { 'zh-CN': '删除', en: 'Delete' },
   'app.cancel': { 'zh-CN': '取消', en: 'Cancel' },
   'app.save': { 'zh-CN': '保存', en: 'Save' },
-  'app.agentTabs': { 'zh-CN': 'Agent 操作过的标签页', en: 'Tabs the agent worked on' },
-  'app.queued': { 'zh-CN': '队列 {n} 条', en: '{n} queued' },
-  'app.noTasks': { 'zh-CN': '暂无规划任务', en: 'No tasks planned yet' },
-  'app.taskPanelHint': {
-    'zh-CN': '输入 /plan 让 AI 制定执行计划',
-    en: 'Type /plan for the AI to outline a plan',
-  },
-  // Plan confirm card
-  'plan.ready': {
-    'zh-CN': '计划已就绪，请确认后开始执行',
-    en: 'Plan ready — confirm to start execution',
-  },
-  'plan.confirm': { 'zh-CN': '确认并执行', en: 'Confirm & execute' },
-  'plan.edit': { 'zh-CN': '调整后执行', en: 'Edit first' },
-  'plan.cancel': { 'zh-CN': '放弃计划', en: 'Discard plan' },
-  'plan.collapse': { 'zh-CN': '收起步骤', en: 'Collapse steps' },
-  'plan.expand': { 'zh-CN': '展开步骤', en: 'Expand steps' },
-  'plan.confirmMsg': {
-    'zh-CN': '计划已确认，请按步骤执行。',
-    en: 'Plan confirmed, please proceed step by step.',
-  },
-  'cmd.planHint': {
-    'zh-CN': '让 AI 先制定分步计划，再逐步执行',
-    en: 'Ask the AI to outline a step-by-step plan before acting',
-  },
-  'cmd.planPrompt': {
-    'zh-CN':
-      '请先用中文制定一份分步执行计划，每步用 todo_write 工具写入任务列表，计划确认后再开始执行。',
-    en: 'Please outline a step-by-step plan first. Write each step into the task list using todo_write, then begin execution once the plan is confirmed.',
-  },
   'app.noMatchingThreads': { 'zh-CN': '没有匹配的会话', en: 'No matching chats' },
   'app.collapseSidebar': { 'zh-CN': '收起侧边栏', en: 'Collapse sidebar' },
   'app.expandSidebar': { 'zh-CN': '展开侧边栏', en: 'Expand sidebar' },
@@ -104,10 +75,24 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
     'zh-CN': '当前轮不可插话，已加入队列',
     en: 'Turn not steerable — queued instead',
   },
+  'input.variableExpansionFailed': {
+    'zh-CN': '动态变量读取失败，本条消息未发送',
+    en: 'Dynamic variable lookup failed; this message was not sent',
+  },
+  'input.threadChangedBeforeSend': {
+    'zh-CN': '会话已切换，消息未发送',
+    en: 'The conversation changed, so the message was not sent',
+  },
   'input.queuedCount': { 'zh-CN': '队列中 {n} 条消息', en: '{n} messages queued' },
   'input.remove': { 'zh-CN': '移除 {label}', en: 'Remove {label}' },
   'input.attach': { 'zh-CN': '添加', en: 'Add' },
+  'input.uploadFile': { 'zh-CN': '上传文件', en: 'Upload file' },
+  'input.uploadRequiresThread': {
+    'zh-CN': '请先发送一条消息创建会话，再上传文件。',
+    en: 'Send a message to create the chat before uploading a file.',
+  },
   'input.attachPage': { 'zh-CN': '引用页面', en: 'Attach page' },
+  'input.skills': { 'zh-CN': '技能', en: 'Skills' },
   'input.noTabs': { 'zh-CN': '没有可引用的标签页', en: 'No tabs available' },
   'input.noSkills': { 'zh-CN': '暂无已启用的 Skill', en: 'No enabled skills' },
   'input.pastedText': { 'zh-CN': '粘贴文本（{n} 字符）', en: 'Pasted text ({n} chars)' },
@@ -152,6 +137,22 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   'recovery.failed': { 'zh-CN': '标记失败', en: 'Mark failed' },
   'error.retry': { 'zh-CN': '重试', en: 'Retry' },
   'error.openSettings': { 'zh-CN': '打开设置', en: 'Open settings' },
+  'completion.maxTokens.title': {
+    'zh-CN': '回复已达到输出上限',
+    en: 'Response reached the output limit',
+  },
+  'completion.maxTokens.description': {
+    'zh-CN': '回复可能不完整。请提高最大输出长度，或让助手从中断处继续。',
+    en: 'The response may be incomplete. Increase the output limit or ask the assistant to continue.',
+  },
+  'completion.contentFilter.title': {
+    'zh-CN': '回复因内容过滤而停止',
+    en: 'Response stopped by content filtering',
+  },
+  'completion.contentFilter.description': {
+    'zh-CN': '提供方未返回完整内容。请调整请求后重试；原请求不会自动重放。',
+    en: 'The provider did not return the complete content. Revise the request and try again; the original request is not replayed automatically.',
+  },
 
   // Provider error attribution (docs/03 §7)
   'error.auth': {
@@ -314,14 +315,716 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   // Settings
   'settings.search': { 'zh-CN': '搜索设置…', en: 'Search settings…' },
   'settings.noMatch': { 'zh-CN': '无匹配的设置项', en: 'No matching settings' },
+  'settings.title': { 'zh-CN': 'Panelot 设置', en: 'Panelot Settings' },
+  'settings.section.attachments': { 'zh-CN': '附件', en: 'Attachments' },
+  'settings.section.sites': { 'zh-CN': '站点', en: 'Sites' },
+  'settings.section.presets': { 'zh-CN': '预设', en: 'Presets' },
+  'settings.section.general': { 'zh-CN': '通用', en: 'General' },
+  'settings.section.providers': { 'zh-CN': '模型', en: 'Models' },
+  'settings.section.permissions': { 'zh-CN': '浏览器权限', en: 'Browser permissions' },
+  'settings.section.skills': { 'zh-CN': 'Skills', en: 'Skills' },
+  'settings.section.plugins': { 'zh-CN': 'Plugins', en: 'Plugins' },
+  'settings.section.mcp': { 'zh-CN': 'MCP 服务器', en: 'MCP servers' },
+  'settings.section.data': { 'zh-CN': '数据', en: 'Data' },
+  'settings.section.about': { 'zh-CN': '关于', en: 'About' },
+  'settings.general.prompt': { 'zh-CN': '全局自定义指令', en: 'Global custom instructions' },
+  'settings.general.promptPlaceholder': {
+    'zh-CN': '例如：回复保持简洁；表格优先。',
+    en: 'For example: Keep replies concise and prefer tables.',
+  },
+  'settings.general.promptHint': {
+    'zh-CN': '作为用户层加入 system prompt，对所有会话生效。',
+    en: 'Added to the user layer of the system prompt for every chat.',
+  },
+  'settings.general.language': { 'zh-CN': '语言', en: 'Language' },
+  'settings.general.theme': { 'zh-CN': '主题', en: 'Theme' },
+  'settings.general.theme.system': { 'zh-CN': '跟随系统', en: 'System' },
+  'settings.general.theme.dark': { 'zh-CN': '暗色', en: 'Dark' },
+  'settings.general.theme.light': { 'zh-CN': '亮色', en: 'Light' },
+  'settings.about.title': { 'zh-CN': '关于 Panelot', en: 'About Panelot' },
+  'settings.about.summary': {
+    'zh-CN': '一款浏览器自动化AI Agent插件',
+    en: 'A browser automation AI agent extension.',
+  },
+  'settings.about.github': { 'zh-CN': '查看 GitHub', en: 'View on GitHub' },
 
+  // Provider settings and onboarding
+  'settings.providers.title': { 'zh-CN': '模型连接', en: 'Model connections' },
+  'settings.providers.add': { 'zh-CN': '添加连接', en: 'Add connection' },
+  'settings.providers.emptyTitle': { 'zh-CN': '还没有模型连接', en: 'No model connections yet' },
+  'settings.providers.emptyHint': {
+    'zh-CN': '添加连接、选择接口类型并填入 API Key，即可开始对话。',
+    en: 'Add a connection, choose its API type, and enter an API key to start chatting.',
+  },
+  'settings.providers.defaultModel': { 'zh-CN': '默认模型', en: 'Default model' },
+  'settings.providers.defaultModelHint': {
+    'zh-CN': '必须选择一个可用模型；对话选择“默认模型”时使用它。',
+    en: 'Choose an available model; chats set to “Default model” use it.',
+  },
+  'settings.providers.defaultSet': { 'zh-CN': '默认模型已设置', en: 'Default model set' },
+  'settings.providers.saved': { 'zh-CN': '连接已保存', en: 'Connection saved' },
+  'settings.providers.deleted': { 'zh-CN': '连接已删除', en: 'Connection deleted' },
+  'settings.providers.enable': { 'zh-CN': '启用 {name}', en: 'Enable {name}' },
+  'settings.providers.edit': { 'zh-CN': '编辑', en: 'Edit' },
+  'settings.providers.delete': { 'zh-CN': '删除', en: 'Delete' },
+  'settings.providers.deleteTitle': {
+    'zh-CN': '删除连接“{name}”？',
+    en: 'Delete connection “{name}”?',
+  },
+  'settings.providers.deleteHint': {
+    'zh-CN': '该连接的模型将不再可用；已有会话记录不受影响。',
+    en: 'Models from this connection will no longer be available. Existing chat history is unaffected.',
+  },
+  'settings.providers.kind': { 'zh-CN': '接口类型', en: 'API type' },
+  'settings.providers.kind.openai': { 'zh-CN': 'OpenAI 兼容', en: 'OpenAI-compatible' },
+  'settings.providers.kind.anthropic': { 'zh-CN': 'Anthropic', en: 'Anthropic' },
+  'settings.providers.name': { 'zh-CN': '名称（可选）', en: 'Name (optional)' },
+  'settings.providers.namePlaceholder': {
+    'zh-CN': '留空时使用接口域名',
+    en: 'Uses the endpoint hostname when blank',
+  },
+  'settings.providers.keys': {
+    'zh-CN': 'API Keys（每行一个，可自动故障转移）',
+    en: 'API keys (one per line, with automatic failover)',
+  },
+  'settings.providers.models': {
+    'zh-CN': '模型列表（端点不支持 /models 时手动填写，每行一个）',
+    en: 'Model list (one per line when the endpoint does not support /models)',
+  },
+  'settings.providers.modelsPlaceholder': {
+    'zh-CN': '留空 = 自动获取\ngpt-5',
+    en: 'Blank = discover automatically\ngpt-5',
+  },
+  'settings.providers.verify': { 'zh-CN': '验证连接', en: 'Verify connection' },
+  'settings.providers.verifying': { 'zh-CN': '验证中…', en: 'Verifying…' },
+  'settings.providers.reachable': { 'zh-CN': '可达', en: 'Reachable' },
+  'settings.providers.keyValid': { 'zh-CN': 'Key 有效', en: 'Key valid' },
+  'settings.providers.streaming': { 'zh-CN': '流式', en: 'Streaming' },
+  'settings.providers.toolUse': { 'zh-CN': '工具调用', en: 'Tool use' },
+  'settings.providers.discovered': {
+    'zh-CN': '从端点发现 {n} 个模型：',
+    en: 'Discovered {n} models from the endpoint:',
+  },
+  'settings.providers.quirks': {
+    'zh-CN': '兼容性开关（quirks）',
+    en: 'Compatibility options (quirks)',
+  },
+  'settings.providers.quirk.noStreamOptions': {
+    'zh-CN': '端点不支持 stream_options.include_usage',
+    en: 'Endpoint does not support stream_options.include_usage',
+  },
+  'settings.providers.quirk.thinkTagReasoning': {
+    'zh-CN': '推理内容使用 <think> 内联标签（如 DeepSeek）',
+    en: 'Reasoning uses inline <think> tags (for example, DeepSeek)',
+  },
+  'settings.providers.quirk.noParallelToolCalls': {
+    'zh-CN': '强制单工具调用',
+    en: 'Force one tool call at a time',
+  },
+  'settings.providers.quirk.noSystemRole': {
+    'zh-CN': '不支持 system 角色（转为首条 user）',
+    en: 'No system role (convert it to the first user message)',
+  },
+  'settings.providers.maxTokensField': {
+    'zh-CN': 'max_tokens 字段名',
+    en: 'max_tokens field name',
+  },
+  'settings.providers.advanced': {
+    'zh-CN': '自定义 Header 与模型能力/价格',
+    en: 'Custom headers and model capabilities/pricing',
+  },
+  'settings.providers.headers': {
+    'zh-CN': '自定义 Header（每行 Name: Value，敏感值本机加密）',
+    en: 'Custom headers (one Name: Value per line; sensitive values are encrypted locally)',
+  },
+  'settings.providers.modelConfig': {
+    'zh-CN': '模型能力与价格 JSON（价格单位：$/M tokens）',
+    en: 'Model capabilities and pricing JSON (prices in $/M tokens)',
+  },
+  'settings.providers.invalidHeader': {
+    'zh-CN': '自定义 Header 第 {line} 行格式无效；请使用 Name: Value。',
+    en: 'Custom header line {line} is invalid; use Name: Value.',
+  },
+  'settings.providers.invalidModelArray': {
+    'zh-CN': '模型能力/价格必须是 JSON 数组',
+    en: 'Model capabilities/pricing must be a JSON array',
+  },
+  'settings.providers.invalidModelObject': {
+    'zh-CN': '模型配置 {index} 必须是对象',
+    en: 'Model configuration {index} must be an object',
+  },
+  'settings.providers.invalidModelCapabilities': {
+    'zh-CN': '模型配置 {index} 缺少 id/toolUse/vision',
+    en: 'Model configuration {index} is missing id/toolUse/vision',
+  },
+  'settings.providers.invalidPricing': {
+    'zh-CN': '模型配置 {index} 的 pricing 无效',
+    en: 'Pricing is invalid for model configuration {index}',
+  },
+  'settings.providers.needsHostPermission': {
+    'zh-CN': '需要授权访问该域名',
+    en: 'Permission to access this endpoint is required',
+  },
+  'settings.providers.needsHostPermissionHint': {
+    'zh-CN': '验证时请允许站点访问权限。',
+    en: 'Allow site access when verifying the connection.',
+  },
+  'settings.providers.verifyRequestError': {
+    'zh-CN': '连接验证请求失败；请检查 Base URL、网络、代理、访问权限和 Provider 配置。',
+    en: 'Connection verification failed. Check the Base URL, network, proxy, site access, and provider settings.',
+  },
+  'settings.providers.invalidConfiguration': {
+    'zh-CN': '连接配置无效。',
+    en: 'Connection configuration is invalid.',
+  },
+  'settings.providers.invalidEndpoint': {
+    'zh-CN': '请输入有效的 HTTPS Provider 端点；仅 localhost、127.0.0.1 或 [::1] 可使用 HTTP。',
+    en: 'Enter a valid HTTPS provider endpoint. HTTP is allowed only for localhost, 127.0.0.1, or [::1].',
+  },
+  'settings.providers.invalidModelJson': {
+    'zh-CN': '模型能力与价格必须是有效的 JSON。',
+    en: 'Model capabilities and pricing must be valid JSON.',
+  },
+  'settings.providers.baseUrlHint': {
+    'zh-CN': 'OpenAI 兼容端点通常以 /v1 结尾；请求失败时请检查路径。',
+    en: 'OpenAI-compatible endpoints usually end in /v1; check the path if requests fail.',
+  },
+
+  // Browser permission settings. Stored protocol values stay unchanged; only these labels are localized.
+  'settings.permissions.defaultPolicy': {
+    'zh-CN': '默认权限策略',
+    en: 'Default permission policy',
+  },
+  'settings.permissions.policy.always.label': { 'zh-CN': '全程询问', en: 'Ask for everything' },
+  'settings.permissions.policy.always.desc': {
+    'zh-CN': '每一步都先征求同意，包括读取页面。',
+    en: 'Ask before every step, including reading pages.',
+  },
+  'settings.permissions.policy.untrusted.label': { 'zh-CN': '操作询问', en: 'Ask before acting' },
+  'settings.permissions.policy.untrusted.desc': {
+    'zh-CN': '自动放行只读操作，点击、输入等写操作先审批（推荐）。',
+    en: 'Allow reads; ask before clicks, typing, and other writes (recommended).',
+  },
+  'settings.permissions.policy.auto.label': { 'zh-CN': '无需审批', en: 'Act without asking' },
+  'settings.permissions.policy.auto.desc': {
+    'zh-CN': '自动执行写操作；敏感站点、敏感信息与权限规则仍必须遵守。',
+    en: 'Execute writes automatically; sensitive sites, sensitive data, and permission rules still apply.',
+  },
+  'settings.permissions.rules': { 'zh-CN': '权限规则', en: 'Permission rules' },
+  'settings.permissions.rulesHint': {
+    'zh-CN': '规则高于默认权限策略，命中规则的操作必须遵守 allow / ask / deny 裁决。',
+    en: 'Rules take priority over the default policy; matching actions must obey allow / ask / deny.',
+  },
+  'settings.permissions.emptyRules': {
+    'zh-CN': '审批时选择“本站始终”会创建规则，也可在下方手动添加。',
+    en: 'Choosing “Always on this site” during approval creates a rule, or add one manually below.',
+  },
+  'settings.permissions.tool': { 'zh-CN': '工具', en: 'Tool' },
+  'settings.permissions.site': { 'zh-CN': '站点', en: 'Site' },
+  'settings.permissions.verdict': { 'zh-CN': '裁决', en: 'Verdict' },
+  'settings.permissions.source': { 'zh-CN': '来源', en: 'Source' },
+  'settings.permissions.verdict.allow': { 'zh-CN': '允许', en: 'Allow' },
+  'settings.permissions.verdict.ask': { 'zh-CN': '询问', en: 'Ask' },
+  'settings.permissions.verdict.deny': { 'zh-CN': '拒绝', en: 'Deny' },
+  'settings.permissions.source.user_setting': { 'zh-CN': '用户设置', en: 'User setting' },
+  'settings.permissions.source.approval': { 'zh-CN': '审批记录', en: 'Approval' },
+  'settings.permissions.removeRule': { 'zh-CN': '删除规则', en: 'Delete rule' },
+  'settings.permissions.ruleAdded': { 'zh-CN': '规则已添加', en: 'Rule added' },
+  'settings.permissions.ruleDeleted': { 'zh-CN': '规则已删除', en: 'Rule deleted' },
+  'settings.permissions.add': { 'zh-CN': '添加', en: 'Add' },
+  'settings.permissions.originPlaceholder': {
+    'zh-CN': '* 或 *.example.com',
+    en: '* or *.example.com',
+  },
+  'settings.permissions.askHint': {
+    'zh-CN': 'ask 会强制确认，即使默认策略本可放行。类别：{categories}',
+    en: 'ask forces confirmation even when the default policy would allow it. Categories: {categories}',
+  },
+  'settings.permissions.sensitive': {
+    'zh-CN': '敏感站点黑名单（硬拒绝，不可被规则覆盖）',
+    en: 'Sensitive-site blocklist (hard deny; rules cannot override it)',
+  },
+  'settings.permissions.removeSensitive': { 'zh-CN': '移除 {pattern}', en: 'Remove {pattern}' },
+  'settings.permissions.showBuiltIn': {
+    'zh-CN': '查看 {n} 条预置黑名单',
+    en: 'Show {n} built-in blocklist entries',
+  },
+
+  // Onboarding
+  'onboarding.connect': { 'zh-CN': '连接你的模型', en: 'Connect your model' },
+  'onboarding.baseUrl': { 'zh-CN': '接口地址（Base URL）', en: 'Endpoint (Base URL)' },
+  'onboarding.apiKey': {
+    'zh-CN': 'API Key（Ollama 等本地端点可留空）',
+    en: 'API key (optional for local endpoints such as Ollama)',
+  },
+  'onboarding.connected': { 'zh-CN': '连接成功', en: 'Connected' },
+  'onboarding.modelsFound': { 'zh-CN': '，发现 {n} 个模型', en: '; found {n} models' },
+  'onboarding.failed': {
+    'zh-CN': '验证失败，请检查域名、Key 与网络',
+    en: 'Verification failed. Check the endpoint, key, and network.',
+  },
+  'onboarding.next': { 'zh-CN': '下一步', en: 'Next' },
+  'onboarding.approval': { 'zh-CN': '选择审批档位', en: 'Choose an approval mode' },
+  'onboarding.tier.safe.title': { 'zh-CN': '稳妥（推荐）', en: 'Balanced (recommended)' },
+  'onboarding.tier.safe.desc': {
+    'zh-CN': '读取自由；点击、输入、提交等写操作先问我。',
+    en: 'Read freely; ask before clicks, typing, submissions, and other writes.',
+  },
+  'onboarding.tier.smooth.title': { 'zh-CN': '顺畅', en: 'Fewer prompts' },
+  'onboarding.tier.smooth.desc': {
+    'zh-CN': '读取自由；首次批准后，本轮同站同工具不重复询问。',
+    en: 'Read freely; remember the first approval for the same site and tool this turn.',
+  },
+  'onboarding.tier.readonly.title': { 'zh-CN': '仅浏览', en: 'Browse only' },
+  'onboarding.tier.readonly.desc': {
+    'zh-CN': '只允许读取页面，禁止一切写操作。',
+    en: 'Allow page reads and block every write action.',
+  },
+  'onboarding.approvalHint': {
+    'zh-CN': '之后可在“设置 → 浏览器权限”中调整。',
+    en: 'You can change this later in Settings → Browser permissions.',
+  },
+  'onboarding.finish': { 'zh-CN': '完成', en: 'Finish' },
+  'onboarding.ready': { 'zh-CN': '就绪！试试第一条指令', en: 'Ready! Try your first request' },
+  'onboarding.demo': { 'zh-CN': '总结当前页面的要点', en: 'Summarize the key points on this page' },
+  'onboarding.demoHint': {
+    'zh-CN': '也可以直接提问；用 @ 引用页面，用 / 调用命令。',
+    en: 'You can also ask anything; use @ to reference a page and / to run a command.',
+  },
+  'onboarding.skip': { 'zh-CN': '跳过，稍后在设置中配置', en: 'Skip and configure later' },
+  'onboarding.skipVerify': { 'zh-CN': '跳过验证直接保存', en: 'Save without verification' },
+  'onboarding.savedUnverified': {
+    'zh-CN': '已保存未验证的连接，可稍后在设置中验证。',
+    en: 'Saved the unverified connection. You can verify it later in Settings.',
+  },
+
+  // Skills, Plugins, MCP, and data settings
+  'settings.skills.edit': { 'zh-CN': '编辑 Skill', en: 'Edit Skill' },
+  'settings.skills.saved': { 'zh-CN': 'Skill 已保存', en: 'Skill saved' },
+  'settings.skills.importFile': { 'zh-CN': '导入文件', en: 'Import file' },
+  'settings.skills.importFileLabel': { 'zh-CN': '导入 Skill 文件', en: 'Import Skill file' },
+  'settings.skills.importUrl': { 'zh-CN': '从 URL 导入', en: 'Import from URL' },
+  'settings.skills.new': { 'zh-CN': '新建', en: 'New' },
+  'settings.skills.overwrite': { 'zh-CN': '覆盖同名 Skill', en: 'Overwrite matching Skill' },
+  'settings.skills.rename': { 'zh-CN': '自动改名', en: 'Rename automatically' },
+  'settings.skills.emptyTitle': { 'zh-CN': '还没有 Skill', en: 'No Skills yet' },
+  'settings.skills.emptyHint': {
+    'zh-CN': '新建一个，或从社区导入兼容 Claude Code 的 SKILL.md。',
+    en: 'Create one or import a Claude Code-compatible SKILL.md from the community.',
+  },
+  'settings.skills.enable': { 'zh-CN': '启用 {name}', en: 'Enable {name}' },
+  'settings.skills.copyEdit': { 'zh-CN': '复制并编辑', en: 'Copy and edit' },
+  'settings.skills.export': { 'zh-CN': '导出 {name}', en: 'Export {name}' },
+  'settings.skills.delete': { 'zh-CN': '删除', en: 'Delete' },
+  'settings.skills.urlTitle': { 'zh-CN': '从 URL 导入 Skill', en: 'Import Skill from URL' },
+  'settings.skills.urlHint': {
+    'zh-CN': '输入 SKILL.md 的 HTTPS URL（例如 GitHub raw）。',
+    en: 'Enter an HTTPS URL for SKILL.md, such as a GitHub raw URL.',
+  },
+  'settings.skills.import': { 'zh-CN': '导入', en: 'Import' },
+  'settings.skills.imported': { 'zh-CN': '已从 URL 导入', en: 'Imported from URL' },
+  'settings.skills.importFailed': { 'zh-CN': '导入失败：{error}', en: 'Import failed: {error}' },
+  'settings.skills.httpsOnly': {
+    'zh-CN': 'Skill URL 必须使用 HTTPS',
+    en: 'Skill URL must use HTTPS',
+  },
+  'settings.skills.permissionDenied': {
+    'zh-CN': '未授予该 URL 的访问权限',
+    en: 'Access to this URL was not granted',
+  },
+  'settings.skills.tooLarge': { 'zh-CN': 'SKILL.md 超过 1 MB 限制', en: 'SKILL.md exceeds 1 MB' },
+  'settings.skills.dependencyWarning': {
+    'zh-CN': '该 Skill 引用了 {files}；单文件导入不会包含这些依赖，请确认指令仍可独立使用。',
+    en: 'This Skill references {files}. A single-file import excludes these dependencies; confirm the instructions still work independently.',
+  },
+  'settings.skills.externalFiles': {
+    'zh-CN': '该 Skill 还引用 {n} 个外部文件，当前仅导入 SKILL.md。',
+    en: 'This Skill references {n} external files; only SKILL.md will be imported.',
+  },
+  'settings.skills.templateDescription': {
+    'zh-CN': '简述这个技能做什么，以及何时使用。',
+    en: 'Briefly describe what this Skill does and when to use it.',
+  },
+  'settings.skills.templateHeading': { 'zh-CN': '指令正文', en: 'Instructions' },
+  'settings.skills.templateBody': {
+    'zh-CN': '在这里写详细指令。',
+    en: 'Write detailed instructions here.',
+  },
+
+  'settings.plugins.installed': { 'zh-CN': 'Plugin 已安装', en: 'Plugin installed' },
+  'settings.plugins.limit': {
+    'zh-CN': '安装包限制：压缩 10 MB、解压 50 MB、1000 个文件；不会执行包内代码。',
+    en: 'Package limits: 10 MB compressed, 50 MB extracted, 1,000 files. Packaged code is never executed.',
+  },
+  'settings.plugins.installGithub': { 'zh-CN': '从 GitHub 安装', en: 'Install from GitHub' },
+  'settings.plugins.chooseZip': { 'zh-CN': '选择本地 ZIP', en: 'Choose local ZIP' },
+  'settings.plugins.chooseZipLabel': {
+    'zh-CN': '选择本地 Plugin ZIP',
+    en: 'Choose a local Plugin ZIP',
+  },
+  'settings.plugins.emptyTitle': { 'zh-CN': '尚未安装 Plugin', en: 'No Plugins installed' },
+  'settings.plugins.emptyHint': {
+    'zh-CN': '从 GitHub 或本地 ZIP 安装受信任的 Plugin。',
+    en: 'Install a trusted Plugin from GitHub or a local ZIP.',
+  },
+  'settings.plugins.enable': { 'zh-CN': '启用 {name}', en: 'Enable {name}' },
+  'settings.plugins.disable': { 'zh-CN': '停用 {name}', en: 'Disable {name}' },
+  'settings.plugins.uninstall': { 'zh-CN': '卸载 {name}', en: 'Uninstall {name}' },
+  'settings.plugins.manifest': { 'zh-CN': '安装清单（{n}）', en: 'Installed assets ({n})' },
+  'settings.plugins.permissionDenied': {
+    'zh-CN': '未授予 GitHub 下载权限',
+    en: 'GitHub download permission was not granted',
+  },
+  'settings.plugins.urlLabel': {
+    'zh-CN': 'GitHub Plugin 仓库或 ZIP 地址',
+    en: 'GitHub Plugin repository or ZIP URL',
+  },
+  'settings.plugins.analyzeGithub': { 'zh-CN': '分析 GitHub 包', en: 'Analyze GitHub package' },
+  'settings.plugins.analyzing': { 'zh-CN': '正在分析…', en: 'Analyzing…' },
+  'settings.plugins.preview.installTitle': {
+    'zh-CN': '确认安装 Plugin',
+    en: 'Confirm Plugin install',
+  },
+  'settings.plugins.preview.upgradeTitle': {
+    'zh-CN': '确认升级 Plugin',
+    en: 'Confirm Plugin upgrade',
+  },
+  'settings.plugins.preview.description': {
+    'zh-CN': '请核对来源、内容和提示词资产。只有再次确认才会写入本机数据库。',
+    en: 'Review the source, contents, and prompt assets. Nothing is written until you confirm again.',
+  },
+  'settings.plugins.preview.source': { 'zh-CN': '来源', en: 'Source' },
+  'settings.plugins.preview.resolvedSource': {
+    'zh-CN': '解析后的下载地址',
+    en: 'Resolved download URL',
+  },
+  'settings.plugins.preview.digest': { 'zh-CN': 'SHA-256 摘要', en: 'SHA-256 digest' },
+  'settings.plugins.preview.expires': {
+    'zh-CN': '确认窗口截止：{time}',
+    en: 'Confirmation expires: {time}',
+  },
+  'settings.plugins.preview.existing': {
+    'zh-CN': '当前已安装 {version}；升级后将保持停用。',
+    en: 'Version {version} is installed. The upgraded Plugin will remain disabled.',
+  },
+  'settings.plugins.preview.assets': { 'zh-CN': '资产（{n}）', en: 'Assets ({n})' },
+  'settings.plugins.preview.skills': { 'zh-CN': 'Skills（{n}）', en: 'Skills ({n})' },
+  'settings.plugins.preview.presets': { 'zh-CN': '模型预设（{n}）', en: 'Model presets ({n})' },
+  'settings.plugins.preview.sites': { 'zh-CN': '站点指令（{n}）', en: 'Site instructions ({n})' },
+  'settings.plugins.preview.bytes': { 'zh-CN': '{n} 字节', en: '{n} bytes' },
+  'settings.plugins.preview.model': { 'zh-CN': '模型：{model}', en: 'Model: {model}' },
+  'settings.plugins.preview.promptSummary': {
+    'zh-CN': '提示词摘要：{summary}',
+    en: 'Prompt summary: {summary}',
+  },
+  'settings.plugins.preview.disabled': { 'zh-CN': '安装后停用', en: 'Disabled after install' },
+  'settings.plugins.security.title': { 'zh-CN': '提示词信任边界', en: 'Prompt trust boundary' },
+  'settings.plugins.security.body': {
+    'zh-CN':
+      'Plugin 数据不会作为代码执行，但 Skill、站点指令和预设提示词在启用后会进入 Agent 上下文。仅安装你信任并已核对的内容。',
+    en: 'Plugin data is not executed as code, but Skills, site instructions, and preset prompts enter Agent context after you enable them. Install only content you trust and have reviewed.',
+  },
+  'settings.plugins.security.promptAssetsDisabled': {
+    'zh-CN': '本包包含提示词资产；Plugin 与派生 Skills 默认停用，不会因安装进入提示词。',
+    en: 'This package contains prompt assets. The Plugin and derived Skills stay disabled and do not enter prompts on install.',
+  },
+  'settings.plugins.security.upgradeDisabled': {
+    'zh-CN': '升级会停用整个 Plugin 及其派生 Skills，需在检查新内容后手动重新启用。',
+    en: 'An upgrade disables the Plugin and its derived Skills. Re-enable them only after reviewing the new content.',
+  },
+  'settings.plugins.security.opaqueAssets': {
+    'zh-CN': '本包包含通用数据资产；安装前请检查其文件名和来源。',
+    en: 'This package includes opaque data assets. Review their names and source before installing.',
+  },
+  'settings.plugins.cancel': { 'zh-CN': '取消', en: 'Cancel' },
+  'settings.plugins.confirmInstall': {
+    'zh-CN': '确认安装并保持停用',
+    en: 'Install and keep disabled',
+  },
+  'settings.plugins.confirmUpgrade': { 'zh-CN': '确认升级并停用', en: 'Upgrade and disable' },
+
+  'settings.data.usage': { 'zh-CN': '存储用量', en: 'Storage usage' },
+  'settings.data.nearLimit': {
+    'zh-CN': '存储接近上限，建议导出后清理旧会话。',
+    en: 'Storage is near its limit. Export a backup, then remove old chats.',
+  },
+  'settings.data.export': { 'zh-CN': '导出', en: 'Export' },
+  'settings.data.import': { 'zh-CN': '导入', en: 'Import' },
+  'settings.data.includeSecrets': {
+    'zh-CN': '包含秘密（使用口令加密）',
+    en: 'Include secrets (encrypted with a passphrase)',
+  },
+  'settings.data.passphrase': { 'zh-CN': '备份口令', en: 'Backup passphrase' },
+  'settings.data.passphraseRequired': {
+    'zh-CN': '请输入加密备份口令',
+    en: 'Enter a passphrase for the encrypted backup',
+  },
+  'settings.data.exportAll': { 'zh-CN': '导出全部为 JSON', en: 'Export everything as JSON' },
+  'settings.data.exported': { 'zh-CN': '已导出', en: 'Export complete' },
+  'settings.data.chooseJson': { 'zh-CN': '选择 JSON 文件', en: 'Choose JSON file' },
+  'settings.data.chooseJsonLabel': {
+    'zh-CN': '选择 JSON 导入文件',
+    en: 'Choose a JSON import file',
+  },
+  'settings.data.importSuccess': {
+    'zh-CN': '导入成功，请重新打开侧边栏。',
+    en: 'Import complete. Reopen the side panel.',
+  },
+  'settings.data.importFailed': { 'zh-CN': '导入失败：{error}', en: 'Import failed: {error}' },
+  'settings.data.overwriteTitle': {
+    'zh-CN': '导入将覆盖现有数据',
+    en: 'Import will overwrite existing data',
+  },
+  'settings.data.overwriteHint': {
+    'zh-CN':
+      '现有会话与设置会被替换。已校验 {threads} 个会话、{nodes} 个节点、{skills} 个 Skill（{size} KiB）。建议先导出备份。',
+    en: 'Existing chats and settings will be replaced. Validated {threads} chats, {nodes} nodes, and {skills} Skills ({size} KiB). Export a backup first.',
+  },
+  'settings.data.enterPassphrase': { 'zh-CN': '输入备份口令', en: 'Enter backup passphrase' },
+  'settings.data.overwrite': { 'zh-CN': '覆盖导入', en: 'Overwrite and import' },
+  'settings.data.previewImport': { 'zh-CN': '预检导入', en: 'Preview import' },
+  'settings.data.previewing': { 'zh-CN': '正在预检…', en: 'Previewing…' },
+  'settings.data.importing': { 'zh-CN': '正在提交…', en: 'Committing…' },
+  'settings.data.previewReady': {
+    'zh-CN': '预检通过，可以提交',
+    en: 'Preview passed. Ready to commit.',
+  },
+  'settings.data.previewBlocked': {
+    'zh-CN': '当前状态阻止导入',
+    en: 'Current activity blocks this import',
+  },
+  'settings.data.blockerSummary': {
+    'zh-CN': '活动会话 {active} · 运行中任务 {hard} · 可丢弃任务 {dormant} · 待审批 {approvals}',
+    en: 'Active chats {active} · running tasks {hard} · discardable tasks {dormant} · pending approvals {approvals}',
+  },
+  'settings.data.confirmDormant': {
+    'zh-CN': '我确认丢弃已排队、暂停或中断的任务状态。',
+    en: 'I confirm that queued, paused, or interrupted task state may be discarded.',
+  },
+  'settings.data.committed': {
+    'zh-CN': '数据已提交。请重载扩展以完成恢复。',
+    en: 'Data committed. Reload the extension to finish recovery.',
+  },
+  'settings.data.reloadRequired': {
+    'zh-CN': '数据维护等待扩展重载',
+    en: 'Data maintenance is waiting for an extension reload',
+  },
+  'settings.data.reloadRequiredHint': {
+    'zh-CN': '重载前，新的 Agent 命令会被拒绝，以防止新旧状态混用。',
+    en: 'New agent commands are rejected until reload so old and new state cannot mix.',
+  },
+  'settings.data.reloadNow': { 'zh-CN': '立即重载扩展', en: 'Reload extension now' },
+  'settings.data.rollbackRecovered': {
+    'zh-CN': '检测到未提交的导入，已恢复原设置。',
+    en: 'An uncommitted import was detected and the previous settings were restored.',
+  },
+  'settings.data.commitRecovered': {
+    'zh-CN': '检测到已提交的导入，恢复收尾已完成。',
+    en: 'A committed import was detected and recovery cleanup completed.',
+  },
+
+  'settings.mcp.importJson': { 'zh-CN': '粘贴 JSON 导入', en: 'Import pasted JSON' },
+  'settings.mcp.importConfig': { 'zh-CN': '导入配置', en: 'Import configuration' },
+  'settings.mcp.compatHint': {
+    'zh-CN':
+      '兼容 Claude Code mcpServers / Cursor 配置片段（识别 url、type 与 headers.Authorization）。',
+    en: 'Accepts Claude Code mcpServers and Cursor snippets, including url, type, and headers.Authorization.',
+  },
+  'settings.mcp.parseAdd': { 'zh-CN': '解析并添加', en: 'Parse and add' },
+  'settings.mcp.emptyTitle': { 'zh-CN': '还没有 MCP 服务器', en: 'No MCP servers yet' },
+  'settings.mcp.emptyHint': {
+    'zh-CN': '粘贴配置片段即可接入远端工具。',
+    en: 'Paste a configuration snippet to connect remote tools.',
+  },
+  'settings.mcp.enable': { 'zh-CN': '启用 {name}', en: 'Enable {name}' },
+  'settings.mcp.reconnect': { 'zh-CN': '重新连接', en: 'Reconnect' },
+  'settings.mcp.test': { 'zh-CN': '连接测试', en: 'Test connection' },
+  'settings.mcp.authorize': { 'zh-CN': '授权', en: 'Authorize' },
+  'settings.mcp.oauthFailed': { 'zh-CN': 'OAuth 授权失败', en: 'OAuth authorization failed' },
+  'settings.mcp.oauthComplete': { 'zh-CN': 'OAuth 授权完成', en: 'OAuth authorization complete' },
+  'settings.mcp.permissionTitle': {
+    'zh-CN': '需要授权额外的 OAuth 站点',
+    en: 'Additional OAuth sites require permission',
+  },
+  'settings.mcp.permissionResource': {
+    'zh-CN': '资源：{resource}',
+    en: 'Resource: {resource}',
+  },
+  'settings.mcp.permissionIssuer': { 'zh-CN': '签发方：{issuer}', en: 'Issuer: {issuer}' },
+  'settings.mcp.permissionPlanChanged': {
+    'zh-CN': 'OAuth 元数据已变化。请重新确认此授权计划。',
+    en: 'OAuth metadata changed. Review this authorization plan again.',
+  },
+  'settings.mcp.permissionPlanExpired': {
+    'zh-CN': '此授权计划已过期。请重新确认后继续。',
+    en: 'This authorization plan expired. Review it again to continue.',
+  },
+  'settings.mcp.permissionContinue': {
+    'zh-CN': '授权以上站点并继续',
+    en: 'Allow these sites and continue',
+  },
+  'settings.mcp.delete': { 'zh-CN': '删除', en: 'Delete' },
+  'settings.mcp.enableTool': { 'zh-CN': '启用 MCP 工具 {name}', en: 'Enable MCP tool {name}' },
+  'settings.mcp.toolsAfterConnect': {
+    'zh-CN': '连接后显示工具清单',
+    en: 'Tools appear after connection',
+  },
+  'settings.mcp.deleteTitle': { 'zh-CN': '删除 {name}？', en: 'Delete {name}?' },
+  'settings.mcp.deleteHint': {
+    'zh-CN': '该服务器提供的工具与 Prompt 将不再可用。',
+    en: 'Tools and prompts from this server will no longer be available.',
+  },
+  'settings.mcp.deleted': { 'zh-CN': '服务器已删除', en: 'Server deleted' },
+  'settings.mcp.added': { 'zh-CN': '已添加 {n} 个服务器', en: 'Added {n} servers' },
+  'settings.mcp.permissionDenied': {
+    'zh-CN': '未授予 {url} 的访问权限',
+    en: 'Access to {url} was not granted',
+  },
+  'settings.mcp.status.disconnected': { 'zh-CN': '未连接', en: 'Disconnected' },
+  'settings.mcp.status.connecting': { 'zh-CN': '连接中', en: 'Connecting' },
+  'settings.mcp.status.ready': { 'zh-CN': '已连接', en: 'Connected' },
+  'settings.mcp.status.error': { 'zh-CN': '错误', en: 'Error' },
+  'settings.mcp.auth.none': { 'zh-CN': '无认证', en: 'No authentication' },
+  'settings.mcp.auth.oauth': { 'zh-CN': 'OAuth', en: 'OAuth' },
+  'settings.mcp.auth.bearer': { 'zh-CN': 'Bearer token', en: 'Bearer token' },
+  'settings.mcp.inventory': {
+    'zh-CN': '工具 {tools} · Prompts {prompts} · Resources {resources}',
+    en: 'Tools {tools} · Prompts {prompts} · Resources {resources}',
+  },
+
+  // Attachment, site-instruction, and preset settings
+  'settings.attachments.summary': {
+    'zh-CN': '{count} 条记录 · 本地存储 {size}',
+    en: '{count} records · {size} stored locally',
+  },
+  'settings.attachments.emptyTitle': { 'zh-CN': '没有已存储的附件', en: 'No stored attachments' },
+  'settings.attachments.emptyHint': {
+    'zh-CN': '对话引用的截图、页面摘录和用户上传内容会显示在这里。',
+    en: 'Screenshots, page extracts, and user uploads referenced by chats appear here.',
+  },
+  'settings.attachments.delete': { 'zh-CN': '删除附件', en: 'Delete attachment' },
+  'settings.attachments.deleteTitle': { 'zh-CN': '删除此附件？', en: 'Delete this attachment?' },
+  'settings.attachments.deleteHint': {
+    'zh-CN': '删除文件前，引用它的消息节点会被标记为不可用。',
+    en: 'Referencing message nodes will be marked unavailable before the bytes are removed.',
+  },
+  'settings.attachments.deleted': { 'zh-CN': '附件已删除', en: 'Attachment deleted' },
+  'settings.attachments.nodeRefs': { 'zh-CN': '{count} 个节点引用', en: '{count} node refs' },
+  'settings.attachments.unclassified': { 'zh-CN': '未分类', en: 'Unclassified' },
+  'settings.attachments.unknownSource': { 'zh-CN': '来源未知', en: 'Unknown source' },
+
+  'settings.sites.title': { 'zh-CN': '站点指令', en: 'Site instructions' },
+  'settings.sites.summary': {
+    'zh-CN': '仅当活动标签页匹配主机名时，才把可信指令加入系统提示词。',
+    en: 'Add trusted instructions to the system prompt only when the active tab matches the hostname.',
+  },
+  'settings.sites.new': { 'zh-CN': '新建指令', en: 'New instruction' },
+  'settings.sites.emptyTitle': { 'zh-CN': '没有站点指令', en: 'No site instructions' },
+  'settings.sites.emptyHint': {
+    'zh-CN': '使用精确主机名或 *.example.com 等通配符；不支持 URL 路径。',
+    en: 'Use an exact hostname or a wildcard such as *.example.com. URL paths are intentionally unsupported.',
+  },
+  'settings.sites.saved': { 'zh-CN': '站点指令已保存', en: 'Site instruction saved' },
+  'settings.sites.edit': { 'zh-CN': '编辑', en: 'Edit' },
+  'settings.sites.copyEdit': { 'zh-CN': '复制并编辑', en: 'Copy and edit' },
+  'settings.sites.delete': { 'zh-CN': '删除', en: 'Delete' },
+  'settings.sites.pluginTitle': { 'zh-CN': 'Plugin 站点指令', en: 'Plugin site instructions' },
+  'settings.sites.deleteTitle': {
+    'zh-CN': '删除此站点指令？',
+    en: 'Delete this site instruction?',
+  },
+  'settings.sites.deleteHint': {
+    'zh-CN': '匹配页面将不再包含此指令。',
+    en: 'The instruction will stop being included on matching pages.',
+  },
+  'settings.sites.editTitle': { 'zh-CN': '编辑站点指令', en: 'Edit site instruction' },
+  'settings.sites.createTitle': { 'zh-CN': '创建站点指令', en: 'Create site instruction' },
+  'settings.sites.patternHint': {
+    'zh-CN': '模式按主机名边界匹配，不会匹配任意后缀。',
+    en: 'Patterns match hostname boundaries, never arbitrary suffixes.',
+  },
+  'settings.sites.hostname': { 'zh-CN': '主机名模式', en: 'Hostname pattern' },
+  'settings.sites.hostnameHint': {
+    'zh-CN': '精确主机：example.com · 通配符：*.example.com',
+    en: 'Exact host: example.com · wildcard: *.example.com',
+  },
+  'settings.sites.instruction': { 'zh-CN': '指令', en: 'Instruction' },
+  'settings.sites.save': { 'zh-CN': '保存指令', en: 'Save instruction' },
+
+  'settings.presets.title': { 'zh-CN': '模型预设', en: 'Model presets' },
+  'settings.presets.summary': {
+    'zh-CN': '把模型、提示词、工具和审批策略固定为可审计的 Agent 配置。',
+    en: 'Pin model, prompt, tools, and approval policy into an auditable agent profile.',
+  },
+  'settings.presets.new': { 'zh-CN': '新建预设', en: 'New preset' },
+  'settings.presets.taskModel': { 'zh-CN': '后台任务模型', en: 'Task model' },
+  'settings.presets.taskModelHint': {
+    'zh-CN': '用于标题等低成本后台任务；留空则跟随默认模型。',
+    en: 'Used for titles and other low-cost background tasks. Empty follows the default model.',
+  },
+  'settings.presets.taskModelSet': { 'zh-CN': '后台任务模型：{model}', en: 'Task model: {model}' },
+  'settings.presets.taskModelDefault': {
+    'zh-CN': '后台任务模型跟随默认设置',
+    en: 'Task model follows the default',
+  },
+  'settings.presets.emptyTitle': { 'zh-CN': '还没有模型预设', en: 'No model presets yet' },
+  'settings.presets.emptyHint': {
+    'zh-CN': '创建预设，让新会话拥有一致的模型、参数与能力边界。',
+    en: 'Create one to give new chats a consistent model, parameters, and capability boundary.',
+  },
+  'settings.presets.saved': { 'zh-CN': '预设已保存', en: 'Preset saved' },
+  'settings.presets.edit': { 'zh-CN': '编辑', en: 'Edit' },
+  'settings.presets.delete': { 'zh-CN': '删除', en: 'Delete' },
+  'settings.presets.pluginTitle': { 'zh-CN': 'Plugin 预设', en: 'Plugin presets' },
+  'settings.presets.copyEdit': { 'zh-CN': '复制并编辑', en: 'Copy and edit' },
+  'settings.presets.copySuffix': { 'zh-CN': '{name} 副本', en: '{name} copy' },
+  'settings.presets.deleteTitle': { 'zh-CN': '删除此模型预设？', en: 'Delete this model preset?' },
+  'settings.presets.deleteHint': {
+    'zh-CN': '现有对话记录会保留，但此预设将无法再被选择。',
+    en: 'Existing chat records remain, but this preset can no longer be selected.',
+  },
+  'settings.presets.editTitle': { 'zh-CN': '编辑预设', en: 'Edit preset' },
+  'settings.presets.createTitle': { 'zh-CN': '创建模型预设', en: 'Create model preset' },
+  'settings.presets.formHint': {
+    'zh-CN': '每个字段都会写入最终解析的运行环境。',
+    en: 'Every field is persisted into the resolved run environment.',
+  },
+  'settings.presets.name': { 'zh-CN': '名称', en: 'Name' },
+  'settings.presets.icon': { 'zh-CN': '图标或 Emoji', en: 'Icon or emoji' },
+  'settings.presets.connection': { 'zh-CN': '模型连接', en: 'Connection' },
+  'settings.presets.selectConnection': { 'zh-CN': '选择连接', en: 'Select a connection' },
+  'settings.presets.modelId': { 'zh-CN': '模型 ID', en: 'Model ID' },
+  'settings.presets.systemPrompt': { 'zh-CN': '系统提示词', en: 'System prompt' },
+  'settings.presets.parameters': { 'zh-CN': '生成参数', en: 'Generation parameters' },
+  'settings.presets.maxTokens': { 'zh-CN': '最大输出 token', en: 'Maximum output tokens' },
+  'settings.presets.reasoning': { 'zh-CN': '推理强度', en: 'Reasoning effort' },
+  'settings.presets.reasoning.unset': { 'zh-CN': '未设置', en: 'Not set' },
+  'settings.presets.reasoning.low': { 'zh-CN': '低', en: 'Low' },
+  'settings.presets.reasoning.medium': { 'zh-CN': '中', en: 'Medium' },
+  'settings.presets.reasoning.high': { 'zh-CN': '高', en: 'High' },
+  'settings.presets.stop': { 'zh-CN': '停止序列（每行一个）', en: 'Stop sequences, one per line' },
+  'settings.presets.toolLevels': { 'zh-CN': '启用的工具层级', en: 'Enabled tool levels' },
+  'settings.presets.toolLevelsHint': {
+    'zh-CN': 'L0 读取 · L1 页面写入 · L2 调试器 · MCP',
+    en: 'L0 read · L1 page write · L2 debugger · MCP',
+  },
+  'settings.presets.defaultPolicy': { 'zh-CN': '默认权限策略', en: 'Default permission policy' },
+  'settings.presets.skills': { 'zh-CN': '启用的 Skills', en: 'Active Skills' },
+  'settings.presets.noSkills': { 'zh-CN': '没有已启用的 Skill', en: 'No enabled Skills' },
+  'settings.presets.promptVersion': { 'zh-CN': '提示词版本', en: 'Prompt version' },
+  'settings.presets.save': { 'zh-CN': '保存预设', en: 'Save preset' },
+
+  'settings.permissions.toolPlaceholder': {
+    'zh-CN': '工具 / mcp__github__* / category:eval',
+    en: 'Tool / mcp__github__* / category:eval',
+  },
+  'settings.permissions.source.approval_persist': { 'zh-CN': '持久审批', en: 'Saved approval' },
+  'settings.permissions.source.plugin_default': {
+    'zh-CN': 'Plugin 默认规则',
+    en: 'Plugin default',
+  },
   // Permission switch (composer autonomy tiers)
   'perm.switch': { 'zh-CN': '权限模式', en: 'Permission mode' },
-  'perm.plan': { 'zh-CN': '计划模式', en: 'Plan mode' },
-  'perm.planHint': {
-    'zh-CN': 'AI 先制定计划并等待确认，确认后再执行操作',
-    en: 'AI plans first and waits for your approval before acting',
-  },
   'perm.always': { 'zh-CN': '全程询问', en: 'Ask for everything' },
   'perm.alwaysHint': {
     'zh-CN': '每一步都先征求同意，包括读取页面',
@@ -404,6 +1107,8 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
 
   // Message stream
   'stream.backToBottom': { 'zh-CN': '↓ 回到底部', en: '↓ Back to bottom' },
+  'stream.working': { 'zh-CN': '处理中', en: 'Working' },
+  'stream.completed': { 'zh-CN': '已处理', en: 'Processed' },
   'stream.reasoning': { 'zh-CN': '思考过程', en: 'Reasoning' },
   'stream.reasoningLive': { 'zh-CN': '思考中…', en: 'Thinking…' },
   'stream.thoughtFor': { 'zh-CN': '思考了 {s} 秒', en: 'Thought for {s}s' },
@@ -411,23 +1116,53 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   'tool.params': { 'zh-CN': '参数', en: 'Parameters' },
   'tool.result': { 'zh-CN': '结果', en: 'Result' },
   'tool.error': { 'zh-CN': '错误', en: 'Error' },
+  'tool.status.pending': { 'zh-CN': '等待执行', en: 'Pending' },
+  'tool.status.running': { 'zh-CN': '正在执行', en: 'Running' },
+  'tool.status.ok': { 'zh-CN': '执行成功', en: 'Succeeded' },
+  'tool.status.fail': { 'zh-CN': '执行失败', en: 'Failed' },
 };
 
-let currentLang: Lang = detectLang();
+let currentLang: Lang = 'zh-CN';
+const languageListeners = new Set<() => void>();
 
-function detectLang(): Lang {
-  if (typeof navigator !== 'undefined' && navigator.language?.toLowerCase().startsWith('zh'))
-    return 'zh-CN';
-  return typeof navigator !== 'undefined' && navigator.language?.startsWith('en') ? 'en' : 'zh-CN';
+function storedLanguage(value: unknown): Lang {
+  return (value as GlobalSettings | undefined)?.language === 'en' ? 'en' : 'zh-CN';
 }
 
 export function setLang(lang: Lang): void {
+  const changed = currentLang !== lang;
   currentLang = lang;
   if (typeof document !== 'undefined') document.documentElement.lang = lang;
+  if (changed) for (const listener of languageListeners) listener();
 }
 
 export function getLang(): Lang {
   return currentLang;
+}
+
+export function subscribeLang(listener: () => void): () => void {
+  languageListeners.add(listener);
+  return () => languageListeners.delete(listener);
+}
+
+export function useLanguage(): Lang {
+  return useSyncExternalStore(subscribeLang, getLang, getLang);
+}
+
+export async function bootstrapLanguage(): Promise<() => void> {
+  let storageGeneration = 0;
+  const stop = onStorageChange('global_settings', (value) => {
+    storageGeneration += 1;
+    setLang(storedLanguage(value));
+  });
+  const readGeneration = storageGeneration;
+  try {
+    const settings = await SettingsStore.global.get();
+    if (storageGeneration === readGeneration) setLang(storedLanguage(settings));
+  } catch {
+    if (storageGeneration === readGeneration) setLang('zh-CN');
+  }
+  return stop;
 }
 
 export function t(

@@ -5,12 +5,49 @@
  * "being debugged" banner (docs/06 §5).
  */
 
-import { z } from 'zod';
+import { schema } from '../agent/schema';
 import type { AnyAgentTool } from '../agent/tool';
 import type { CdpManager } from './cdp/debugger';
 import type { BrowserToolGateway } from './gateway';
 import type { PanelotDB } from '../db/schema';
 import { currentBrowserTarget } from './browserTools';
+import { ActionDeadline, deadlineForTool } from './action/deadline';
+import type { ActionEvidence } from './action/types';
+import type { ExecuteResult } from './content/executor';
+
+function dispatchedEvidence(effect: string, startedAt: number): ActionEvidence {
+  return {
+    attemptId: crypto.randomUUID(),
+    attempts: [
+      {
+        phase: 'execute',
+        strategy: 'l2',
+        startedAt,
+        durationMs: Date.now() - startedAt,
+        message: `${effect} dispatched; target effect not verified`,
+      },
+    ],
+    effectState: 'dispatched',
+    observedEffects: [],
+    outcome: 'uncertain',
+  };
+}
+
+function capturedTabToolResult(result: ExecuteResult, details: Record<string, unknown> = {}) {
+  const snapshot = result.snapshot ? `\n\n--- 新标签页快照 ---\n${result.snapshot}` : '';
+  return {
+    content: [
+      {
+        type: 'text' as const,
+        text: `[tabId=${result.resultTabId}] ${result.resultText}${snapshot}`,
+      },
+    ],
+    details: {
+      ...details,
+      ...(result.evidence ? { actionEvidence: result.evidence } : {}),
+    },
+  };
+}
 
 export function createL2Tools(
   cdp: CdpManager,
@@ -19,11 +56,12 @@ export function createL2Tools(
   getThreadId: () => string,
 ): AnyAgentTool[] {
   const tabIdParameter = {
-    tabId: z
-      .number()
-      .int()
-      .optional()
-      .describe('Target tab id from tabs_list; omitted = the user-visible web tab'),
+    tabId: schema.optional(
+      schema.number({
+        integer: true,
+        description: 'Target tab id from tabs_list; omitted = the user-visible web tab',
+      }),
+    ),
   };
   const targetTab = (tabId?: number) => gateway.getOperationTab(getThreadId(), tabId);
 
@@ -32,14 +70,20 @@ export function createL2Tools(
       name: 'read_page_deep',
       label: '深度读取页面',
       description:
-        'Read the CDP accessibility tree with deep refs for controls inside cross-origin iframes or closed shadow roots. Use when read_page reports those boundaries; use returned cN_M refs with click_trusted or type_trusted.',
-      parameters: z.object({ ...tabIdParameter }),
+        'Read the CDP accessibility tree with opaque deep refs for controls inside cross-origin iframes or closed shadow roots. Use when read_page reports those boundaries; copy the returned [ref=<deep-ref>] value exactly into click_trusted or type_trusted.',
+      parameters: schema.object({ ...tabIdParameter }),
       level: 'L2',
       effects: 'read',
-      execute: async (_id, params: { tabId?: number }) => {
+      execute: async (_id, params: { tabId?: number }, signal) => {
         const tabId = await targetTab(params.tabId);
+        const deadlineAt = deadlineForTool('read_page_deep', params);
         return {
-          content: [{ type: 'text', text: `[tabId=${tabId}] ${await cdp.getDeepAxTree(tabId)}` }],
+          content: [
+            {
+              type: 'text',
+              text: `[tabId=${tabId}] ${await cdp.getDeepAxTree(tabId, signal, deadlineAt)}`,
+            },
+          ],
         };
       },
     },
@@ -48,93 +92,111 @@ export function createL2Tools(
       label: '截图',
       description:
         'Capture a screenshot (viewport, full page, or an element region). Use when the accessibility snapshot is insufficient — e.g. canvas apps or visual verification. Requires a vision-capable model to interpret.',
-      parameters: z.object({
+      parameters: schema.object({
         ...tabIdParameter,
-        target: z.union([z.literal('viewport'), z.literal('fullpage'), z.string()]).optional(),
-        format: z.enum(['png', 'jpeg']).optional(),
-        annotate: z.boolean().optional(),
+        target: schema.optional(
+          schema.union([schema.literal('viewport'), schema.literal('fullpage'), schema.string()]),
+        ),
+        format: schema.optional(schema.enum(['png', 'jpeg'])),
+        annotate: schema.optional(schema.boolean()),
       }),
       level: 'L2',
       effects: 'read',
       execute: async (
         toolCallId,
         params: { tabId?: number; target?: string; format?: 'png' | 'jpeg'; annotate?: boolean },
+        signal,
       ) => {
         const tabId = await targetTab(params.tabId);
+        const deadlineAt = deadlineForTool('screenshot', params);
         const format = params.format ?? 'png';
-        return cdp.withTab(tabId, async () => {
-          let metricsOverridden = false;
-          let clip:
-            { x: number; y: number; width: number; height: number; scale: number } | undefined;
-          try {
-            let refLegend = '';
-            if (params.annotate) {
-              const annotation = await gateway.callContentTool(
-                getThreadId(),
-                'annotate_refs',
-                {},
-                tabId,
-              );
-              refLegend = annotation.resultText;
-            }
-            if (params.target === 'fullpage') {
-              const { cssContentSize } = await cdp.send<{
-                cssContentSize: { width: number; height: number };
-              }>('Page.getLayoutMetrics');
-              await cdp.send('Emulation.setDeviceMetricsOverride', {
-                width: Math.ceil(cssContentSize.width),
-                height: Math.ceil(cssContentSize.height),
-                deviceScaleFactor: 1,
-                mobile: false,
+        return cdp.withTab(
+          tabId,
+          async () => {
+            let metricsOverridden = false;
+            let clip:
+              { x: number; y: number; width: number; height: number; scale: number } | undefined;
+            try {
+              let refLegend = '';
+              if (params.annotate) {
+                const annotation = await gateway.callContentTool(
+                  getThreadId(),
+                  'annotate_refs',
+                  {},
+                  tabId,
+                  signal,
+                  deadlineAt,
+                );
+                refLegend = annotation.resultText;
+              }
+              if (params.target === 'fullpage') {
+                const { cssContentSize } = await cdp.send<{
+                  cssContentSize: { width: number; height: number };
+                }>('Page.getLayoutMetrics');
+                await cdp.send('Emulation.setDeviceMetricsOverride', {
+                  width: Math.ceil(cssContentSize.width),
+                  height: Math.ceil(cssContentSize.height),
+                  deviceScaleFactor: 1,
+                  mobile: false,
+                });
+                metricsOverridden = true;
+              } else if (params.target && params.target !== 'viewport') {
+                const rect = await gateway.getElementRect(
+                  getThreadId(),
+                  params.target,
+                  tabId,
+                  'document',
+                  signal,
+                  deadlineAt,
+                );
+                if (rect.width <= 0 || rect.height <= 0)
+                  throw new Error(`Element ${params.target} is not visible`);
+                clip = { ...rect, scale: 1 };
+              }
+              const { data } = await cdp.send<{ data: string }>('Page.captureScreenshot', {
+                format,
+                captureBeyondViewport: params.target === 'fullpage' || clip !== undefined,
+                ...(clip ? { clip } : {}),
               });
-              metricsOverridden = true;
-            } else if (params.target && params.target !== 'viewport') {
-              const rect = await gateway.getElementRect(getThreadId(), params.target, tabId);
-              if (rect.width <= 0 || rect.height <= 0)
-                throw new Error(`Element ${params.target} is not visible`);
-              clip = { ...rect, scale: 1 };
-            }
-            const { data } = await cdp.send<{ data: string }>('Page.captureScreenshot', {
-              format,
-              captureBeyondViewport: params.target === 'fullpage' || clip !== undefined,
-              ...(clip ? { clip } : {}),
-            });
 
-            // Store as an attachment; reference by id in details, embed image for the model.
-            const threadId = getThreadId();
-            const bytes = base64ToBlob(data, `image/${format}`);
-            const attachmentId = crypto.randomUUID();
-            await db.attachments.add({
-              id: attachmentId,
-              threadId,
-              createdAt: Date.now(),
-              kind: 'screenshot',
-              mime: `image/${format}`,
-              bytes,
-              trust: 'untrusted',
-              provenance: 'page',
-            });
-            return {
-              content: [
-                { type: 'text', text: `[tabId=${tabId}] 已截图（见图）` },
-                { type: 'image', mime: `image/${format}`, data },
-              ],
-              details: {
-                screenshotAttachmentId: attachmentId,
-                ...(refLegend ? { refLegend } : {}),
-              },
-            };
-          } finally {
-            if (params.annotate) {
-              await gateway
-                .callContentTool(getThreadId(), 'clear_annotations', {}, tabId)
-                .catch(() => {});
+              // Store as an attachment; reference by id in details, embed image for the model.
+              const threadId = getThreadId();
+              const bytes = base64ToBlob(data, `image/${format}`);
+              const attachmentId = crypto.randomUUID();
+              await db.attachments.add({
+                id: attachmentId,
+                threadId,
+                createdAt: Date.now(),
+                kind: 'screenshot',
+                mime: `image/${format}`,
+                bytes,
+                trust: 'untrusted',
+                provenance: 'page',
+              });
+              return {
+                content: [
+                  { type: 'text', text: `[tabId=${tabId}] 已截图（见图）` },
+                  { type: 'image', mime: `image/${format}`, data },
+                ],
+                details: {
+                  screenshotAttachmentId: attachmentId,
+                  ...(refLegend ? { refLegend } : {}),
+                },
+              };
+            } finally {
+              if (params.annotate) {
+                await gateway
+                  .callContentTool(getThreadId(), 'clear_annotations', {}, tabId)
+                  .catch(() => {});
+              }
+              if (metricsOverridden) {
+                await cdp.send('Emulation.clearDeviceMetricsOverride').catch(() => {});
+              }
             }
-            if (metricsOverridden) {
-              await cdp.send('Emulation.clearDeviceMetricsOverride').catch(() => {});
-            }
-          }
-        });
+          },
+          signal,
+          deadlineAt,
+        );
       },
     },
     {
@@ -142,24 +204,56 @@ export function createL2Tools(
       label: '坐标点击',
       description:
         'Click at pixel coordinates (vision coordinate mode). Use only when no ref is available (canvas). Coordinates are CSS pixels relative to the viewport.',
-      parameters: z.object({ ...tabIdParameter, x: z.number(), y: z.number() }),
+      parameters: schema.object({
+        ...tabIdParameter,
+        x: schema.number(),
+        y: schema.number(),
+      }),
       level: 'L2',
       effects: 'write',
-      execute: async (_id, params: { tabId?: number; x: number; y: number }) => {
+      execute: async (_id, params: { tabId?: number; x: number; y: number }, signal) => {
         const tabId = await targetTab(params.tabId);
-        // CDP mouse events are isTrusted — suppress the manual-op watcher.
-        gateway.markAgentInput(tabId);
-        gateway.markDriven(getThreadId(), tabId);
-        return cdp.withTab(tabId, async () => {
-          const base = { x: params.x, y: params.y, button: 'left' as const, clickCount: 1 };
-          await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...base });
-          await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...base });
-          return {
-            content: [
-              { type: 'text', text: `[tabId=${tabId}] 已在 (${params.x}, ${params.y}) 点击` },
-            ],
-          };
-        });
+        const deadlineAt = deadlineForTool('click_xy', params);
+        const startedAt = Date.now();
+        const captured = await gateway.runWithNewTabCapture(
+          getThreadId(),
+          tabId,
+          () =>
+            cdp.withTab(
+              tabId,
+              async () => {
+                new ActionDeadline(Number.POSITIVE_INFINITY, signal, deadlineAt).throwIfDone();
+                // CDP mouse events are isTrusted — suppress the manual-op watcher.
+                gateway.markAgentInput(tabId);
+                gateway.markDriven(getThreadId(), tabId);
+                const base = {
+                  x: params.x,
+                  y: params.y,
+                  button: 'left' as const,
+                  clickCount: 1,
+                };
+                await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...base });
+                await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...base });
+                return {
+                  content: [
+                    {
+                      type: 'text' as const,
+                      text: `[tabId=${tabId}] 已在 (${params.x}, ${params.y}) 点击`,
+                    },
+                  ],
+                  details: { actionEvidence: dispatchedEvidence('trusted_click', startedAt) },
+                };
+              },
+              signal,
+              deadlineAt,
+              true,
+            ),
+          signal,
+          deadlineAt,
+        );
+        return captured.createdTabResult
+          ? capturedTabToolResult(captured.createdTabResult)
+          : captured.value;
       },
     },
     {
@@ -167,38 +261,85 @@ export function createL2Tools(
       label: '原生点击元素',
       description:
         'Escalation path for a ref-based click that failed because synthetic input was ineffective. Uses trusted CDP mouse input; call only with a ref from the latest snapshot after the ordinary click reports l1_not_effective.',
-      parameters: z.object({
+      parameters: schema.object({
         ...tabIdParameter,
-        element: z.string(),
-        ref: z.string(),
+        element: schema.string(),
+        ref: schema.string(),
       }),
       level: 'L2',
       effects: 'write',
-      execute: async (_id, params: { tabId?: number; element: string; ref: string }) => {
+      execute: async (_id, params: { tabId?: number; element: string; ref: string }, signal) => {
         const tabId = await targetTab(params.tabId);
-        gateway.markAgentInput(tabId);
-        gateway.markDriven(getThreadId(), tabId);
-        const { settled } = params.ref.startsWith('c')
-          ? await cdp.clickDeepRef(tabId, params.ref)
-          : await gateway
-              .getElementRect(getThreadId(), params.ref, tabId, 'viewport')
-              .then((rect) => {
-                if (rect.width <= 0 || rect.height <= 0)
-                  throw new Error('目标元素当前没有可点击区域。');
-                return cdp.withNetworkSettled(tabId, async () => {
-                  const base = {
-                    x: rect.x + rect.width / 2,
-                    y: rect.y + rect.height / 2,
-                    button: 'left' as const,
-                    clickCount: 1,
-                  };
-                  await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...base });
-                  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...base });
-                });
-              });
+        const deadlineAt = deadlineForTool('click_trusted', params);
+        const startedAt = Date.now();
+        new ActionDeadline(Number.POSITIVE_INFINITY, signal, deadlineAt).throwIfDone();
+        const markDispatch = () => {
+          gateway.markAgentInput(tabId);
+          gateway.markDriven(getThreadId(), tabId);
+        };
+        let trustedClick: () => Promise<{ settled: boolean }>;
+        if (params.ref.startsWith('c')) {
+          trustedClick = () =>
+            cdp.clickDeepRef(tabId, params.ref, signal, deadlineAt, markDispatch);
+        } else {
+          const rect = await gateway.getElementRect(
+            getThreadId(),
+            params.ref,
+            tabId,
+            'viewport',
+            signal,
+            deadlineAt,
+          );
+          if (rect.width <= 0 || rect.height <= 0) throw new Error('目标元素当前没有可点击区域。');
+          await gateway.callContentTool(
+            getThreadId(),
+            'validate_ref',
+            { ref: params.ref },
+            tabId,
+            signal,
+            deadlineAt,
+          );
+          trustedClick = () =>
+            cdp.withNetworkSettled(
+              tabId,
+              async () => {
+                markDispatch();
+                const base = {
+                  x: rect.x + rect.width / 2,
+                  y: rect.y + rect.height / 2,
+                  button: 'left' as const,
+                  clickCount: 1,
+                };
+                await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...base });
+                await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...base });
+              },
+              500,
+              5000,
+              signal,
+              deadlineAt,
+            );
+        }
+        const captured = await gateway.runWithNewTabCapture(
+          getThreadId(),
+          tabId,
+          trustedClick,
+          signal,
+          deadlineAt,
+        );
+        const { settled } = captured.value;
+        if (captured.createdTabResult) {
+          return capturedTabToolResult(captured.createdTabResult, { networkSettled: settled });
+        }
         const snapshot = params.ref.startsWith('c')
-          ? { resultText: await cdp.getDeepAxTree(tabId) }
-          : await gateway.callContentTool(getThreadId(), 'read_page', { maxTokens: 1500 }, tabId);
+          ? { resultText: await cdp.getDeepAxTree(tabId, signal, deadlineAt) }
+          : await gateway.callContentTool(
+              getThreadId(),
+              'read_page',
+              { maxTokens: 1500 },
+              tabId,
+              signal,
+              deadlineAt,
+            );
         return {
           content: [
             {
@@ -207,8 +348,7 @@ export function createL2Tools(
             },
           ],
           details: {
-            strategy: 'l2',
-            observedEffects: ['trusted_click'],
+            actionEvidence: dispatchedEvidence('trusted_click', startedAt),
             networkSettled: settled,
           },
         };
@@ -219,45 +359,78 @@ export function createL2Tools(
       label: '原生输入文本',
       description:
         'Escalation path for a field that rejected ordinary synthetic input. Focuses the latest ref and inserts text through CDP; use only after type reports l1_not_effective.',
-      parameters: z.object({
+      parameters: schema.object({
         ...tabIdParameter,
-        element: z.string(),
-        ref: z.string(),
-        text: z.string(),
+        element: schema.string(),
+        ref: schema.string(),
+        text: schema.string(),
       }),
       level: 'L2',
       effects: 'write',
       execute: async (
         _id,
         params: { tabId?: number; element: string; ref: string; text: string },
+        signal,
       ) => {
         const tabId = await targetTab(params.tabId);
-        gateway.markAgentInput(tabId);
-        gateway.markDriven(getThreadId(), tabId);
+        const deadlineAt = deadlineForTool('type_trusted', params);
+        const startedAt = Date.now();
+        new ActionDeadline(Number.POSITIVE_INFINITY, signal, deadlineAt).throwIfDone();
+        const markDispatch = () => {
+          gateway.markAgentInput(tabId);
+          gateway.markDriven(getThreadId(), tabId);
+        };
         const { settled } = params.ref.startsWith('c')
-          ? await cdp.typeDeepRef(tabId, params.ref, params.text)
-          : await gateway
-              .callContentTool(getThreadId(), 'focus', { ref: params.ref }, tabId)
-              .then(() =>
-                cdp.withNetworkSettled(tabId, async () => {
-                  await cdp.send('Input.dispatchKeyEvent', {
-                    type: 'keyDown',
-                    key: 'a',
-                    code: 'KeyA',
-                    modifiers: 2,
-                  });
-                  await cdp.send('Input.dispatchKeyEvent', {
-                    type: 'keyUp',
-                    key: 'a',
-                    code: 'KeyA',
-                    modifiers: 2,
-                  });
-                  await cdp.send('Input.insertText', { text: params.text });
-                }),
-              );
+          ? await cdp.typeDeepRef(tabId, params.ref, params.text, signal, deadlineAt, markDispatch)
+          : await cdp.withNetworkSettled(
+              tabId,
+              async () => {
+                await gateway.callContentTool(
+                  getThreadId(),
+                  'focus',
+                  { ref: params.ref },
+                  tabId,
+                  signal,
+                  deadlineAt,
+                );
+                await gateway.callContentTool(
+                  getThreadId(),
+                  'validate_ref',
+                  { ref: params.ref },
+                  tabId,
+                  signal,
+                  deadlineAt,
+                );
+                markDispatch();
+                await cdp.send('Input.dispatchKeyEvent', {
+                  type: 'keyDown',
+                  key: 'a',
+                  code: 'KeyA',
+                  modifiers: 2,
+                });
+                await cdp.send('Input.dispatchKeyEvent', {
+                  type: 'keyUp',
+                  key: 'a',
+                  code: 'KeyA',
+                  modifiers: 2,
+                });
+                await cdp.send('Input.insertText', { text: params.text });
+              },
+              500,
+              5000,
+              signal,
+              deadlineAt,
+            );
         const snapshot = params.ref.startsWith('c')
-          ? { resultText: await cdp.getDeepAxTree(tabId) }
-          : await gateway.callContentTool(getThreadId(), 'read_page', { maxTokens: 1500 }, tabId);
+          ? { resultText: await cdp.getDeepAxTree(tabId, signal, deadlineAt) }
+          : await gateway.callContentTool(
+              getThreadId(),
+              'read_page',
+              { maxTokens: 1500 },
+              tabId,
+              signal,
+              deadlineAt,
+            );
         return {
           content: [
             {
@@ -266,8 +439,7 @@ export function createL2Tools(
             },
           ],
           details: {
-            strategy: 'l2',
-            observedEffects: ['trusted_input'],
+            actionEvidence: dispatchedEvidence('trusted_input', startedAt),
             networkSettled: settled,
           },
         };
@@ -278,10 +450,10 @@ export function createL2Tools(
       label: '拖拽',
       description:
         'Drag from one point to another (vision coordinate mode) using trusted mouse events.',
-      parameters: z.object({
+      parameters: schema.object({
         ...tabIdParameter,
-        from: z.object({ x: z.number(), y: z.number() }),
-        to: z.object({ x: z.number(), y: z.number() }),
+        from: schema.object({ x: schema.number(), y: schema.number() }),
+        to: schema.object({ x: schema.number(), y: schema.number() }),
       }),
       level: 'L2',
       effects: 'write',
@@ -292,37 +464,48 @@ export function createL2Tools(
           from: { x: number; y: number };
           to: { x: number; y: number };
         },
+        signal,
       ) => {
         const tabId = await targetTab(params.tabId);
-        gateway.markAgentInput(tabId);
-        gateway.markDriven(getThreadId(), tabId);
-        return cdp.withTab(tabId, async () => {
-          await cdp.send('Input.dispatchMouseEvent', {
-            type: 'mousePressed',
-            ...params.from,
-            button: 'left',
-            clickCount: 1,
-          });
-          await cdp.send('Input.dispatchMouseEvent', {
-            type: 'mouseMoved',
-            ...params.to,
-            button: 'left',
-          });
-          await cdp.send('Input.dispatchMouseEvent', {
-            type: 'mouseReleased',
-            ...params.to,
-            button: 'left',
-            clickCount: 1,
-          });
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `[tabId=${tabId}] 已从 (${params.from.x},${params.from.y}) 拖到 (${params.to.x},${params.to.y})`,
-              },
-            ],
-          };
-        });
+        const deadlineAt = deadlineForTool('drag', params);
+        const startedAt = Date.now();
+        return cdp.withTab(
+          tabId,
+          async () => {
+            new ActionDeadline(Number.POSITIVE_INFINITY, signal, deadlineAt).throwIfDone();
+            gateway.markAgentInput(tabId);
+            gateway.markDriven(getThreadId(), tabId);
+            await cdp.send('Input.dispatchMouseEvent', {
+              type: 'mousePressed',
+              ...params.from,
+              button: 'left',
+              clickCount: 1,
+            });
+            await cdp.send('Input.dispatchMouseEvent', {
+              type: 'mouseMoved',
+              ...params.to,
+              button: 'left',
+            });
+            await cdp.send('Input.dispatchMouseEvent', {
+              type: 'mouseReleased',
+              ...params.to,
+              button: 'left',
+              clickCount: 1,
+            });
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `[tabId=${tabId}] 已从 (${params.from.x},${params.from.y}) 拖到 (${params.to.x},${params.to.y})`,
+                },
+              ],
+              details: { actionEvidence: dispatchedEvidence('trusted_drag', startedAt) },
+            };
+          },
+          signal,
+          deadlineAt,
+          true,
+        );
       },
     },
     {
@@ -330,18 +513,21 @@ export function createL2Tools(
       label: '上传文件',
       description:
         'Set a file on a file input (element+ref from the latest snapshot) from a user-provided attachment id. Only attachments the user explicitly provided can be uploaded (≤8MB).',
-      parameters: z.object({
+      parameters: schema.object({
         ...tabIdParameter,
-        element: z.string(),
-        ref: z.string(),
-        attachmentId: z.string(),
+        element: schema.string(),
+        ref: schema.string(),
+        attachmentId: schema.string(),
       }),
       level: 'L2',
       effects: 'write',
       execute: async (
         _id,
         params: { tabId?: number; element: string; ref: string; attachmentId: string },
+        signal,
       ) => {
+        const deadlineAt = deadlineForTool('upload_file', params);
+        new ActionDeadline(Number.POSITIVE_INFINITY, signal, deadlineAt).throwIfDone();
         const threadId = getThreadId();
         const attachment = await db.attachments.get(params.attachmentId);
         if (!attachment)
@@ -375,6 +561,8 @@ export function createL2Tools(
             base64,
           },
           tabId,
+          signal,
+          deadlineAt,
         );
         return {
           content: [{ type: 'text' as const, text: `[tabId=${tabId}] ${result.resultText}` }],

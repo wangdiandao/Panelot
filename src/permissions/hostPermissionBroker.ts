@@ -23,6 +23,11 @@ export class HostPermissionBroker {
     };
   }
 
+  async inspectAll(values: readonly string[]): Promise<HostPermissionStatus[]> {
+    const origins = [...new Set(values.map(normalizeOrigin))];
+    return Promise.all(origins.map((origin) => this.inspect(origin)));
+  }
+
   /** Must be called directly from a user gesture handler. */
   request(value: string): Promise<boolean> {
     return this.requestAll([value]);

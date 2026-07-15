@@ -3,17 +3,17 @@ import { diffSnapshotYaml } from '../../src/tools/snapshot/diff';
 
 describe('snapshot diff', () => {
   it('does not treat ref generation changes as structural changes', () => {
-    const before = '# Page Snapshot (s1)\nURL: x\nTitle: x\n\n- button "Save" [ref=s1_1]';
-    const after = '# Page Snapshot (s2)\nURL: x\nTitle: x\n\n- button "Save" [ref=s2_1]';
+    const before = '# Page Snapshot (sdoc_1)\nURL: x\nTitle: x\n\n- button "Save" [ref=sdoc_1_1]';
+    const after = '# Page Snapshot (sdoc_2)\nURL: x\nTitle: x\n\n- button "Save" [ref=sdoc_2_1]';
     const result = diffSnapshotYaml(before, after);
     expect(result.changed).toBe(false);
-    expect(result.text).toContain('[ref=s2_1]');
-    expect(result.text).not.toContain('[ref=s1_1]');
+    expect(result.text).toContain('[ref=sdoc_2_1]');
+    expect(result.text).not.toContain('[ref=sdoc_1_1]');
   });
 
   it('reports additions and removals while returning all current refs', () => {
-    const before = '# Page Snapshot (s1)\nURL: x\nTitle: x\n\n- button "Cancel" [ref=s1_1]';
-    const after = '# Page Snapshot (s2)\nURL: x\nTitle: x\n\n- button "Delete" [ref=s2_1]';
+    const before = '# Page Snapshot (sdoc_1)\nURL: x\nTitle: x\n\n- button "Cancel" [ref=sdoc_1_1]';
+    const after = '# Page Snapshot (sdoc_2)\nURL: x\nTitle: x\n\n- button "Delete" [ref=sdoc_2_1]';
     const result = diffSnapshotYaml(before, after);
     expect(result.changed).toBe(true);
     expect(result.text).toContain('Delete');

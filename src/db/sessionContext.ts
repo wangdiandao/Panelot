@@ -69,6 +69,10 @@ function contextHeader(ctx: import('../messaging/protocol').ContextBlock): strin
   const fields = [`kind=${ctx.kind}`, `label=${JSON.stringify(ctx.label)}`];
   if (ctx.sourceRef) fields.push(`source=${JSON.stringify(ctx.sourceRef)}`);
   if (ctx.origin) fields.push(`origin=${JSON.stringify(ctx.origin)}`);
+  if (ctx.tab) {
+    fields.push(`tabId=${ctx.tab.tabId}`);
+    fields.push(`tabUrl=${JSON.stringify(ctx.tab.url)}`);
+  }
   return `[Panelot context: ${fields.join(' ')}]`;
 }
 
@@ -90,14 +94,19 @@ export async function buildSessionContext(
   }
 
   const messages: UnifiedMessage[] = [];
+  const toolNames = new Map<string, string>();
   for (const node of path) {
-    appendNodeAsMessage(messages, node);
+    appendNodeAsMessage(messages, toolNames, node);
   }
 
   return { messages, turnContext, path };
 }
 
-function appendNodeAsMessage(messages: UnifiedMessage[], node: ThreadNode): void {
+function appendNodeAsMessage(
+  messages: UnifiedMessage[],
+  toolNames: Map<string, string>,
+  node: ThreadNode,
+): void {
   switch (node.type) {
     case 'user_message': {
       const p = node.payload as UserMessagePayload;
@@ -116,15 +125,19 @@ function appendNodeAsMessage(messages: UnifiedMessage[], node: ThreadNode): void
       const prev = messages[messages.length - 1];
       const call: UnifiedToolCall = { id: p.itemId, name: p.toolName, params: p.params };
       if (prev && prev.role === 'assistant') {
+        if (!prev.toolCalls?.some((existing) => existing.id === p.itemId)) {
+          toolNames.set(p.itemId, p.toolName);
+        }
         (prev.toolCalls ??= []).push(call);
       } else {
+        toolNames.set(p.itemId, p.toolName);
         messages.push({ role: 'assistant', content: [], toolCalls: [call] });
       }
       break;
     }
     case 'tool_result': {
       const p = node.payload as ToolResultPayload;
-      const toolName = findToolName(messages, p.itemId) ?? 'tool';
+      const toolName = toolNames.get(p.itemId) ?? 'tool';
       const mustFence =
         p.trust === 'untrusted' ||
         p.provenance === 'page' ||
@@ -158,14 +171,4 @@ function fenceBlocks(blocks: ContentBlock[], origin: string, source: string): Co
       ? { type: 'text', text: fenceUntrusted(block.text, origin, source) }
       : block,
   );
-}
-
-function findToolName(messages: UnifiedMessage[], toolCallId: string): string | undefined {
-  for (let index = messages.length - 1; index >= 0; index--) {
-    const message = messages[index]!;
-    if (message.role !== 'assistant') continue;
-    const call = message.toolCalls?.find((candidate) => candidate.id === toolCallId);
-    if (call) return call.name;
-  }
-  return undefined;
 }

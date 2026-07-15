@@ -2,6 +2,7 @@ import type { PanelotDB } from '../db/schema';
 import type {
   PendingToolExecution,
   ResolvedRunEnvironment,
+  RunEnvironmentSnapshot,
   RunRecord,
   RunState,
   UserMessagePayload,
@@ -9,6 +10,7 @@ import type {
 import type { TurnOverrides, Usage, UserInput } from '../messaging/protocol';
 import { ThreadTree, type AppendNodeInput } from '../db/tree';
 import { assertRunTransition, recoverInterruptedRun } from './runState';
+import { isRunEnvironmentSnapshot, resealRunEnvironmentSnapshot } from './runEnvironmentSnapshot';
 
 interface RunRepositoryOptions {
   now?: () => number;
@@ -23,7 +25,7 @@ export interface EnqueueRunInput {
 }
 
 export interface RunTransitionPatch {
-  environment?: ResolvedRunEnvironment;
+  environment?: ResolvedRunEnvironment | RunEnvironmentSnapshot;
   stepCursor?: number;
   pendingTool?: PendingToolExecution;
   stopReason?: string;
@@ -157,7 +159,12 @@ export class RunRepository {
     return this.db.runs.get(id);
   }
 
-  async prepare(id: string, environment: ResolvedRunEnvironment): Promise<RunRecord> {
+  async prepare(
+    id: string,
+    environment: ResolvedRunEnvironment | RunEnvironmentSnapshot,
+    normalizedInput?: UserInput,
+    overrides?: TurnOverrides,
+  ): Promise<RunRecord> {
     return this.db.transaction('rw', [this.db.runs, this.db.threads], async () => {
       const current = await this.db.runs.get(id);
       if (!current) throw new Error(`Run not found: ${id}`);
@@ -167,6 +174,8 @@ export class RunRepository {
       const updated: RunRecord = {
         ...current,
         environment,
+        input: normalizedInput ? structuredClone(normalizedInput) : current.input,
+        overrides: overrides ? structuredClone(overrides) : current.overrides,
         state: 'preparing',
         revision: current.revision + 1,
         updatedAt: this.now(),
@@ -459,12 +468,18 @@ export class RunRepository {
       const run = await this.db.runs.get(id);
       if (!run?.environment) throw new Error(`Run environment not found: ${id}`);
       if (run.environment.activeSkills.includes(skillId)) return run;
+      const environment = isRunEnvironmentSnapshot(run.environment)
+        ? await resealRunEnvironmentSnapshot({
+            ...run.environment,
+            activeSkills: [...run.environment.activeSkills, skillId],
+          })
+        : {
+            ...run.environment,
+            activeSkills: [...run.environment.activeSkills, skillId],
+          };
       const updated: RunRecord = {
         ...run,
-        environment: {
-          ...run.environment,
-          activeSkills: [...run.environment.activeSkills, skillId],
-        },
+        environment,
         revision: run.revision + 1,
         updatedAt: this.now(),
       };

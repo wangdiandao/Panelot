@@ -19,6 +19,8 @@ export interface PermissionRule {
   createdAt: number;
   /** For approval_persist: which thread produced it (traceability, docs/06 §7). */
   sourceThreadId?: string;
+  /** Stable approval identity used to replay decision side effects without duplication. */
+  sourceApprovalId?: string;
 }
 
 // ---------------------------------------------------------------------------

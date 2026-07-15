@@ -1,13 +1,16 @@
-import { EngineHost } from '../src/engine/host';
+import { allocateEngineStreamEpoch, EngineHost } from '../src/engine/host';
 import { RealEngineCore } from '../src/engine/core';
 import { SettingsProviderResolver } from '../src/engine/providerResolver';
 import { PanelotDB } from '../src/db/schema';
 import { ToolRegistry } from '../src/agent/tool';
 import type { GatekeeperCheck } from '../src/agent/loop';
-import { ENGINE_PORT_NAME, wrapPortConnection } from '../src/messaging/transport';
+import {
+  ENGINE_PORT_NAME,
+  type EngineConnection,
+  wrapBufferedPortConnection,
+} from '../src/messaging/engineConnection';
 import { SettingsStore } from '../src/settings/store';
 import { siteInstructionMatches } from '../src/settings/sitePrompts';
-import { AttachmentRepository } from '../src/data/attachments';
 import { listEnabledPluginSiteInstructions } from '../src/plugins/assets';
 import { BrowserToolGateway } from '../src/tools/gateway';
 import { createL0Tools, createL1Tools } from '../src/tools/browserTools';
@@ -18,45 +21,262 @@ import {
   createDownloadTool,
   createFetchUrlTool,
   createMemoryTools,
-  createTodoTool,
 } from '../src/tools/builtinTools';
 import { GatekeeperService } from '../src/gatekeeper/service';
 import type { AnyAgentTool } from '../src/agent/tool';
 import { SkillRuntime, createLoadSkillTool } from '../src/skills/runtime';
+import type { RunEnvironmentSnapshot } from '../src/db/types';
 import { McpManager } from '../src/mcp/manager';
-import { evictAttachmentsIfNeeded } from '../src/data/quota';
-import Dexie from 'dexie';
+import { handleMcpRuntimeMessage } from '../src/mcp/runtimeMessages';
 import { threadIdFromNotification, threadNotificationId } from '../src/ui/threadNotification';
+import { type DataImportCommitResult, type StorageAreaLike } from '../src/data/maintenanceTypes';
+import {
+  DataImportCoordinator,
+  type DataImportCoordinatorPreview,
+} from '../src/data/maintenanceCoordinator';
+import type {
+  DataImportMaintenanceStatus,
+  DataImportRpcResponse,
+} from '../src/data/maintenanceRpcProtocol';
+import {
+  DATA_IMPORT_RPC_TYPE,
+  isTrustedDataImportSender,
+  parseDataImportRpcRequest,
+} from '../src/data/maintenanceRpcProtocol';
+import {
+  acceptMaintenanceWorkerPort,
+  cleanupOffscreenAttachments,
+  MaintenanceWorkerValidator,
+  sendOffscreenWorkerCommand,
+} from '../src/data/maintenanceWorkerClient';
+import {
+  isTrustedChatSender,
+  parseClearThreadRuntimeStateRequest,
+  THREAD_RUNTIME_STATE_RPC_TYPE,
+  type ClearThreadRuntimeStateResponse,
+} from '../src/messaging/threadRuntimeState';
 
-export default defineBackground(() => {
-  void prepareStorageGeneration().then(startBackground);
-});
+type RuntimeMessageHandler = (
+  message: unknown,
+  sender: chrome.runtime.MessageSender,
+  sendResponse: (response?: unknown) => void,
+) => boolean | undefined;
 
-async function prepareStorageGeneration(): Promise<void> {
-  const key = 'panelot_storage_generation';
-  const current = await chrome.storage.local.get(key);
-  if (current[key] === 'panelot_v1') return;
-  await Dexie.delete('panelot');
-  await chrome.storage.local.clear();
-  await chrome.storage.session.clear();
-  await chrome.storage.local.set({ [key]: 'panelot_v1' });
+interface PendingRuntimeMessage {
+  message: unknown;
+  sender: chrome.runtime.MessageSender;
+  sendResponse: (response?: unknown) => void;
 }
 
-async function startBackground(): Promise<void> {
+interface BackgroundLifecycleHandlers {
+  permissionRemoved(): void;
+  tabRemoved(tabId: number): void;
+  tabReplaced(addedTabId: number, removedTabId: number): void;
+}
+
+export default defineBackground({
+  type: 'module',
+  main() {
+    let enginePortHandler: ((connection: EngineConnection) => void) | undefined;
+    let runtimeReady = false;
+    let initializationFailed = false;
+    let initializationStarted = false;
+    const pendingPorts = new Map<
+      chrome.runtime.Port,
+      { connection: EngineConnection; remove: () => void }
+    >();
+    const messageHandlers: RuntimeMessageHandler[] = [];
+    const pendingMessages: PendingRuntimeMessage[] = [];
+    let lifecycleHandlers: BackgroundLifecycleHandlers | undefined;
+    const pendingLifecycleEvents: Array<(handlers: BackgroundLifecycleHandlers) => void> = [];
+    const dispatchMessage: RuntimeMessageHandler = (message, sender, sendResponse) => {
+      for (const handler of messageHandlers) {
+        if (handler(message, sender, sendResponse)) return true;
+      }
+      return false;
+    };
+    const start = () => {
+      if (initializationStarted || initializationFailed) return;
+      initializationStarted = true;
+      try {
+        const handler = startBackground(
+          (runtimeHandler) => messageHandlers.push(runtimeHandler),
+          prepareStorageGeneration(),
+          (handlers) => {
+            lifecycleHandlers = handlers;
+            for (const event of pendingLifecycleEvents) event(handlers);
+            pendingLifecycleEvents.length = 0;
+          },
+        );
+        enginePortHandler = handler;
+        runtimeReady = true;
+        for (const [port, pending] of pendingPorts) {
+          port.onDisconnect.removeListener(pending.remove);
+          handler(pending.connection);
+        }
+        pendingPorts.clear();
+        for (const pending of pendingMessages) {
+          if (!dispatchMessage(pending.message, pending.sender, pending.sendResponse)) {
+            pending.sendResponse(undefined);
+          }
+        }
+        pendingMessages.length = 0;
+      } catch {
+        initializationFailed = true;
+        runtimeReady = true;
+        for (const port of pendingPorts.keys()) port.disconnect();
+        pendingPorts.clear();
+        for (const pending of pendingMessages) {
+          pending.sendResponse({ ok: false, error: 'Background initialization failed' });
+        }
+        pendingMessages.length = 0;
+      }
+    };
+
+    chrome.runtime.onConnect.addListener((port) => {
+      if (acceptMaintenanceWorkerPort(port)) return;
+      if (port.name !== ENGINE_PORT_NAME) return;
+      if (initializationFailed) {
+        port.disconnect();
+        return;
+      }
+      if (enginePortHandler) {
+        enginePortHandler(wrapBufferedPortConnection(port));
+        return;
+      }
+      const connection = wrapBufferedPortConnection(port);
+      const remove = () => pendingPorts.delete(port);
+      pendingPorts.set(port, { connection, remove });
+      port.onDisconnect.addListener(remove);
+      start();
+    });
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (initializationFailed) {
+        sendResponse({ ok: false, error: 'Background initialization failed' });
+        return true;
+      }
+      if (runtimeReady) return dispatchMessage(message, sender, sendResponse);
+      pendingMessages.push({ message, sender, sendResponse });
+      start();
+      return true;
+    });
+    chrome.runtime.onInstalled.addListener(start);
+    chrome.runtime.onStartup.addListener(start);
+    chrome.permissions.onRemoved.addListener(() => {
+      if (lifecycleHandlers) lifecycleHandlers.permissionRemoved();
+      else pendingLifecycleEvents.push((handlers) => handlers.permissionRemoved());
+      start();
+    });
+    chrome.tabs.onRemoved.addListener((tabId) => {
+      if (lifecycleHandlers) lifecycleHandlers.tabRemoved(tabId);
+      else pendingLifecycleEvents.push((handlers) => handlers.tabRemoved(tabId));
+      start();
+    });
+    chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
+      if (lifecycleHandlers) lifecycleHandlers.tabReplaced(addedTabId, removedTabId);
+      else {
+        pendingLifecycleEvents.push((handlers) => handlers.tabReplaced(addedTabId, removedTabId));
+      }
+      start();
+    });
+  },
+});
+
+const STORAGE_GENERATION_KEY = 'panelot_storage_generation';
+const STORAGE_GENERATION = 'panelot_v1';
+
+async function prepareStorageGeneration(): Promise<boolean> {
+  const current = await storageGet(chrome.storage.local, STORAGE_GENERATION_KEY);
+  if (current[STORAGE_GENERATION_KEY] === STORAGE_GENERATION) return false;
+  await storageClear(chrome.storage.local);
+  await storageClear(chrome.storage.session);
+  return true;
+}
+
+function storageGet(
+  area: chrome.storage.StorageArea,
+  key: string,
+): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    area.get(key, (items) => {
+      const error = chrome.runtime.lastError;
+      if (error) reject(new Error(error.message));
+      else resolve(items);
+    });
+  });
+}
+
+function storageClear(area: chrome.storage.StorageArea): Promise<void> {
+  return new Promise((resolve, reject) => {
+    area.clear(() => {
+      const error = chrome.runtime.lastError;
+      if (error) reject(new Error(error.message));
+      else resolve();
+    });
+  });
+}
+
+function storageSet(
+  area: chrome.storage.StorageArea,
+  items: Record<string, unknown>,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    area.set(items, () => {
+      const error = chrome.runtime.lastError;
+      if (error) reject(new Error(error.message));
+      else resolve();
+    });
+  });
+}
+
+function startBackground(
+  registerRuntimeMessageHandler: (handler: RuntimeMessageHandler) => void,
+  resetDatabase: Promise<boolean>,
+  registerLifecycleHandlers: (handlers: BackgroundLifecycleHandlers) => void,
+): (connection: EngineConnection) => void {
   const db = new PanelotDB();
-  const gateway = new BrowserToolGateway();
+  const storageGenerationReady = resetDatabase.then((shouldReset) =>
+    shouldReset
+      ? db
+          .transaction('rw', db.tables, () => Promise.all(db.tables.map((table) => table.clear())))
+          .then(() =>
+            storageSet(chrome.storage.local, {
+              [STORAGE_GENERATION_KEY]: STORAGE_GENERATION,
+            }),
+          )
+      : undefined,
+  );
+  const sessionStateStorage: StorageAreaLike = {
+    get: async (keys) => {
+      await storageGenerationReady;
+      return chrome.storage.session.get(keys);
+    },
+    set: async (items) => {
+      await storageGenerationReady;
+      await chrome.storage.session.set(items);
+    },
+    remove: async (keys) => {
+      await storageGenerationReady;
+      await chrome.storage.session.remove(keys);
+    },
+  };
+  const maintenance = new DataImportCoordinator(db, {
+    local: chrome.storage.local as StorageAreaLike,
+    session: chrome.storage.session as StorageAreaLike,
+    validator: new MaintenanceWorkerValidator(),
+  });
+  const reconciliationReady = storageGenerationReady.then(() => maintenance.reconcileStartup());
+  const gateway = new BrowserToolGateway(sessionStateStorage, false);
   const cdp = new CdpManager();
   const skills = new SkillRuntime(db);
   const mcp = new McpManager();
   const attentionNotifications = new Map<string, Set<string>>();
-
   const clearThreadNotifications = (threadId: string) => {
     const ids = attentionNotifications.get(threadId);
     if (!ids) return;
     attentionNotifications.delete(threadId);
     for (const id of ids) void chrome.notifications.clear(id);
   };
-
   const notifyThread = (threadId: string, kind: 'approval' | 'recovery', instanceId: string) => {
     const id = threadNotificationId(threadId, kind, instanceId);
     let ids = attentionNotifications.get(threadId);
@@ -88,7 +308,18 @@ async function startBackground(): Promise<void> {
 
   // Two-axis Gatekeeper (docs/06): the tool's level rides along so L2 forces
   // escalation and builtins are treated as origin-less.
-  const gatekeeperService = new GatekeeperService(db, (threadId) => gateway.getTabOrigin(threadId));
+  const gatekeeperService = new GatekeeperService(
+    db,
+    (threadId) => gateway.getTabOrigin(threadId),
+    undefined,
+    sessionStateStorage,
+    false,
+  );
+  registerLifecycleHandlers({
+    permissionRemoved: () => gatekeeperService.handleHostPermissionsRemoved(),
+    tabRemoved: (tabId) => gateway.handleTabRemoved(tabId),
+    tabReplaced: (addedTabId, removedTabId) => gateway.handleTabReplaced(addedTabId, removedTabId),
+  });
   const toolLevels = new Map<string, string>();
   const gatekeeper: GatekeeperCheck = {
     check: (call, threadId) =>
@@ -97,7 +328,7 @@ async function startBackground(): Promise<void> {
 
   // Per-thread tool registry: browser tools bind to the thread's controlled
   // tabs; builtins are shared. Rebuilt per turn (cheap — definitions only).
-  const registryFor = (threadId: string): ToolRegistry => {
+  const registryFor = (threadId: string, snapshot?: RunEnvironmentSnapshot): ToolRegistry => {
     const registry = new ToolRegistry();
     const getThreadId = () => threadId;
     const add = (tool: AnyAgentTool) => {
@@ -107,15 +338,16 @@ async function startBackground(): Promise<void> {
     for (const tool of createL0Tools(gateway, getThreadId)) add(tool);
     for (const tool of createBrowserDataTools()) add(tool);
     for (const tool of createL1Tools(gateway, getThreadId, {
-      axTreeFallback: (tabId) => cdp.getAxTreeText(tabId),
+      axTreeFallback: (tabId, signal, deadlineAt) => cdp.getAxTreeText(tabId, signal, deadlineAt),
       getTabId: (tid) => gateway.getTargetTab(tid),
-      dispatchKey: (tabId, combo) => {
+      dispatchKey: (tabId, combo, signal, deadlineAt) => {
         // CDP keys are isTrusted — indistinguishable from user input in the
         // content script. Mark the window so the agent's own keystroke does
         // not trigger the manual-operation auto-pause.
-        gateway.markAgentInput(tabId);
-        gateway.markDriven(threadId, tabId);
-        return cdp.dispatchKey(tabId, combo);
+        return cdp.dispatchKey(tabId, combo, signal, deadlineAt, () => {
+          gateway.markAgentInput(tabId);
+          gateway.markDriven(threadId, tabId);
+        });
       },
       db, // oversized extract output offloads to the attachments table
     }))
@@ -123,27 +355,42 @@ async function startBackground(): Promise<void> {
     for (const tool of createL2Tools(cdp, gateway, db, getThreadId)) add(tool);
     add(createFetchUrlTool());
     for (const tool of createMemoryTools(db)) add(tool);
-    add(
-      createTodoTool((tid, todos) => {
-        todoStore.set(tid, todos);
-      }, getThreadId),
-    );
     add(createDownloadTool());
-    add(createLoadSkillTool(skills, getThreadId));
+    const skillSource = snapshot
+      ? {
+          getEnabled: async (name: string) => {
+            const captured = snapshot.skillCatalog.find((skill) => skill.name === name);
+            return captured
+              ? {
+                  id: captured.id,
+                  name: captured.name,
+                  raw: captured.body,
+                  frontmatter: {
+                    name: captured.name,
+                    description: captured.description,
+                    panelot: { sites: captured.sites },
+                  },
+                  body: captured.body,
+                  enabled: true,
+                  source: 'user' as const,
+                  createdAt: snapshot.capturedAt,
+                  updatedAt: snapshot.capturedAt,
+                }
+              : null;
+          },
+        }
+      : skills;
+    add(createLoadSkillTool(skillSource, getThreadId));
     // MCP tools (mcp__{server}__{tool}) from connected servers (docs/07 §4).
     for (const tool of mcp.buildTools()) add(tool);
     return registry;
   };
-  const todoStore = new Map<string, unknown>();
-
   const resolver = new SettingsProviderResolver(db);
-  await new AttachmentRepository(db).cleanupIncomplete();
-  const core = new RealEngineCore(db, registryFor, gatekeeper, resolver, async () => {
+  const attachmentCleanupReady = storageGenerationReady.then(cleanupOffscreenAttachments);
+  const core = new RealEngineCore(db, registryFor, gatekeeper, resolver, async (browserContext) => {
     const settings = await SettingsStore.global.get();
-    const [activeTab] = await chrome.tabs
-      .query({ active: true, currentWindow: true })
-      .catch(() => []);
-    const url = activeTab?.url;
+    const submittedTab = browserContext?.defaultTab;
+    const url = submittedTab?.url;
     const [sitePrompts, pluginSitePrompts] = await Promise.all([
       SettingsStore.sitePrompts.get(),
       listEnabledPluginSiteInstructions(db),
@@ -151,8 +398,8 @@ async function startBackground(): Promise<void> {
     return {
       userGlobalPrompt: settings.userGlobalPrompt,
       sitePrompts: url
-        ? [...sitePrompts, ...pluginSitePrompts].filter((sp) =>
-            siteInstructionMatches(sp.pattern, url),
+        ? [...sitePrompts, ...pluginSitePrompts].filter((entry) =>
+            siteInstructionMatches(entry.pattern, url),
           )
         : [],
       skillsIndex: await skills.buildIndex(url),
@@ -160,8 +407,8 @@ async function startBackground(): Promise<void> {
         date: new Date().toISOString().slice(0, 10),
         language: settings.language ?? 'zh-CN',
         activeTab:
-          activeTab?.url && activeTab.title
-            ? { url: activeTab.url, title: activeTab.title }
+          submittedTab?.url && submittedTab.title
+            ? { tabId: submittedTab.tabId, url: submittedTab.url, title: submittedTab.title }
             : undefined,
       },
     };
@@ -171,10 +418,36 @@ async function startBackground(): Promise<void> {
   mcp.onToolsChanged = () => {
     /* per-turn registryFor rebuilds from mcp.buildTools() */
   };
-  void mcp.ensureConnected('startup');
+  const mcpStartupReady = storageGenerationReady.then(() => mcp.ensureConnected('startup'));
   core.onBeforeRun = () => mcp.ensureConnected('use');
-  core.onApprovalDecision = (threadId, tool, origin, decision) =>
-    gatekeeperService.applyDecision(threadId, tool, origin, decision);
+  core.onTurnBrowserContext = (threadId, browserContext) =>
+    gateway.bindTurnTarget(threadId, browserContext?.defaultTab?.tabId);
+  core.onValidateRecoveredTool = async (threadId, pendingTool, _environment) => {
+    await gateway.bindRecoveredTarget(
+      threadId,
+      pendingTool.toolName === 'navigate'
+        ? { ...pendingTool.target, origin: undefined }
+        : pendingTool.target,
+    );
+    const verdict = await gatekeeperService.check(
+      {
+        toolName: pendingTool.toolName,
+        params: pendingTool.params,
+        effects: pendingTool.effect,
+        level: toolLevels.get(pendingTool.toolName),
+        target: pendingTool.target,
+      },
+      threadId,
+    );
+    if (
+      verdict.verdict === 'deny' ||
+      (verdict.verdict === 'ask' && verdict.request.flags.includes('host_permission'))
+    ) {
+      throw new Error('Recovered tool authorization is no longer valid.');
+    }
+  };
+  core.onApprovalDecision = (approvalId, threadId, tool, origin, decision) =>
+    gatekeeperService.applyDecision(approvalId, threadId, tool, origin, decision);
   // Composer permission switch → per-thread gatekeeper config (docs/06 §1).
   core.onPermissionOverride = (threadId, config) =>
     gatekeeperService.setThreadConfig(threadId, config);
@@ -209,7 +482,30 @@ async function startBackground(): Promise<void> {
     }
   });
 
-  const host = new EngineHost(core);
+  const recoveryReady = Promise.all([
+    reconciliationReady,
+    attachmentCleanupReady,
+    mcpStartupReady,
+    gatekeeperService.ready(),
+    gateway.ready(),
+  ])
+    .then(() => core.recover())
+    .catch(() => {
+      throw new Error('Background initialization failed');
+    });
+  const host = new EngineHost(core, recoveryReady, {
+    startupRecoveryTimeoutMs: 20_000,
+    streamEpoch: reconciliationReady.then(() =>
+      allocateEngineStreamEpoch().catch(() => {
+        throw new Error('Background initialization failed');
+      }),
+    ),
+    isAdmissionBlocked: () => maintenance.isAdmissionBlocked(),
+  });
+  maintenance.setRuntimeHooks({
+    activeThreadIds: () => host.activeThreadIds(),
+    waitForAdmissionIdle: () => host.waitForAdmissionIdle(),
+  });
   core.onBroadcast = (ev) => {
     // A call without tabId locks its fallback for one turn so a user tab switch
     // cannot redirect an in-flight sequence. Explicit tabId calls bypass it.
@@ -223,81 +519,74 @@ async function startBackground(): Promise<void> {
     }
     host.broadcast(ev);
   };
-  void core.recover();
-
+  registerRuntimeMessageHandler((message: unknown, sender, sendResponse) => {
+    if ((message as { type?: unknown })?.type !== DATA_IMPORT_RPC_TYPE) return false;
+    void (async () => {
+      const request = parseDataImportRpcRequest(message);
+      if (
+        !request ||
+        !isTrustedDataImportSender(sender, chrome.runtime.id, chrome.runtime.getURL('/'))
+      ) {
+        sendResponse({
+          ok: false,
+          error: '无效或未授权的数据维护请求',
+        } satisfies DataImportRpcResponse);
+        return;
+      }
+      let result:
+        DataImportMaintenanceStatus | DataImportCoordinatorPreview | DataImportCommitResult;
+      if (request.action === 'status') {
+        result = { ...(await maintenance.status()), reconciliation: await reconciliationReady };
+      } else if (request.action === 'preview') {
+        result = await maintenance.preview(request.input, request.operationId);
+      } else if (request.action === 'commit') {
+        result = await maintenance.commit(request);
+      } else {
+        throw new Error('Unsupported data import action');
+      }
+      sendResponse({ ok: true, result } satisfies DataImportRpcResponse);
+    })().catch((error: unknown) =>
+      sendResponse({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      } satisfies DataImportRpcResponse),
+    );
+    return true;
+  });
   // MCP OAuth trigger from the settings page (docs/07 §3).
-  chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
-    const m = msg as { type?: string; id?: string };
-    if (m.type === 'panelot.mcpWorkerUnauthorized' && m.id) {
-      void mcp.reauthorizeWorker(m.id).then((authorization) => sendResponse({ authorization }));
+  registerRuntimeMessageHandler((message: unknown, sender, sendResponse) => {
+    if ((message as { type?: unknown })?.type !== THREAD_RUNTIME_STATE_RPC_TYPE) return false;
+    const request = parseClearThreadRuntimeStateRequest(message);
+    if (!request || !isTrustedChatSender(sender, chrome.runtime.id, chrome.runtime.getURL('/'))) {
+      sendResponse({
+        ok: false,
+        error: 'Invalid or unauthorized thread cleanup request.',
+      } satisfies ClearThreadRuntimeStateResponse);
       return true;
     }
-    if (m.type === 'panelot.mcpOauth' && m.id) {
-      void mcp
-        .runOAuthFlow(m.id)
-        .then(() => mcp.connect(m.id!))
-        .then(() => sendResponse({ ok: true }))
-        .catch((error: unknown) =>
-          sendResponse({
-            ok: false,
-            error: error instanceof Error ? error.message : String(error),
-          }),
-        );
-      return true;
-    }
-    if (m.type === 'panelot.mcpCatalog') {
-      void mcp
-        .ensureConnected('use')
-        .then(() =>
-          sendResponse({
-            ok: true,
-            prompts: mcp.listPromptCommands(),
-            resources: mcp.listResourceReferences(),
-          }),
-        )
-        .catch((error: unknown) =>
-          sendResponse({
-            ok: false,
-            error: error instanceof Error ? error.message : String(error),
-          }),
-        );
-      return true;
-    }
-    if ((m.type === 'panelot.mcpConnect' || m.type === 'panelot.mcpStatus') && m.id) {
-      void (m.type === 'panelot.mcpConnect' ? mcp.connect(m.id) : Promise.resolve())
-        .then(() => sendResponse({ ok: true, description: mcp.describeServer(m.id!) }))
-        .catch((error: unknown) =>
-          sendResponse({
-            ok: false,
-            error: error instanceof Error ? error.message : String(error),
-            description: mcp.describeServer(m.id!),
-          }),
-        );
-      return true;
-    }
-    if (m.type === 'panelot.mcpDisconnect' && m.id) {
-      void mcp
-        .disconnect(m.id)
-        .then(() => sendResponse({ ok: true, description: mcp.describeServer(m.id!) }));
-      return true;
-    }
-    const resource = msg as { type?: string; serverId?: string; uri?: string };
-    if (resource.type === 'panelot.mcpReadResource' && resource.serverId && resource.uri) {
-      void mcp
-        .readResourceContext(resource.serverId, resource.uri)
-        .then((context) => sendResponse({ ok: true, context }))
-        .catch((error: unknown) =>
-          sendResponse({
-            ok: false,
-            error: error instanceof Error ? error.message : String(error),
-          }),
-        );
-      return true;
-    }
-    return false;
+    gateway.clearThread(request.threadId);
+    void Promise.all([gatekeeperService.clearSession(request.threadId), gateway.flushState()])
+      .then(() => {
+        clearThreadNotifications(request.threadId);
+        sendResponse({ ok: true } satisfies ClearThreadRuntimeStateResponse);
+      })
+      .catch((error: unknown) =>
+        sendResponse({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        } satisfies ClearThreadRuntimeStateResponse),
+      );
+    return true;
+  });
+  registerRuntimeMessageHandler((msg: unknown, _sender, sendResponse) => {
+    const type = (msg as { type?: unknown })?.type;
+    if (typeof type !== 'string' || !type.startsWith('panelot.mcp')) return false;
+    handleMcpRuntimeMessage(mcp, msg, sendResponse);
+    return true;
   });
 
-  // Touched-tab audit trail changes → broadcast to the task panel (docs/09 §3.1).
+  // Touched-tab audit state is broadcast so UI clients can stay consistent
+  // across service-worker restarts and thread switches.
   gateway.onTabsChanged = (threadId) => {
     void (async () => {
       const tabs = await Promise.all(
@@ -313,14 +602,23 @@ async function startBackground(): Promise<void> {
       core.onBroadcast({ type: 'tabs.updated', threadId, tabs: tabs.filter((t) => t !== null) });
     })();
   };
+  void gateway
+    .ready()
+    .then(() => {
+      for (const threadId of gateway.touchedThreadIds()) gateway.onTabsChanged(threadId);
+    })
+    .catch(() => {});
 
   // Manual operation → pause, but ONLY when a real human-vs-agent conflict
-  // exists (docs/05 §5): the thread has a turn running AND the agent has
-  // WRITTEN to that tab this turn. Read-only turns (Q&A about the user's own
-  // page) never pause — the user scrolling their own page is not a conflict.
+  // exists (docs/05 §5): the agent has written to that tab this turn, or a
+  // recovered approval is waiting to write to that exact tab. Read-only turns
+  // never pause — the user scrolling their own page is not a conflict.
   gateway.onManualOperation = (tabId) => {
     for (const threadId of core.activeThreadIds()) {
-      if (gateway.droveThisTurn(threadId, tabId)) {
+      if (
+        gateway.droveThisTurn(threadId, tabId) ||
+        core.recoveredApprovalTargetsTab(threadId, tabId)
+      ) {
         void core.pauseThread(
           threadId,
           '检测到你在页面上手动操作，任务已自动暂停。发送消息可继续。',
@@ -328,11 +626,6 @@ async function startBackground(): Promise<void> {
       }
     }
   };
-
-  chrome.runtime.onConnect.addListener((port) => {
-    if (port.name !== ENGINE_PORT_NAME) return;
-    host.onConnection(wrapPortConnection(port));
-  });
 
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {
     /* older Chrome */
@@ -353,7 +646,11 @@ async function startBackground(): Promise<void> {
     if (alarm.name === 'panelot-quota') {
       // LRU-evict over-budget attachments, never touching a live thread (docs/02 §6).
       const active = core.activeThreadIds()[0];
-      void evictAttachmentsIfNeeded(db, active);
+      void sendOffscreenWorkerCommand({
+        type: 'panelot.offscreen.attachments.evict',
+        ...(active ? { activeThreadId: active } : {}),
+      }).catch(() => {});
     }
   });
+  return (connection) => host.onConnection(connection);
 }

@@ -13,6 +13,7 @@
 
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from 'react';
 import { AppWindow, AtSign, Braces, Camera, FileText, Slash, TextCursor } from 'lucide-react';
+import { t } from '../i18n';
 import { Command, CommandEmpty, CommandGroup, CommandItem, CommandList } from './ui/command';
 
 // ---------------------------------------------------------------------------
@@ -155,7 +156,7 @@ export const TriggerMenu = forwardRef<TriggerMenuHandle, Props>(function Trigger
     <div className="absolute bottom-full left-0 right-0 z-40 mb-2 overflow-hidden rounded-xl border border-border bg-popover shadow-pop">
       <Command shouldFilter={false} value={selected} onValueChange={setSelected}>
         <CommandList className="max-h-56">
-          <CommandEmpty>无匹配项</CommandEmpty>
+          <CommandEmpty>{t('palette.noResults')}</CommandEmpty>
           {[...groups.entries()].map(([group, groupItems]) => (
             <CommandGroup key={group} heading={group}>
               {groupItems.map((item) => {

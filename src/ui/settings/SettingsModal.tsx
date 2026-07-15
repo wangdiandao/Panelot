@@ -7,6 +7,7 @@
 
 import { Dialog, DialogContent, DialogTitle } from '../components/ui/dialog';
 import { SettingsPanel, type SettingsSectionId } from './SettingsPanel';
+import { t } from '../i18n';
 
 interface Props {
   open: boolean;
@@ -21,7 +22,7 @@ export function SettingsModal({ open, onClose, initialSection }: Props) {
         aria-describedby={undefined}
         className="block h-[min(720px,92vh)] w-[min(940px,94vw)] max-w-none gap-0 overflow-hidden rounded-2xl p-0 shadow-pop sm:max-w-none"
       >
-        <DialogTitle className="sr-only">设置</DialogTitle>
+        <DialogTitle className="sr-only">{t('settings.title')}</DialogTitle>
         <SettingsPanel initialSection={initialSection} />
       </DialogContent>
     </Dialog>

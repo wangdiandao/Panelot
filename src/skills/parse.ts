@@ -4,41 +4,37 @@
  * (passthrough) so Claude Code skills import without loss.
  */
 
-import { z } from 'zod';
+import { schema, type Infer } from '../agent/schema';
 import { CORE_SCHEMA, load } from 'js-yaml';
 
-export const VariableDef = z.object({
-  key: z.string(),
-  label: z.string(),
-  type: z.enum(['text', 'select', 'date', 'url']),
-  options: z.array(z.string()).optional(),
-  default: z.string().optional(),
-  required: z.boolean().optional(),
+export const VariableDef = schema.object({
+  key: schema.string(),
+  label: schema.string(),
+  type: schema.enum(['text', 'select', 'date', 'url']),
+  options: schema.optional(schema.array(schema.string())),
+  default: schema.optional(schema.string()),
+  required: schema.optional(schema.boolean()),
 });
-export type VariableDef = z.infer<typeof VariableDef>;
+export type VariableDef = Infer<typeof VariableDef>;
 
-export const SkillFrontmatter = z
-  .object({
-    name: z
-      .string()
-      .regex(/^[a-z0-9-]+$/, 'name must be kebab-case')
-      .max(64),
-    description: z.string().min(1).max(500),
-    panelot: z
-      .object({
-        sites: z.array(z.string()).optional(),
-        auto_suggest: z.boolean().optional(),
-        command: z
-          .string()
-          .regex(/^\/[a-z0-9:-]+$/)
-          .optional(),
-        variables: z.array(VariableDef).optional(),
-      })
-      .optional(),
-  })
-  .passthrough(); // Unknown Claude Code keys are preserved even when Panelot does not consume them.
+export const SkillFrontmatter = schema.looseObject({
+  name: schema.string({
+    pattern: /^[a-z0-9-]+$/,
+    patternMessage: 'name must be kebab-case',
+    max: 64,
+  }),
+  description: schema.string({ min: 1, max: 500 }),
+  panelot: schema.optional(
+    schema.object({
+      sites: schema.optional(schema.array(schema.string())),
+      auto_suggest: schema.optional(schema.boolean()),
+      command: schema.optional(schema.string({ pattern: /^\/[a-z0-9:-]+$/ })),
+      variables: schema.optional(schema.array(VariableDef)),
+    }),
+  ),
+}); // Unknown Claude Code keys are preserved even when Panelot does not consume them.
 
-export type SkillFrontmatter = z.infer<typeof SkillFrontmatter>;
+export type SkillFrontmatter = Infer<typeof SkillFrontmatter>;
 
 export interface ParsedSkill {
   frontmatter: SkillFrontmatter;
@@ -54,7 +50,7 @@ export function parseSkill(raw: string): ParsedSkill {
   if (!match) throw new Error('SKILL.md 缺少 YAML frontmatter（--- 包裹的头部）');
 
   const fm = parseSimpleYaml(match[1]!);
-  const result = SkillFrontmatter.safeParse(fm);
+  const result = schema.safeParse(SkillFrontmatter, fm);
   if (!result.success) {
     const issues = result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
     throw new Error(`SKILL.md frontmatter 无效: ${issues}`);

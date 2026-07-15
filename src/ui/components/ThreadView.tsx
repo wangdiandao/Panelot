@@ -6,14 +6,21 @@
 
 import { useSyncExternalStore, useState, useCallback, useRef, useEffect } from 'react';
 import { toast } from 'sonner';
-import type { ApprovalDecision, ContextBlock } from '../../messaging/protocol';
+import type {
+  ApprovalDecision,
+  ContextBlock,
+  PermissionPolicy,
+  SubmissionBrowserContext,
+} from '../../messaging/protocol';
+import type { LegacyGlobalSettings } from '../../settings/store';
+import type { LegacyModelPreset } from '../../settings/presets';
+import { resolvePermissionPolicy } from '../../settings/permissionPolicy';
 import { AttachmentRepository } from '../../data/attachments';
 import { PanelotDB } from '../../db/schema';
 import type { EngineSession, ThreadUiState } from '../engineClient';
 import { MessageStream } from './MessageStream';
 import { PromptInput } from './PromptInput';
 import { ApprovalCard } from './ApprovalCard';
-import { PlanConfirmCard } from './PlanConfirmCard';
 import { EmptyState } from './EmptyState';
 import { QueueDock } from './QueueDock';
 import { RecoveryCard } from './RecoveryCard';
@@ -23,6 +30,10 @@ import { Skeleton } from './ui/skeleton';
 import { t } from '../i18n';
 import { buildProviderErrorPresentation } from '../providerErrorPresentation';
 import { ProviderErrorNotice } from './ProviderErrorNotice';
+import { ProviderStopNotice } from './ProviderStopNotice';
+import { useThreadDraft } from '../useThreadDraft';
+import { captureSubmissionBrowserContext } from '../pageContext';
+import { useStorageValue } from '../useStorageValue';
 
 export function useEngineState(session: EngineSession): ThreadUiState {
   return useSyncExternalStore(
@@ -63,8 +74,6 @@ interface Props {
    * surface (full page passes 768; side panel leaves it unset).
    */
   contentMaxWidth?: number;
-  /** Called when the user invokes /plan — parent opens the task panel. */
-  onPlanCommand?: () => void;
 }
 
 export function ThreadView({
@@ -80,9 +89,28 @@ export function ThreadView({
   pageUrl,
   onBackspaceEmpty,
   contentMaxWidth,
-  onPlanCommand,
 }: Props) {
   const state = useEngineState(session);
+  const globalSettings = useStorageValue<LegacyGlobalSettings | null>('global_settings', null);
+  const presets = useStorageValue<LegacyModelPreset[] | null>('model_presets', null) ?? [];
+  const preset = state.meta?.preset
+    ? presets.find((candidate) => candidate.id === state.meta?.preset)
+    : undefined;
+  const permissionPolicy: PermissionPolicy = resolvePermissionPolicy({
+    override: state.pendingOverrides.permissionPolicy,
+    preset: preset
+      ? {
+          policy: preset.defaultPermissionPolicy ?? preset.defaultApprovalPolicy,
+          legacyCapabilityScope: preset.defaultCapabilityScope,
+        }
+      : undefined,
+    global: globalSettings
+      ? {
+          policy: globalSettings.defaultPermissionPolicy ?? globalSettings.defaultApprovalPolicy,
+          legacyCapabilityScope: globalSettings.defaultCapabilityScope,
+        }
+      : undefined,
+  });
   const [, setSendTick] = useState(0);
   // Debounced disconnect banner (OpenWebUI toast discipline): SW restarts
   // reconnect within ~1s constantly — flashing "reconnecting" for those is
@@ -96,51 +124,13 @@ export function ThreadView({
     const timer = setTimeout(() => setShowDisconnected(true), 1500);
     return () => clearTimeout(timer);
   }, [state.connected]);
-  // Plan mode (R7): agent writes a plan to todos, user confirms before execution.
-  // planMode is a UI-only state — not an ApprovalPolicy value in the engine.
-  const [planMode, setPlanMode] = useState(false);
-  // When the agent's plan turn finishes (was running, todos appeared, now done),
-  // auto-switch the composer to PlanConfirmCard.
-  const wasRunning = useRef(false);
-  useEffect(() => {
-    if (state.activeTurn !== null) {
-      wasRunning.current = true;
-    } else if (wasRunning.current && planMode && state.todos.length > 0) {
-      // Turn just completed with todos written — leave planMode active so the
-      // confirm card shows. The user dismisses it via confirm/edit/cancel.
-      wasRunning.current = false;
-    } else {
-      wasRunning.current = false;
-    }
-  }, [state.activeTurn, state.todos.length, planMode]);
-
   // Draft lives here (not in PromptInput) so the empty state can filter its
   // suggestions live and drafts persist per thread across panel closes.
-  const [draft, setDraft] = useState('');
+  const [draft, setDraft] = useThreadDraft(state.threadId);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Per-thread draft persistence (chrome.storage.session — the side panel
-  // gets closed constantly; losing a half-typed prompt is real data loss).
-  useEffect(() => {
-    const key = `draft:${state.threadId ?? 'draft'}`;
-    try {
-      void chrome.storage?.session?.get(key).then((r) => setDraft((r[key] as string) ?? ''));
-    } catch {
-      /* non-extension env */
-    }
-  }, [state.threadId]);
-  useEffect(() => {
-    const key = `draft:${state.threadId ?? 'draft'}`;
-    try {
-      if (draft) void chrome.storage?.session?.set({ [key]: draft });
-      else void chrome.storage?.session?.remove(key);
-    } catch {
-      /* non-extension env */
-    }
-  }, [draft, state.threadId]);
-
   const buildInput = useCallback(
-    (text: string) => {
+    (text: string, browserContext: SubmissionBrowserContext) => {
       const attachmentIds = stagedContext.flatMap((block) =>
         block.kind === 'file' && block.provenance === 'user' && block.sourceRef
           ? [block.sourceRef]
@@ -150,6 +140,7 @@ export function ThreadView({
         text,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
         attachedContext: stagedContext.length > 0 ? stagedContext : undefined,
+        browserContext,
       };
     },
     [stagedContext],
@@ -160,26 +151,45 @@ export function ThreadView({
   }, [stagedContext, onRemoveStagedContext]);
 
   const send = useCallback(
-    (text: string) => {
-      session.submit(buildInput(text));
+    async (
+      text: string,
+      expectedThreadId: string | null = state.threadId,
+      browserContext?: SubmissionBrowserContext,
+    ) => {
+      const captured =
+        browserContext ?? (await captureSubmissionBrowserContext([...stagedContext]));
+      const accepted = session.submit(buildInput(text, captured), { expectedThreadId });
+      if (!accepted) return false;
       // Chips are consumed by the send.
       consumeStagedContext();
       setSendTick((t) => t + 1);
+      return true;
     },
-    [session, buildInput, consumeStagedContext],
+    [session, state.threadId, stagedContext, buildInput, consumeStagedContext],
   );
 
   const enqueue = useCallback(
-    (text: string) => {
-      session.enqueue(buildInput(text));
+    async (
+      text: string,
+      expectedThreadId: string | null = state.threadId,
+      browserContext?: SubmissionBrowserContext,
+    ) => {
+      const captured =
+        browserContext ?? (await captureSubmissionBrowserContext([...stagedContext]));
+      const accepted = session.enqueue(buildInput(text, captured), { expectedThreadId });
+      if (!accepted) return false;
       consumeStagedContext();
+      return true;
     },
-    [session, buildInput, consumeStagedContext],
+    [session, state.threadId, stagedContext, buildInput, consumeStagedContext],
   );
 
   const attachFile = useCallback(
     async (file: File): Promise<ContextBlock | null> => {
-      if (!state.threadId) return null;
+      if (!state.threadId) {
+        toast.info(t('input.uploadRequiresThread'));
+        return null;
+      }
       try {
         const attachment = await attachmentRepository.addUpload({
           threadId: state.threadId,
@@ -295,15 +305,16 @@ export function ThreadView({
           }
         />
       )}
+      <ProviderStopNotice stopReason={state.lastStopReason} />
       {(showDisconnected || state.loading) && state.items.length === 0 ? (
         /* Thread switch / reconnect: 3-message skeleton (docs/09 §7). */
-        <div className="flex-1 space-y-6 px-4 py-6">
+        <div className="flex flex-1 flex-col gap-6 px-4 py-6">
           <div className="flex justify-end">
             <Skeleton className="h-10 w-3/5 rounded-2xl" />
           </div>
           <div className="flex gap-3">
             <Skeleton className="size-7 rounded-lg" />
-            <div className="flex-1 space-y-2">
+            <div className="flex flex-1 flex-col gap-2">
               <Skeleton className="h-4 w-full" />
               <Skeleton className="h-4 w-4/5" />
             </div>
@@ -336,7 +347,9 @@ export function ThreadView({
           items={state.items}
           liveItems={state.liveItems}
           threadId={state.threadId}
-          onSelectBranch={(nodeId) => session.selectBranch(nodeId)}
+          onSelectBranch={(expectedThreadId, nodeId) =>
+            session.selectBranch(expectedThreadId, nodeId)
+          }
           onForkAt={(siblingOfNodeId, text) => session.forkTurn(siblingOfNodeId, { text })}
           turnActive={state.activeTurn !== null}
           contentMaxWidth={contentMaxWidth}
@@ -349,7 +362,7 @@ export function ThreadView({
         style={contentMaxWidth ? { maxWidth: contentMaxWidth } : undefined}
       >
         {state.pendingApprovals.length > 0 && (
-          <div className="space-y-2 px-4 pb-2">
+          <div className="flex flex-col gap-2 px-4 pb-2">
             {state.pendingApprovals.slice(0, 1).map((a, _, arr) => (
               <ApprovalCard
                 key={a.approvalId}
@@ -372,13 +385,9 @@ export function ThreadView({
             />
           ))}
         {!providerConfigured && (
-          <button
-            type="button"
-            onClick={onOpenSettings}
-            className="mx-4 mb-2 rounded-xl border border-primary/40 bg-primary/10 px-3 py-2 text-[12px] text-primary transition-colors hover:bg-primary/20"
-          >
+          <Button variant="outline" type="button" onClick={onOpenSettings} className="mx-4 mb-2">
             {t('input.noProvider')}
-          </button>
+          </Button>
         )}
         <QueueDock
           runs={state.queuedRuns}
@@ -389,81 +398,38 @@ export function ThreadView({
           }}
           onRemove={(runId) => session.removeQueued(runId)}
         />
-        {/* Plan confirm card replaces the composer when plan mode is active and
-          the agent has finished writing todos. Approval cards take priority
-          (never fold a pending approval). */}
-        {planMode &&
-        state.activeTurn === null &&
-        state.todos.length > 0 &&
-        state.pendingApprovals.length === 0 ? (
-          <PlanConfirmCard
-            todos={state.todos}
-            onConfirm={() => {
-              setPlanMode(false);
-              send(t('plan.confirmMsg'));
-              onPlanCommand?.();
-            }}
-            onEdit={() => {
-              // Drop back to the normal textarea so the user can revise their task.
-              setPlanMode(false);
-            }}
-            onCancel={() => {
-              setPlanMode(false);
-            }}
-          />
-        ) : (
-          <PromptInput
-            running={state.activeTurn !== null}
-            steerable={state.activeTurn?.steerable ?? false}
-            disabled={!providerConfigured}
-            contextChips={stagedContext}
-            onRemoveChip={(i) => onRemoveStagedContext?.(i)}
-            onAttachContext={onAttachContext}
-            onAttachFile={onAttachContext ? attachFile : undefined}
-            onSend={send}
-            onEnqueue={enqueue}
-            onStop={() => session.interrupt()}
-            textareaRef={inputRef}
-            draft={draft}
-            onDraftChange={setDraft}
-            onBackspaceEmpty={onBackspaceEmpty}
-            onRecallLast={recallLast}
-            modelOverride={state.pendingOverrides.model ?? null}
-            onSelectModel={
-              modelSelectorInComposer
-                ? (choice) =>
-                    session.setOverrides({
-                      model: choice
-                        ? { connectionId: choice.connectionId, modelId: choice.modelId }
-                        : undefined,
-                    })
-                : undefined
-            }
-            approvalPolicy={state.pendingOverrides.approvalPolicy}
-            planMode={planMode}
-            onSelectPolicy={(tier) => {
-              if (tier === 'plan') {
-                setPlanMode(true);
-                onPlanCommand?.();
-              } else {
-                setPlanMode(false);
-                session.setOverrides({ approvalPolicy: tier });
-              }
-            }}
-            builtinCommands={[
-              {
-                id: '/plan',
-                label: '/plan',
-                hint: t('cmd.planHint'),
-                run: () => {
-                  setPlanMode(true);
-                  onPlanCommand?.();
-                  requestAnimationFrame(() => inputRef.current?.focus());
-                },
-              },
-            ]}
-          />
-        )}
+        <PromptInput
+          running={state.activeTurn !== null}
+          steerable={state.activeTurn?.steerable ?? false}
+          disabled={!providerConfigured}
+          contextChips={stagedContext}
+          submissionThreadId={state.threadId}
+          onRemoveChip={(i) => onRemoveStagedContext?.(i)}
+          onAttachContext={onAttachContext}
+          onAttachFile={onAttachContext ? attachFile : undefined}
+          attachmentUnavailableReason={state.threadId ? undefined : t('input.uploadRequiresThread')}
+          onSend={send}
+          onEnqueue={enqueue}
+          onStop={() => session.interrupt()}
+          textareaRef={inputRef}
+          draft={draft}
+          onDraftChange={setDraft}
+          onBackspaceEmpty={onBackspaceEmpty}
+          onRecallLast={recallLast}
+          modelOverride={state.pendingOverrides.model ?? null}
+          onSelectModel={
+            modelSelectorInComposer
+              ? (choice) =>
+                  session.setOverrides({
+                    model: choice
+                      ? { connectionId: choice.connectionId, modelId: choice.modelId }
+                      : undefined,
+                  })
+              : undefined
+          }
+          permissionPolicy={permissionPolicy}
+          onSelectPolicy={(tier) => session.setOverrides({ permissionPolicy: tier })}
+        />
       </div>
     </div>
   );

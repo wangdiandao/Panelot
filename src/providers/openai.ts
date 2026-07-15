@@ -123,6 +123,25 @@ interface PartialToolCall {
   args: string;
 }
 
+type OpenAiFinishReason = 'stop' | 'tool_calls' | 'length' | 'content_filter';
+
+function isOpenAiFinishReason(value: string): value is OpenAiFinishReason {
+  return ['stop', 'tool_calls', 'length', 'content_filter'].includes(value);
+}
+
+function mapOpenAiFinishReason(reason: OpenAiFinishReason): FinalResult['stopReason'] {
+  switch (reason) {
+    case 'stop':
+      return 'end';
+    case 'tool_calls':
+      return 'tool_use';
+    case 'length':
+      return 'max_tokens';
+    case 'content_filter':
+      return 'content_filter';
+  }
+}
+
 export function aggregateToolCalls(partials: Map<number, PartialToolCall>): FinalToolCall[] {
   return [...partials.entries()]
     .sort(([a], [b]) => a - b)
@@ -244,7 +263,8 @@ export class OpenAiAdapter implements ProviderAdapter {
     const reasoningParts: string[] = [];
     const partialCalls = new Map<number, PartialToolCall>();
     let usage: Usage = { input: 0, output: 0 };
-    let finishReason = '';
+    let finishReason: OpenAiFinishReason | undefined;
+    let sawDone = false;
     let recognizedFrame = false;
     const splitter = quirks?.thinkTagReasoning ? new ThinkTagSplitter() : undefined;
 
@@ -256,6 +276,7 @@ export class OpenAiAdapter implements ProviderAdapter {
           try {
             res = await fetch(url, {
               method: 'POST',
+              redirect: 'error',
               headers: headers(apiKey),
               body: JSON.stringify(body),
               signal: req.signal,
@@ -286,6 +307,10 @@ export class OpenAiAdapter implements ProviderAdapter {
       );
 
       for await (const sse of iterateSse(response.body!, req.signal)) {
+        if (sse.terminal === 'done') {
+          sawDone = true;
+          continue;
+        }
         let parsed: unknown;
         try {
           parsed = JSON.parse(sse.data);
@@ -299,6 +324,7 @@ export class OpenAiAdapter implements ProviderAdapter {
               content?: string | null;
               reasoning_content?: string | null;
               tool_calls?: unknown;
+              function_call?: unknown;
             };
             finish_reason?: string | null;
           }[];
@@ -349,10 +375,37 @@ export class OpenAiAdapter implements ProviderAdapter {
         if (!choice || typeof choice !== 'object') continue;
         if (typeof choice.finish_reason === 'string') {
           recognizedFrame = true;
-          if (choice.finish_reason) finishReason = choice.finish_reason;
+          if (choice.finish_reason) {
+            if (!isOpenAiFinishReason(choice.finish_reason)) {
+              throw createResponseFormatError(
+                'protocol',
+                response.status,
+                `unsupported finish_reason: ${choice.finish_reason}`,
+                'provider returned an unsupported finish_reason',
+              );
+            }
+            if (finishReason && finishReason !== choice.finish_reason) {
+              throw createResponseFormatError(
+                'protocol',
+                response.status,
+                'provider returned conflicting finish_reason values',
+                'provider returned conflicting finish_reason values',
+              );
+            }
+            finishReason = choice.finish_reason;
+          }
         }
         const delta = choice.delta;
         if (!delta || typeof delta !== 'object' || Array.isArray(delta)) continue;
+
+        if (delta.function_call !== undefined) {
+          throw createResponseFormatError(
+            'protocol',
+            response.status,
+            'deprecated function_call streaming is not supported',
+            'deprecated function_call streaming is not supported',
+          );
+        }
 
         if (typeof delta.reasoning_content === 'string') {
           recognizedFrame = true;
@@ -426,6 +479,22 @@ export class OpenAiAdapter implements ProviderAdapter {
           'provider response contained no recognizable frames',
         );
       }
+      if (!sawDone) {
+        throw createResponseFormatError(
+          'protocol',
+          response.status,
+          'provider stream ended before [DONE]',
+          'provider stream ended before [DONE]',
+        );
+      }
+      if (!finishReason) {
+        throw createResponseFormatError(
+          'protocol',
+          response.status,
+          'provider stream ended without finish_reason',
+          'provider stream ended without finish_reason',
+        );
+      }
     }
 
     const iterator = run();
@@ -445,14 +514,7 @@ export class OpenAiAdapter implements ProviderAdapter {
         consumed ??= consumeAll();
         await consumed;
         const toolCalls = aggregateToolCalls(partialCalls);
-        const stopReason: FinalResult['stopReason'] =
-          toolCalls.length > 0 || finishReason === 'tool_calls'
-            ? 'tool_use'
-            : finishReason === 'length'
-              ? 'max_tokens'
-              : finishReason === 'content_filter'
-                ? 'content_filter'
-                : 'end';
+        const stopReason = mapOpenAiFinishReason(finishReason!);
         const message: ContentBlock[] = [];
         const text = textParts.join('');
         if (text) message.push({ type: 'text', text });
@@ -465,6 +527,7 @@ export class OpenAiAdapter implements ProviderAdapter {
   async listModels(): Promise<string[]> {
     const keys = createKeyRing(this.connection.apiKeys);
     const res = await fetch(`${this.connection.baseUrl}/models`, {
+      redirect: 'error',
       headers: this.headers(keys.current()),
       signal: AbortSignal.timeout(4000),
     });

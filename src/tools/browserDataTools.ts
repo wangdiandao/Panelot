@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { schema } from '../agent/schema';
 import type { AnyAgentTool } from '../agent/tool';
 
 const DEFAULT_LIMIT = 20;
@@ -32,11 +32,15 @@ export function createBrowserDataTools(): AnyAgentTool[] {
       label: '搜索浏览历史',
       description:
         'Search browser history by title or URL, optionally within a time range; use it to find a page the user explicitly refers to, not to profile browsing behavior.',
-      parameters: z.object({
-        query: z.string().optional(),
-        startTime: z.number().optional().describe('Inclusive Unix timestamp in milliseconds'),
-        endTime: z.number().optional().describe('Exclusive Unix timestamp in milliseconds'),
-        maxResults: z.number().int().min(1).max(MAX_LIMIT).optional(),
+      parameters: schema.object({
+        query: schema.optional(schema.string()),
+        startTime: schema.optional(
+          schema.number({ description: 'Inclusive Unix timestamp in milliseconds' }),
+        ),
+        endTime: schema.optional(
+          schema.number({ description: 'Exclusive Unix timestamp in milliseconds' }),
+        ),
+        maxResults: schema.optional(schema.number({ integer: true, min: 1, max: MAX_LIMIT })),
       }),
       level: 'L0',
       effects: 'read',
@@ -65,9 +69,9 @@ export function createBrowserDataTools(): AnyAgentTool[] {
       label: '搜索书签',
       description:
         'Search browser bookmarks by title or URL when the user asks for a saved page or destination.',
-      parameters: z.object({
-        query: z.string().min(1),
-        maxResults: z.number().int().min(1).max(MAX_LIMIT).optional(),
+      parameters: schema.object({
+        query: schema.string({ min: 1 }),
+        maxResults: schema.optional(schema.number({ integer: true, min: 1, max: MAX_LIMIT })),
       }),
       level: 'L0',
       effects: 'read',
@@ -86,7 +90,9 @@ export function createBrowserDataTools(): AnyAgentTool[] {
       label: '列出常用站点',
       description:
         'List the browser-provided most visited sites when the user asks to navigate to a familiar or frequently used site.',
-      parameters: z.object({ maxResults: z.number().int().min(1).max(MAX_LIMIT).optional() }),
+      parameters: schema.object({
+        maxResults: schema.optional(schema.number({ integer: true, min: 1, max: MAX_LIMIT })),
+      }),
       level: 'L0',
       effects: 'read',
       execute: async (_id, params: { maxResults?: number }) => {
@@ -104,7 +110,9 @@ export function createBrowserDataTools(): AnyAgentTool[] {
       label: '列出最近关闭项',
       description:
         'List recently closed tabs and windows, including their session ids, before restoring one.',
-      parameters: z.object({ maxResults: z.number().int().min(1).max(25).optional() }),
+      parameters: schema.object({
+        maxResults: schema.optional(schema.number({ integer: true, min: 1, max: 25 })),
+      }),
       level: 'L0',
       effects: 'read',
       execute: async (_id, params: { maxResults?: number }) => {
@@ -127,7 +135,7 @@ export function createBrowserDataTools(): AnyAgentTool[] {
       label: '恢复关闭项',
       description:
         'Restore one recently closed tab or window by session id; this changes the visible browser session and requires write approval.',
-      parameters: z.object({ sessionId: z.string().min(1) }),
+      parameters: schema.object({ sessionId: schema.string({ min: 1 }) }),
       level: 'L0',
       effects: 'write',
       resolveTarget: async (params: { sessionId: string }) => {
@@ -152,7 +160,7 @@ export function createBrowserDataTools(): AnyAgentTool[] {
       name: 'tab_groups_list',
       label: '列出标签组',
       description: 'List tab groups in the current window, or every window when all is true.',
-      parameters: z.object({ all: z.boolean().optional() }),
+      parameters: schema.object({ all: schema.optional(schema.boolean()) }),
       level: 'L0',
       effects: 'read',
       execute: async (_id, params: { all?: boolean }) => {
@@ -174,9 +182,9 @@ export function createBrowserDataTools(): AnyAgentTool[] {
       label: '整理标签页',
       description:
         'Group existing tabs by id, optionally into an existing group; this reorganizes the browser and requires write approval.',
-      parameters: z.object({
-        tabIds: z.array(z.number().int()).min(1),
-        groupId: z.number().int().optional(),
+      parameters: schema.object({
+        tabIds: schema.array(schema.number({ integer: true }), { min: 1 }),
+        groupId: schema.optional(schema.number({ integer: true })),
       }),
       level: 'L0',
       effects: 'write',
@@ -194,13 +202,23 @@ export function createBrowserDataTools(): AnyAgentTool[] {
       label: '更新标签组',
       description:
         'Rename, recolor, or collapse a tab group; this changes browser organization and requires write approval.',
-      parameters: z.object({
-        groupId: z.number().int(),
-        title: z.string().max(100).optional(),
-        color: z
-          .enum(['grey', 'blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan', 'orange'])
-          .optional(),
-        collapsed: z.boolean().optional(),
+      parameters: schema.object({
+        groupId: schema.number({ integer: true }),
+        title: schema.optional(schema.string({ max: 100 })),
+        color: schema.optional(
+          schema.enum([
+            'grey',
+            'blue',
+            'red',
+            'yellow',
+            'green',
+            'pink',
+            'purple',
+            'cyan',
+            'orange',
+          ]),
+        ),
+        collapsed: schema.optional(schema.boolean()),
       }),
       level: 'L0',
       effects: 'write',

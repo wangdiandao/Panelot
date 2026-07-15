@@ -23,8 +23,7 @@ const assistant = (text: string) => ({
 const turnCtx = (turnId: string): TurnContextPayload => ({
   turnId,
   model: { connectionId: 'c', modelId: 'm' },
-  approvalPolicy: 'untrusted',
-  capabilityScope: 'cross-origin',
+  permissionPolicy: 'untrusted',
   activeSkills: [],
 });
 

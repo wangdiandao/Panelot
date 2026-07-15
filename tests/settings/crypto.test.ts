@@ -16,7 +16,7 @@ beforeEach(() => {
   };
 });
 
-describe('API key encryption (DESIGN §7)', () => {
+describe('API key encryption (docs/development.md §5)', () => {
   it('round-trips a secret through AES-GCM', async () => {
     const secret = 'sk-proj-abc123XYZ';
     const encrypted = await encryptSecret(secret);

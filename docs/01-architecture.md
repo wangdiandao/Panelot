@@ -41,11 +41,11 @@
 
 沿用 Codex app-server 的分层，这是协议、存储、UI 三方共同的语言：
 
-| 原语 | 含义 | 生命周期 |
-|---|---|---|
-| **Thread** | 一个会话（含分支树，见 02） | 创建 → 活跃/空闲 → 归档/删除；当前不维护带 30 分钟 TTL 的 Thread 内存缓存，元数据和节点按需读库 |
-| **Turn** | 一轮完整交换：一条用户输入 → 若干 LLM 调用与工具执行 → 停止 | `turn:start` → n 个 Item → `turn:complete`；是中断（interrupt）与插话（steer）的作用单位 |
-| **Item** | 轮内的原子产出：一条助手消息、一次工具调用、一次审批、一个推理块 | 统一三段式 `item:start` → `item:delta`* → `item:complete` |
+| 原语       | 含义                                                             | 生命周期                                                                                        |
+| ---------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| **Thread** | 一个会话（含分支树，见 02）                                      | 创建 → 活跃/空闲 → 归档/删除；当前不维护带 30 分钟 TTL 的 Thread 内存缓存，元数据和节点按需读库 |
+| **Turn**   | 一轮完整交换：一条用户输入 → 若干 LLM 调用与工具执行 → 停止      | `turn:start` → n 个 Item → `turn:complete`；是中断（interrupt）与插话（steer）的作用单位        |
+| **Item**   | 轮内的原子产出：一条助手消息、一次工具调用、一次审批、一个推理块 | 统一三段式 `item:start` → `item:delta`* → `item:complete`                                       |
 
 Item 类型（`ItemKind`）：`user_message` / `assistant_message` / `reasoning` / `tool_call` / `approval` / `system_notice`。（协议 Item 与落库 NodeType 是两层概念：Node 还包含 `tool_result` / `approval_decision` / `turn_context` 等只落库不走事件流的类型，见 02 §2.2。）
 
@@ -63,39 +63,72 @@ Item 类型（`ItemKind`）：`user_message` / `assistant_message` / `reasoning`
 ```ts
 // src/messaging/protocol.ts
 type Op =
-  | { type: 'initialize'; submissionId: string;
-      protocol: 'panelot/engine-v1'; schemaHash: string; clientId: string;
-      subscribe?: { threadId: string } }          // 可选：连接即订阅某 Thread
-  | { type: 'thread.create'; submissionId: string;
-      preset?: string; folderId?: string }        // preset = ModelPreset id（见 03）
+  | {
+      type: 'initialize';
+      submissionId: string;
+      protocol: 'panelot/engine-v1';
+      schemaHash: string;
+      clientId: string;
+      subscribe?: { threadId: string };
+    } // 可选：连接即订阅某 Thread
+  | { type: 'thread.create'; submissionId: string; preset?: string; folderId?: string } // preset = ModelPreset id（见 03）
   | { type: 'thread.subscribe'; submissionId: string; threadId: string }
   | { type: 'thread.fork'; submissionId: string; threadId: string; atNodeId: string }
   | { type: 'thread.selectBranch'; submissionId: string; threadId: string; nodeId: string }
-  | { type: 'turn.submit'; submissionId: string; threadId: string;
-      input: UserInput;                           // 文本 + 附件 + @引用的上下文块
-      overrides?: TurnOverrides }                 // per-turn 覆盖：模型/审批策略/能力域
-      // 注意：Op 是 turn.submit，引擎确认开跑后发出的事件才是 turn.start —— 两者刻意不同名
-  | { type: 'turn.fork'; submissionId: string; threadId: string;
-      siblingOfNodeId: string; input: UserInput; overrides?: TurnOverrides }
-  | { type: 'turn.steer'; submissionId: string; threadId: string;
-      expectedTurnId: string;                     // 必须等于当前活跃 turn，否则报错
-      input: UserInput }
-  | { type: 'turn.enqueue'; submissionId: string; threadId: string;
-      input: UserInput; overrides?: TurnOverrides }
+  | {
+      type: 'turn.submit';
+      submissionId: string;
+      threadId: string;
+      input: UserInput; // 文本 + 附件 + @引用的上下文块
+      overrides?: TurnOverrides;
+    } // per-turn 覆盖：模型/审批策略/能力域
+  // 注意：Op 是 turn.submit，引擎确认开跑后发出的事件才是 turn.start —— 两者刻意不同名
+  | {
+      type: 'turn.fork';
+      submissionId: string;
+      threadId: string;
+      siblingOfNodeId: string;
+      input: UserInput;
+      overrides?: TurnOverrides;
+    }
+  | {
+      type: 'turn.steer';
+      submissionId: string;
+      threadId: string;
+      expectedTurnId: string; // 必须等于当前活跃 turn，否则报错
+      input: UserInput;
+    }
+  | {
+      type: 'turn.enqueue';
+      submissionId: string;
+      threadId: string;
+      input: UserInput;
+      overrides?: TurnOverrides;
+    }
   | { type: 'turn.interrupt'; submissionId: string; threadId: string }
-  | { type: 'queue.update' | 'queue.remove'; submissionId: string;
-      threadId: string; runId: string; /* update 另带 input/overrides */ }
-  | { type: 'run.resume' | 'run.resolveUncertain'; submissionId: string;
-      threadId: string; runId: string; /* resolve 另带 resolution */ }
-  | { type: 'approval.response'; submissionId: string;
+  | {
+      type: 'queue.update' | 'queue.remove';
+      submissionId: string;
+      threadId: string;
+      runId: string; /* update 另带 input/overrides */
+    }
+  | {
+      type: 'run.resume' | 'run.resolveUncertain';
+      submissionId: string;
+      threadId: string;
+      runId: string; /* resolve 另带 resolution */
+    }
+  | {
+      type: 'approval.response';
+      submissionId: string;
       approvalId: string;
-      decision: ApprovalDecision }                // 见 06 章
-  | { type: 'ping'; submissionId: string };       // UI 心跳，兼作 SW 保活
+      decision: ApprovalDecision;
+    } // 见 06 章
+  | { type: 'ping'; submissionId: string }; // UI 心跳，兼作 SW 保活
 
 interface TurnOverrides {
   model?: { connectionId: string; modelId: string };
-  approvalPolicy?: ApprovalPolicy;      // 见 06
-  capabilityScope?: CapabilityScope;    // 见 06
+  permissionPolicy?: PermissionPolicy; // 见 06
 }
 ```
 
@@ -106,44 +139,89 @@ interface TurnOverrides {
 ```ts
 type AgentEvent =
   // —— 应答类（回填 submissionId）——
-  | { type: 'initialized'; submissionId: string;
-      protocol: 'panelot/engine-v1'; schemaHash: string;
-      snapshot?: ThreadSnapshot }        // 订阅时附带：当前 Thread 状态全量（重连恢复的关键）
-  | { type: 'fatal.reload_required'; submissionId: string; protocol: string;
-      schemaHash: string; message: string }
+  | {
+      type: 'initialized';
+      submissionId: string;
+      protocol: 'panelot/engine-v1';
+      schemaHash: string;
+      snapshot?: ThreadSnapshot;
+    } // 订阅时附带：当前 Thread 状态全量（重连恢复的关键）
+  // fatal 是最小稳定控制信封：host 回显客户端 protocol，使旧 UI 也能解析并停止重连。
+  // initialized 和其余普通事件仍严格校验当前 protocol/schemaHash。
+  | {
+      type: 'fatal.reload_required';
+      submissionId: string;
+      protocol: string;
+      schemaHash: string;
+      message: string;
+    }
   | CommandAck
   | CommandRejected
   | { type: 'error'; submissionId?: string; code: ErrorCode; message: string; retryable: boolean }
 
   // —— Turn 生命周期 ——
-  | { type: 'turn.start'; threadId: string; turnId: string;
-      turnKind: 'user' | 'title';                  // 内部轮标记为 non-steerable
-      steerable: boolean }
-  | { type: 'turn.complete'; threadId: string; turnId: string;
-      stopReason: 'done' | 'interrupted' | 'error' | 'budget_pause' }
-  | { type: 'token.usage'; threadId: string; turnId: string;
+  | {
+      type: 'turn.start';
+      threadId: string;
+      turnId: string;
+      turnKind: 'user' | 'title'; // 内部轮标记为 non-steerable
+      steerable: boolean;
+    }
+  | {
+      type: 'turn.complete';
+      threadId: string;
+      turnId: string;
+      stopReason:
+        'end' | 'max_tokens' | 'content_filter' | 'done' | 'interrupted' | 'error' | 'budget_pause';
+    } // done 仅兼容旧输入
+  | {
+      type: 'token.usage';
+      threadId: string;
+      turnId: string;
       usage: { input: number; output: number; cacheRead?: number };
-      costUsd?: number }
+      costUsd?: number;
+    }
 
   // —— Item 三段式 ——
-  | { type: 'item.start'; threadId: string; turnId: string; itemId: string;
-      kind: ItemKind; meta: ItemMeta }             // tool_call 的 meta 含 toolName/label/参数摘要
-  | { type: 'item.delta'; threadId: string; itemId: string;
-      delta: { text?: string; reasoning?: string; toolProgress?: unknown } }
-  | { type: 'item.complete'; threadId: string; itemId: string;
-      result?: { ok: boolean; details?: unknown } } // details = 工具的 UI 富信息通道（见 04）
+  | {
+      type: 'item.start';
+      threadId: string;
+      turnId: string;
+      itemId: string;
+      kind: ItemKind;
+      meta: ItemMeta;
+    } // tool_call 的 meta 含 toolName/label/参数摘要
+  | {
+      type: 'item.delta';
+      threadId: string;
+      itemId: string;
+      delta: { text?: string; reasoning?: string; toolProgress?: unknown };
+    }
+  | {
+      type: 'item.complete';
+      threadId: string;
+      itemId: string;
+      result?: { ok: boolean; details?: unknown };
+    } // details = 工具的 UI 富信息通道（见 04）
 
   // —— 引擎发起的双向 RPC ——
-  | { type: 'approval.request'; threadId: string; turnId: string;
+  | {
+      type: 'approval.request';
+      threadId: string;
+      turnId: string;
       approvalId: string;
-      request: ApprovalRequestPayload }            // 完整参数展示，见 06
-      // L1→L2 升级确认走同一事件，flags 带 'escalation_l2'（06 §5）
+      request: ApprovalRequestPayload;
+    } // 完整参数展示，见 06
+  // L1→L2 升级确认走同一事件，flags 带 'escalation_l2'（06 §5）
 
   // —— 广播类 ——
-  | { type: 'thread.updated'; threadId: string; revision: number;
-      patch: Partial<ThreadMeta> }
-  | { type: 'queue.updated'; threadId: string; pending: number;
-      runs: { runId: string; input: UserInput; overrides?: TurnOverrides; revision: number }[] }
+  | { type: 'thread.updated'; threadId: string; revision: number; patch: Partial<ThreadMeta> }
+  | {
+      type: 'queue.updated';
+      threadId: string;
+      pending: number;
+      runs: { runId: string; input: UserInput; overrides?: TurnOverrides; revision: number }[];
+    }
   | { type: 'run.recovery_required'; threadId: string; run: RunRecoveryState };
 ```
 
@@ -177,12 +255,12 @@ sequenceDiagram
 
 ## 4. Service Worker 生命周期策略
 
-| 场景 | 当前实现 |
-|---|---|
-| Agent 运行中 | Provider fetch、工具 Promise 和 Port 心跳在 SW 存活期间推进；用户/助手/工具节点按执行阶段 await 写入 IndexedDB |
+| 场景             | 当前实现                                                                                                                                            |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Agent 运行中     | Provider fetch、工具 Promise 和 Port 心跳在 SW 存活期间推进；用户/助手/工具节点按执行阶段 await 写入 IndexedDB                                      |
 | SW 被杀、UI 仍开 | Port 断开 → UI 指数退避重连；Run reducer 恢复队列/审批，模型流进入 interrupted，只读或 retry-safe 工具可重放，结果不明的写操作进入 paused_uncertain |
-| 无 UI 的后台任务 | 30s alarm 唤醒后执行同一恢复流程；队列、审批和 Run 不依赖 UI 内存，交互式授权仍需用户点击 |
-| 扩展更新 | 当前没有 `onUpdateAvailable` 延迟 reload 逻辑；这是目标策略而非已实现行为 |
+| 无 UI 的后台任务 | 30s alarm 唤醒后执行同一恢复流程；队列、审批和 Run 不依赖 UI 内存，交互式授权仍需用户点击                                                           |
+| 扩展更新         | 当前没有 `onUpdateAvailable` 延迟 reload 逻辑；这是目标策略而非已实现行为                                                                           |
 
 **当前落库时机**：轮次开头原子写 `turn_context + user_message + Run state`；Provider 完成后原子写 assistant_message、usage/cost、Thread stats 与 Run 游标；工具结果与下一 Run state 同事务；审批决定、审计节点与 Run revision 同事务。`item.delta` 不落库，SW 中止的模型流不会伪装成完成。
 
@@ -206,6 +284,6 @@ tool_call
 
 ## 6. 已定事项
 
-- `protocol` 或 schema hash 不匹配时，EngineHost 返回 `fatal.reload_required` 并断开；旧 UI 必须重载，协议不做兼容分支。未知 AgentEvent 仍应忽略。
+- `protocol` 或 schema hash 不匹配时，EngineHost 返回 `fatal.reload_required` 并断开；该最小控制信封对版本保持可解析，host 回显请求方 `protocol`，使旧 UI 能进入 `reloadRequired` 并停止重连。`initialized` 与其余普通事件仍只接受当前协议和 schema hash，不提供行为兼容分支。未知 AgentEvent 仍应忽略。
 - 多窗口 Side Panel：各窗口独立选择 Thread（`chrome.sidePanel` 本身 per-window），同一 Thread 被多处订阅时靠事件广播保持一致，无须额外绑定机制。
 - L1→L2 升级确认合并进 `approval.request`（flag `escalation_l2`，见 06 §5），不设独立的 `escalation.request` 事件——同一张审批卡片、同一套决策语义，UI 只多渲染一条横幅提示。

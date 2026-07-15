@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { schema } from '../agent/schema';
 import type { AnyAgentTool } from '../agent/tool';
 import type { PanelotDB } from '../db/schema';
 import type { SkillRecord } from '../db/types';
@@ -76,7 +76,7 @@ export function createLoadSkillTool(
     label: 'Load Skill',
     description:
       'Load the full instructions of a skill by name. Call before executing any task matching a skill description.',
-    parameters: z.object({ name: z.string() }),
+    parameters: schema.object({ name: schema.string() }),
     level: 'builtin',
     effects: 'read',
     execute: async (_id, params: { name: string }) => {

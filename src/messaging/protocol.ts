@@ -14,7 +14,11 @@ import type { ProviderErrorDetails } from '../providers/types';
 export const PROTOCOL_VERSION = 1;
 export const ENGINE_PROTOCOL = 'panelot/engine-v1' as const;
 export const ENGINE_SCHEMA_HASH =
-  '521a90e4636a74a5cec994fa95b1bd34d53402529ef894d81e5e92a6dcd2593c' as const;
+  'f0847bb919874375b6707b328fb7e61b367635f6bb16a45fafe4d5891d067337' as const;
+export const CONTENT_SCRIPT_PROTOCOL = 'panelot/content-v1' as const;
+export const CONTENT_SCRIPT_SCHEMA_HASH =
+  '5183fbae23c854482874412b8703bf669cc2a0b00f0fca5413559b51da9067cd' as const;
+export { DATA_IMPORT_RPC_TYPE } from '../data/maintenanceRpcProtocol';
 
 // ---------------------------------------------------------------------------
 // Content primitives
@@ -23,6 +27,19 @@ export const ENGINE_SCHEMA_HASH =
 export type ContentBlock =
   | { type: 'text'; text: string }
   | { type: 'image'; mime: string; /** base64 without data: prefix */ data: string };
+
+export interface BrowserTabIdentity {
+  tabId: number;
+  url: string;
+  title: string;
+}
+
+/** Browser identity captured by the UI before any asynchronous submission work. */
+export interface SubmissionBrowserContext {
+  capturedAt: number;
+  defaultTab?: BrowserTabIdentity;
+  referencedTabs: BrowserTabIdentity[];
+}
 
 /** A context block attached to user input via @-references (page, selection…). */
 export interface ContextBlock {
@@ -34,6 +51,8 @@ export interface ContextBlock {
   trust?: 'trusted' | 'untrusted';
   provenance?: 'user' | 'page' | 'mcp' | 'tool' | 'import' | 'plugin';
   sourceRef?: string;
+  /** Exact source tab for page/tab/selection context; never re-resolved from active tab. */
+  tab?: BrowserTabIdentity;
   content: ContentBlock[];
   /** Rough token estimate for UI display. */
   approxTokens?: number;
@@ -43,6 +62,7 @@ export interface UserInput {
   text: string;
   attachmentIds?: string[];
   attachedContext?: ContextBlock[];
+  browserContext?: SubmissionBrowserContext;
 }
 
 export interface Usage {
@@ -57,9 +77,7 @@ export interface Usage {
 
 /**
  * When to stop and ask the user.
- * `never` means "auto-DENY anything that would need approval" — it is NOT
- * auto-approve (docs/06 §1, Codex semantic-ambiguity lesson).
- * Composer-facing tiers (2026-07-05):
+ * Permission tiers:
  *  - `always`: EVERY tool call asks, reads included (the one policy where
  *    reads are gated — implemented as ask, never deny);
  *  - `untrusted` (default): reads free, writes ask;
@@ -67,15 +85,7 @@ export interface Usage {
  *    blacklist, sensitive-payload forced ask, rule-table deny/ask) still
  *    applies — auto is NOT a bypass.
  */
-export type ApprovalPolicy = 'always' | 'untrusted' | 'on-request' | 'never' | 'granular' | 'auto';
-
-/**
- * Hard capability boundary — approval cannot cross it. Blacklist-only model
- * (2026-07-04): reads are never gated; only `read-only` still blocks writes.
- * `same-origin-write` / `cross-origin` are legacy values kept for stored
- * threads and behave like `full`.
- */
-export type CapabilityScope = 'read-only' | 'same-origin-write' | 'cross-origin' | 'full';
+export type PermissionPolicy = 'always' | 'untrusted' | 'auto';
 
 export type ApprovalDecision =
   | { kind: 'accept' }
@@ -107,7 +117,15 @@ export type ItemKind =
 
 export type TurnKind = 'user' | 'title';
 
-export type StopReason = 'done' | 'interrupted' | 'error' | 'budget_pause';
+export type ProviderStopReason = 'end' | 'tool_use' | 'max_tokens' | 'content_filter';
+
+export type StopReason =
+  | Exclude<ProviderStopReason, 'tool_use'>
+  /** Accepted for prior-protocol input; current loops never emit this success label. */
+  | 'done'
+  | 'interrupted'
+  | 'error'
+  | 'budget_pause';
 
 export interface ItemMeta {
   /** For tool_call items: tool identity + display label + params summary. */
@@ -125,8 +143,7 @@ export type ToolLevel = 'L0' | 'L1' | 'L2' | 'mcp' | 'builtin';
 
 export interface TurnOverrides {
   model?: { connectionId: string; modelId: string };
-  approvalPolicy?: ApprovalPolicy;
-  capabilityScope?: CapabilityScope;
+  permissionPolicy?: PermissionPolicy;
   /** Restrict the tool registry for this turn (pure-chat / L0+L1 / full). */
   enabledToolLevels?: ('L0' | 'L1' | 'L2' | 'mcp')[];
 }
@@ -181,6 +198,8 @@ export interface ThreadSnapshotMeta {
 }
 
 export interface ThreadSnapshot {
+  /** Added by EngineHost at the same admission point as the initialized event. */
+  stream?: ThreadStreamCursor;
   meta: ThreadSnapshotMeta;
   items: SnapshotItem[];
   activeTurn: ActiveTurnState | null;
@@ -193,6 +212,14 @@ export interface ThreadSnapshot {
     revision: number;
   }[];
   recoverableRuns: RunRecoveryState[];
+}
+
+export interface ThreadStreamCursor {
+  threadId: string;
+  /** Persisted monotonic Service Worker generation. */
+  epoch: number;
+  /** Monotonic within one thread and epoch. */
+  sequence: number;
 }
 
 export interface RunRecoveryState {
@@ -217,7 +244,7 @@ export type Op =
   | {
       type: 'initialize';
       submissionId: string;
-      protocol?: typeof ENGINE_PROTOCOL;
+      protocol?: string;
       schemaHash?: string;
       clientId?: string;
       protocolVersion?: number;
@@ -332,135 +359,167 @@ export interface CommandRejected {
 
 export type AgentEvent =
   // —— responses (echo submissionId) ——
-  | {
-      type: 'initialized';
-      submissionId: string;
-      protocol: typeof ENGINE_PROTOCOL;
-      schemaHash: typeof ENGINE_SCHEMA_HASH;
-      snapshot?: ThreadSnapshot;
-    }
-  | {
-      type: 'fatal.reload_required';
-      submissionId: string;
-      protocol: typeof ENGINE_PROTOCOL;
-      schemaHash: typeof ENGINE_SCHEMA_HASH;
-      message: string;
-    }
-  | CommandAck
-  | CommandRejected
-  | { type: 'pong'; submissionId: string }
-  | {
-      type: 'error';
-      submissionId?: string;
-      threadId?: string;
-      code: ErrorCode;
-      message: string;
-      retryable: boolean;
-      /** Provider error taxonomy for human-readable attribution (docs/03 §7). */
-      errorKind?:
-        | 'auth'
-        | 'rate_limit'
-        | 'overloaded'
-        | 'context_too_long'
-        | 'content_filter'
-        | 'network'
-        | 'protocol';
-      providerDetails?: ProviderErrorDetails;
-    }
-  | { type: 'thread.created'; submissionId: string; threadId: string }
-  | { type: 'thread.forked'; submissionId: string; threadId: string; newThreadId: string }
+  (
+    | {
+        type: 'initialized';
+        submissionId: string;
+        protocol: typeof ENGINE_PROTOCOL;
+        schemaHash: typeof ENGINE_SCHEMA_HASH;
+        snapshot?: ThreadSnapshot;
+      }
+    | {
+        type: 'fatal.reload_required';
+        submissionId: string;
+        protocol: string;
+        schemaHash: string;
+        message: string;
+      }
+    | CommandAck
+    | CommandRejected
+    | { type: 'pong'; submissionId: string }
+    | {
+        type: 'error';
+        submissionId?: string;
+        threadId?: string;
+        code: ErrorCode;
+        message: string;
+        retryable: boolean;
+        /** Provider error taxonomy for human-readable attribution (docs/03 §7). */
+        errorKind?:
+          | 'auth'
+          | 'rate_limit'
+          | 'overloaded'
+          | 'context_too_long'
+          | 'content_filter'
+          | 'network'
+          | 'protocol';
+        providerDetails?: ProviderErrorDetails;
+      }
+    | { type: 'thread.created'; submissionId: string; threadId: string }
+    | { type: 'thread.forked'; submissionId: string; threadId: string; newThreadId: string }
 
-  // —— turn lifecycle ——
-  | {
-      type: 'turn.start';
-      threadId: string;
-      turnId: string;
-      turnKind: TurnKind;
-      steerable: boolean;
-    }
-  | { type: 'turn.complete'; threadId: string; turnId: string; stopReason: StopReason }
-  | {
-      type: 'token.usage';
-      threadId: string;
-      turnId: string;
-      usage: Usage;
-      costUsd?: number;
-    }
+    // —— turn lifecycle ——
+    | {
+        type: 'turn.start';
+        threadId: string;
+        turnId: string;
+        turnKind: TurnKind;
+        steerable: boolean;
+      }
+    | { type: 'turn.complete'; threadId: string; turnId: string; stopReason: StopReason }
+    | {
+        type: 'token.usage';
+        threadId: string;
+        turnId: string;
+        usage: Usage;
+        costUsd?: number;
+      }
 
-  // —— item three-phase ——
-  | {
-      type: 'item.start';
-      threadId: string;
-      turnId: string;
-      itemId: string;
-      kind: ItemKind;
-      meta: ItemMeta;
-    }
-  | {
-      type: 'item.delta';
-      threadId: string;
-      itemId: string;
-      delta: { text?: string; reasoning?: string; toolProgress?: unknown };
-    }
-  | {
-      type: 'item.complete';
-      threadId: string;
-      itemId: string;
-      result?: { ok: boolean; details?: unknown };
-    }
+    // —— item three-phase ——
+    | {
+        type: 'item.start';
+        threadId: string;
+        turnId: string;
+        itemId: string;
+        kind: ItemKind;
+        meta: ItemMeta;
+      }
+    | {
+        type: 'item.delta';
+        threadId: string;
+        itemId: string;
+        delta: { text?: string; reasoning?: string; toolProgress?: unknown };
+      }
+    | {
+        type: 'item.complete';
+        threadId: string;
+        itemId: string;
+        result?: { ok: boolean; details?: unknown };
+      }
 
-  // —— engine-initiated RPC ——
-  | {
-      type: 'approval.request';
-      threadId: string;
-      turnId: string;
-      approvalId: string;
-      request: ApprovalRequestPayload;
-    }
-  // —— broadcasts ——
-  | {
-      type: 'thread.updated';
-      threadId: string;
-      revision: number;
-      patch: Partial<ThreadSnapshotMeta>;
-    }
-  | {
-      type: 'queue.updated';
-      threadId: string;
-      pending: number;
-      runs: ThreadSnapshot['queuedRuns'];
-    }
-  | { type: 'run.recovery_required'; threadId: string; run: RunRecoveryState }
-  | {
-      /** Agent touched-tab audit trail changed (docs/05 §6 → task panel, docs/09 §3.1). */
-      type: 'tabs.updated';
-      threadId: string;
-      tabs: { tabId: number; title: string; url: string }[];
-    }
-  | {
-      /**
-       * Cross-thread activity signal for the sidebar (docs/09 §3.1 row
-       * indicators). Deliberately has NO top-level threadId — the host's
-       * broadcast filter is thread-scoped, and this event must reach clients
-       * subscribed to OTHER threads (the whole point).
-       */
-      type: 'activity.updated';
-      activity: { threadId: string; running: boolean; pendingApprovals: number };
-    };
+    // —— engine-initiated RPC ——
+    | {
+        type: 'approval.request';
+        threadId: string;
+        turnId: string;
+        approvalId: string;
+        request: ApprovalRequestPayload;
+      }
+    // —— broadcasts ——
+    | {
+        type: 'thread.updated';
+        threadId: string;
+        revision: number;
+        patch: Partial<ThreadSnapshotMeta>;
+      }
+    | {
+        type: 'queue.updated';
+        threadId: string;
+        pending: number;
+        runs: ThreadSnapshot['queuedRuns'];
+      }
+    | { type: 'run.recovery_required'; threadId: string; run: RunRecoveryState }
+    | {
+        /** Agent touched-tab audit trail changed (docs/05 §6). */
+        type: 'tabs.updated';
+        threadId: string;
+        tabs: { tabId: number; title: string; url: string }[];
+      }
+    | {
+        /**
+         * Cross-thread activity signal for the sidebar (docs/09 §3.1 row
+         * indicators). Deliberately has NO top-level threadId — the host's
+         * broadcast filter is thread-scoped, and this event must reach clients
+         * subscribed to OTHER threads (the whole point).
+         */
+        type: 'activity.updated';
+        activity: { threadId: string; running: boolean; pendingApprovals: number };
+      }
+  ) & { stream?: ThreadStreamCursor };
 
 // ---------------------------------------------------------------------------
 // Content-script protocol (engine ⇄ content script, docs/01 §5)
 // ---------------------------------------------------------------------------
 
-export interface ContentScriptOp {
+export interface ContentScriptExecuteOp {
+  protocol: typeof CONTENT_SCRIPT_PROTOCOL;
+  schemaHash: typeof CONTENT_SCRIPT_SCHEMA_HASH;
+  kind: 'execute';
   requestId: string;
   tool: string;
   params: unknown;
+  /** Absolute wall-clock deadline shared by the whole tool attempt. */
+  deadlineAt: number;
 }
 
+export interface ContentScriptCancelOp {
+  protocol: typeof CONTENT_SCRIPT_PROTOCOL;
+  schemaHash: typeof CONTENT_SCRIPT_SCHEMA_HASH;
+  kind: 'cancel';
+  requestId: string;
+  cancelRequestId: string;
+}
+
+export interface ContentScriptPingOp {
+  protocol: typeof CONTENT_SCRIPT_PROTOCOL;
+  schemaHash: typeof CONTENT_SCRIPT_SCHEMA_HASH;
+  kind: 'ping';
+  requestId: string;
+}
+
+export type ContentScriptOp = ContentScriptExecuteOp | ContentScriptCancelOp | ContentScriptPingOp;
+
 export type ContentScriptResult =
-  | { requestId: string; ok: true; result: unknown }
   | {
+      protocol: typeof CONTENT_SCRIPT_PROTOCOL;
+      schemaHash: typeof CONTENT_SCRIPT_SCHEMA_HASH;
+      requestId: string;
+      ok: true;
+      result: unknown;
+    }
+  | {
+      protocol: typeof CONTENT_SCRIPT_PROTOCOL;
+      schemaHash: typeof CONTENT_SCRIPT_SCHEMA_HASH;
       requestId: string;
       ok: false;
       /** Kept for one compatibility cycle while callers adopt structured failures. */

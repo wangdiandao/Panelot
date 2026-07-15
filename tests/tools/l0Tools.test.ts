@@ -62,9 +62,12 @@ beforeEach(() => {
       }),
       update: vi.fn(async (id: number, props: Record<string, unknown>) => {
         updated.push({ tabId: id, props });
+        const tab = tabs.find((candidate) => candidate.id === id);
+        if (tab && typeof props.url === 'string') tab.url = props.url;
+        if (tab && typeof props.active === 'boolean') tab.active = props.active;
       }),
-      sendMessage: vi.fn(async () => ({
-        requestId: 'x',
+      sendMessage: vi.fn(async (_tabId: number, op: { requestId: string }) => ({
+        requestId: op.requestId,
         ok: true,
         result: { resultText: 'snap' },
       })),
@@ -222,6 +225,60 @@ describe('tab_open stays in the background', () => {
     expect(text(result)).toContain('复用');
     expect(text(result)).toContain('没有变化');
   });
+
+  it('does not reuse a same-path tab when query or hash differs', async () => {
+    tabs = [
+      { id: 1, url: 'https://a.com/', title: 'A', active: true, lastFocused: true },
+      {
+        id: 3,
+        url: 'https://shop.com/cart?view=summary#top',
+        title: '购物车摘要',
+        active: false,
+      },
+    ];
+    const { tool } = toolset();
+
+    const result = await tool('tab_open').execute(
+      'c1',
+      { url: 'https://shop.com/cart?view=checkout#payment' } as never,
+      abort(),
+      undefined,
+    );
+
+    expect(updated).toEqual([]);
+    expect(tabs.find((tab) => tab.id === 3)?.url).toBe('https://shop.com/cart?view=summary#top');
+    expect(tabs.find((tab) => tab.id === 900)?.url).toBe(
+      'https://shop.com/cart?view=checkout#payment',
+    );
+    expect(text(result)).toContain('后台打开标签页 [900]');
+    expect(result.details).toMatchObject({
+      actionEvidence: { effectState: 'verified', outcome: 'verified' },
+    });
+  });
+
+  it('reuses only an exact full href, including query and hash', async () => {
+    tabs = [
+      { id: 1, url: 'https://a.com/', title: 'A', active: true, lastFocused: true },
+      {
+        id: 3,
+        url: 'https://shop.com/cart?view=checkout#payment',
+        title: '结账',
+        active: false,
+      },
+    ];
+    const { tool } = toolset();
+
+    const result = await tool('tab_open').execute(
+      'c1',
+      { url: 'https://shop.com/cart?view=checkout#payment' } as never,
+      abort(),
+      undefined,
+    );
+
+    expect(chrome.tabs.create).not.toHaveBeenCalled();
+    expect(updated).toEqual([]);
+    expect(text(result)).toContain('URL 完全相同');
+  });
 });
 
 describe('per-call tab routing', () => {
@@ -245,5 +302,35 @@ describe('per-call tab routing', () => {
     });
     expect(updated).not.toContainEqual({ tabId: 2, props: { active: true } });
     expect(text(result)).toContain('[tabId=2]');
+    expect(result.details).toMatchObject({
+      actionEvidence: {
+        effectState: 'verified',
+        outcome: 'verified',
+        observedEffects: ['url_changed'],
+      },
+    });
+  });
+
+  it('does not claim a navigation when the tab already has the exact href', async () => {
+    tabs = [
+      { id: 1, url: 'https://visible.example/', active: true, lastFocused: true },
+      {
+        id: 2,
+        url: 'https://destination.example/path?q=1#result',
+        active: false,
+      },
+    ];
+    const { tool } = toolset();
+
+    const result = await tool('navigate').execute(
+      'c1',
+      { tabId: 2, url: 'https://destination.example/path?q=1#result' } as never,
+      abort(),
+      undefined,
+    );
+
+    expect(updated).toEqual([]);
+    expect(text(result)).toContain('未派发导航');
+    expect(result.details).toBeUndefined();
   });
 });

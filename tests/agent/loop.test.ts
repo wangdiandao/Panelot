@@ -14,7 +14,7 @@ import type {
   StreamEvent,
   StreamRequest,
 } from '../../src/providers/types';
-import { ProviderError } from '../../src/providers/types';
+import { ProviderError, type ProviderErrorKind } from '../../src/providers/types';
 import { actionError } from '../../src/tools/action/errors';
 
 // ---------------------------------------------------------------------------
@@ -150,7 +150,7 @@ describe('agent loop (docs/04 §2)', () => {
       threadId: thread.id,
       code: 'provider_error',
       message: 'unexpected HTTP 400',
-      retryable: true,
+      retryable: false,
       errorKind: 'protocol',
       providerDetails: details,
     });
@@ -178,14 +178,34 @@ describe('agent loop (docs/04 §2)', () => {
     expect(errorEvent).not.toHaveProperty('providerDetails');
   });
 
-  it('runs a text-only turn: user + assistant persisted, turn completes done', async () => {
+  it.each<[ProviderErrorKind, boolean]>([
+    ['network', true],
+    ['rate_limit', true],
+    ['overloaded', true],
+    ['auth', false],
+    ['context_too_long', false],
+    ['content_filter', false],
+  ])('emits ProviderError %s with retryable=%s', async (kind, retryable) => {
+    vi.spyOn(provider, 'stream').mockImplementation(() => {
+      throw new ProviderError(kind, `${kind} failure`);
+    });
+    const thread = await tree.createThread({});
+
+    await runTurn(makeEnv(), thread.id, { text: 'hello' }).done;
+
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: 'error', errorKind: kind, retryable }),
+    );
+  });
+
+  it('runs a text-only turn and preserves the provider end reason', async () => {
     const thread = await tree.createThread({});
     provider.queue({ streamText: ['Hello', ' world'] });
 
     const handle = runTurn(makeEnv(), thread.id, { text: 'hi' });
     const stop = await handle.done;
 
-    expect(stop).toBe('done');
+    expect(stop).toBe('end');
     // No engine-side user echo: the optimistic client echo is the single
     // visible rendering of the user message (double-display regression).
     expect(eventTypes()).toEqual([
@@ -203,6 +223,61 @@ describe('agent loop (docs/04 §2)', () => {
     const meta = await tree.getThread(thread.id);
     const ctx = await buildSessionContext(tree, thread.id, meta!.leafId!);
     expect(ctx.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+    const complete = events.find((event) => event.type === 'turn.complete');
+    expect(complete).toMatchObject({ type: 'turn.complete', stopReason: 'end' });
+    expect(events).not.toContainEqual(
+      expect.objectContaining({ type: 'turn.complete', stopReason: 'done' }),
+    );
+    const path = await tree.getPath(thread.id, meta!.leafId!);
+    expect(path.find((node) => node.type === 'assistant_message')?.payload).toMatchObject({
+      providerStopReason: 'end',
+    });
+  });
+
+  it.each(['max_tokens', 'content_filter'] as const)(
+    'preserves provider %s across persistence, run state, and turn completion',
+    async (providerStopReason) => {
+      const thread = await tree.createThread({});
+      const setRunState = vi.fn(async () => undefined);
+      provider.queue({ streamText: ['partial response'], stopReason: providerStopReason });
+
+      const stop = await runTurn(makeEnv({ setRunState }), thread.id, { text: 'hi' }).done;
+
+      expect(stop).toBe(providerStopReason);
+      expect(events).toContainEqual(
+        expect.objectContaining({ type: 'turn.complete', stopReason: providerStopReason }),
+      );
+      expect(events).not.toContainEqual(
+        expect.objectContaining({ type: 'turn.complete', stopReason: 'done' }),
+      );
+      expect(setRunState).toHaveBeenLastCalledWith('completed', {
+        stopReason: providerStopReason,
+      });
+      const meta = await tree.getThread(thread.id);
+      const path = await tree.getPath(thread.id, meta!.leafId!);
+      expect(path.find((node) => node.type === 'assistant_message')?.payload).toMatchObject({
+        providerStopReason,
+      });
+    },
+  );
+
+  it('fails closed when tool_use has no tool call to continue', async () => {
+    const thread = await tree.createThread({});
+    provider.queue({ stopReason: 'tool_use', toolCalls: [] });
+
+    const stop = await runTurn(makeEnv(), thread.id, { text: 'go' }).done;
+
+    expect(stop).toBe('error');
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        errorKind: 'protocol',
+        retryable: false,
+      }),
+    );
+    expect(events).not.toContainEqual(
+      expect.objectContaining({ type: 'turn.complete', stopReason: 'tool_use' }),
+    );
   });
 
   it('loops through tool calls until the model stops calling tools', async () => {
@@ -215,8 +290,18 @@ describe('agent loop (docs/04 §2)', () => {
     );
 
     const stop = await runTurn(makeEnv(), thread.id, { text: 'go' }).done;
-    expect(stop).toBe('done');
+    expect(stop).toBe('end');
     expect(provider.requests).toHaveLength(3);
+    const meta = await tree.getThread(thread.id);
+    const path = await tree.getPath(thread.id, meta!.leafId!);
+    expect(
+      path
+        .filter((node) => node.type === 'assistant_message')
+        .map((node) => (node.payload as { providerStopReason?: string }).providerStopReason),
+    ).toEqual(['tool_use', 'tool_use', 'end']);
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: 'turn.complete', stopReason: 'end' }),
+    );
 
     // Second request must contain the first tool result.
     const secondReq = provider.requests[1]!;
@@ -240,7 +325,7 @@ describe('agent loop (docs/04 §2)', () => {
     );
 
     const stop = await runTurn(makeEnv(), thread.id, { text: 'go' }).done;
-    expect(stop).toBe('done');
+    expect(stop).toBe('end');
     const secondReq = provider.requests[1]!;
     const resultMsg = secondReq.messages.find((m) => m.role === 'tool_result')!;
     expect(resultMsg).toMatchObject({ isError: true });
@@ -256,11 +341,12 @@ describe('agent loop (docs/04 §2)', () => {
       }),
     );
     const thread = await tree.createThread({});
-    // Each LLM round returns one failing tool call; round 4 should carry the
-    // failure reminder; after 5 failures the turn stops as 'error'.
-    for (let i = 0; i < 6; i++) {
+    // Each model round returns one failing tool call; round 4 carries the
+    // failure reminder and a tool-free final round explains the stop.
+    for (let i = 0; i < 5; i++) {
       provider.queue({ toolCalls: [{ id: `c${i}`, name: 'echo', params: { text: 'x' } }] });
     }
+    provider.queue({ streamText: ['Could not complete because the element stayed unavailable.'] });
 
     const stop = await runTurn(makeEnv(), thread.id, { text: 'go' }).done;
     expect(stop).toBe('error');
@@ -278,8 +364,8 @@ describe('agent loop (docs/04 §2)', () => {
       .filter((r) => r.hit);
     expect(reminderRounds).toHaveLength(1);
     expect(reminderRounds[0]!.i).toBe(3);
-    // Stopped after the 5th failure: no more than 6 LLM rounds ran.
-    expect(provider.requests.length).toBeLessThanOrEqual(6);
+    expect(provider.requests).toHaveLength(6);
+    expect(provider.requests[5]!.tools).toEqual([]);
 
     // A system notice recorded the stop for the user.
     const meta = await tree.getThread(thread.id);
@@ -287,6 +373,10 @@ describe('agent loop (docs/04 §2)', () => {
     const notice = ctx.path.find((n) => n.type === 'system_notice');
     expect(notice).toBeDefined();
     expect((notice!.payload as { text: string }).text).toMatch(/连续 5 次/);
+    expect(ctx.messages.at(-1)?.content[0]).toMatchObject({
+      type: 'text',
+      text: 'Could not complete because the element stayed unavailable.',
+    });
   });
 
   it('user declines do NOT count toward the circuit breaker (deliberate no ≠ broken tool)', async () => {
@@ -311,7 +401,7 @@ describe('agent loop (docs/04 §2)', () => {
       thread.id,
       { text: 'go' },
     ).done;
-    expect(stop).toBe('done');
+    expect(stop).toBe('end');
     // No auto-stop notice was written.
     const meta = await tree.getThread(thread.id);
     const ctx = await buildSessionContext(tree, thread.id, meta!.leafId!);
@@ -341,7 +431,7 @@ describe('agent loop (docs/04 §2)', () => {
 
     const stop = await runTurn(makeEnv(), thread.id, { text: 'go' }).done;
     // 2 fails, 1 success (reset), 1 fail → never hits 5; turn completes.
-    expect(stop).toBe('done');
+    expect(stop).toBe('end');
   });
 
   it('returns zod validation errors to the model (not thrown at user)', async () => {
@@ -375,7 +465,7 @@ describe('agent loop (docs/04 §2)', () => {
     );
 
     const stop = await runTurn(makeEnv(), thread.id, { text: 'go' }).done;
-    expect(stop).toBe('done');
+    expect(stop).toBe('end');
     const results = provider.requests[1]!.messages.filter((m) => m.role === 'tool_result');
     expect(results).toHaveLength(2);
     expect((results[0]!.content[0] as { text: string }).text).toMatch(/Unknown tool/);
@@ -472,7 +562,7 @@ describe('gatekeeper integration', () => {
     );
 
     const stop = await runTurn(makeEnv({ gatekeeper }), thread.id, { text: 'go' }).done;
-    expect(stop).toBe('done');
+    expect(stop).toBe('end');
     const resultMsg = provider.requests[1]!.messages.find((m) => m.role === 'tool_result')!;
     expect((resultMsg.content[0] as { text: string }).text).toMatch(
       /denied by policy: blocked origin/,
@@ -751,27 +841,34 @@ describe('steering & interrupt (docs/04 §3)', () => {
   });
 });
 
-describe('soft step limit & token budget (docs/04 §1)', () => {
-  it('injects the 25-step reminder without interrupting the task', async () => {
+describe('unbounded tool execution & token budget (docs/04 §1)', () => {
+  it('does not cap tool calls by step count', async () => {
     tools.register(makeEchoTool());
     const thread = await tree.createThread({});
-    // 25 calls in one response → reminder pending → next request carries it.
     provider.queue(
       {
-        toolCalls: Array.from({ length: 25 }, (_, i) => ({
+        toolCalls: Array.from({ length: 65 }, (_, i) => ({
           id: `c${i}`,
           name: 'echo',
           params: { text: `${i}` },
         })),
       },
-      { streamText: ['continuing'] },
+      { streamText: ['finished'] },
     );
 
     const stop = await runTurn(makeEnv(), thread.id, { text: 'go' }).done;
-    expect(stop).toBe('done');
-    const secondReq = provider.requests[1]!;
-    const lastUser = [...secondReq.messages].reverse().find((m) => m.role === 'user')!;
-    expect((lastUser.content[0] as { text: string }).text).toMatch(/25 tool calls/);
+    expect(stop).toBe('end');
+    const toolResults = provider.requests[1]!.messages.filter(
+      (message) => message.role === 'tool_result',
+    );
+    expect(toolResults).toHaveLength(65);
+    expect(
+      provider.requests[1]!.messages.some((message) =>
+        message.content.some(
+          (block) => block.type === 'text' && /step|tool-call limit/i.test(block.text),
+        ),
+      ),
+    ).toBe(false);
   });
 
   it('token budget pauses the turn (the only hard gate)', async () => {

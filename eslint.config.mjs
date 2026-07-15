@@ -5,7 +5,15 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['.output/**', '.wxt/**', 'coverage/**', 'dist/**', 'node_modules/**', 'scratch/**'],
+    ignores: [
+      '.output/**',
+      '.wxt/**',
+      'coverage/**',
+      'dist/**',
+      'node_modules/**',
+      'output/**',
+      'scratch/**',
+    ],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,

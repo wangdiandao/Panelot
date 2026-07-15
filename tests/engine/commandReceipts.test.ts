@@ -1,7 +1,9 @@
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PanelotDB } from '../../src/db/schema';
 import { CommandReceiptRepository } from '../../src/engine/commandReceipts';
+import { ThreadTree } from '../../src/db/tree';
+import { RunRepository } from '../../src/engine/runRepository';
 
 let db: PanelotDB;
 let now: number;
@@ -83,6 +85,104 @@ describe('command receipts', () => {
 
     await expect(repo.recoverIncomplete()).resolves.toBe(1);
     await expect(repo.begin(command)).resolves.toEqual({
+      kind: 'duplicate',
+      response: {
+        type: 'command.rejected',
+        code: 'interrupted',
+        message:
+          'The background worker restarted before the command result was committed. Refresh the thread snapshot before retrying.',
+      },
+    });
+  });
+
+  it('commits thread creation and its receipt as one work unit', async () => {
+    const command = {
+      clientId: 'client-a',
+      submissionId: 'thread-create',
+      commandType: 'thread.create',
+    };
+    await repo.begin(command);
+
+    const thread = await repo.createThreadAndAck(command.clientId, command.submissionId, {
+      preset: 'preset-a',
+    });
+
+    expect(await db.threads.get(thread.id)).toMatchObject({ preset: 'preset-a' });
+    await expect(repo.begin(command)).resolves.toEqual({
+      kind: 'duplicate',
+      response: {
+        type: 'command.ack',
+        threadId: thread.id,
+        revision: 0,
+      },
+    });
+  });
+
+  it('rolls thread creation back when receipt completion fails', async () => {
+    const command = {
+      clientId: 'client-a',
+      submissionId: 'thread-create-failure',
+      commandType: 'thread.create',
+    };
+    await repo.begin(command);
+    vi.spyOn(db.commandReceipts, 'put').mockRejectedValueOnce(
+      new Error('injected receipt write failure'),
+    );
+
+    await expect(
+      repo.createThreadAndAck(command.clientId, command.submissionId, {}),
+    ).rejects.toThrow(/injected receipt write failure/);
+
+    expect(await db.threads.count()).toBe(0);
+    expect(await db.commandReceipts.get('client-a\u0000thread-create-failure')).toMatchObject({
+      status: 'processing',
+    });
+  });
+
+  it('recovers an accepted turn receipt from its durable run identity', async () => {
+    const thread = await new ThreadTree(db).createThread({ title: 'receipt recovery' });
+    const command = {
+      clientId: 'client-a',
+      submissionId: 'turn-domain-committed',
+      commandType: 'turn.submit',
+    };
+    await repo.begin(command);
+    const run = await new RunRepository(db, { now: () => now }).enqueue({
+      threadId: thread.id,
+      clientId: command.clientId,
+      submissionId: command.submissionId,
+      input: { text: 'committed before ack' },
+    });
+
+    await expect(repo.recoverIncomplete()).resolves.toBe(1);
+    await expect(repo.begin(command)).resolves.toEqual({
+      kind: 'duplicate',
+      response: {
+        type: 'command.ack',
+        threadId: thread.id,
+        runId: run.id,
+        revision: 0,
+      },
+    });
+  });
+
+  it("does not recover another client's run with the same submission id", async () => {
+    const thread = await new ThreadTree(db).createThread({ title: 'receipt client scope' });
+    await new RunRepository(db, { now: () => now }).enqueue({
+      threadId: thread.id,
+      clientId: 'client-a',
+      submissionId: 'shared-submission',
+      input: { text: 'client A work' },
+    });
+    const wrongClient = {
+      clientId: 'client-b',
+      submissionId: 'shared-submission',
+      commandType: 'turn.submit',
+    };
+    await repo.begin(wrongClient);
+
+    await expect(repo.recoverIncomplete()).resolves.toBe(1);
+    await expect(repo.begin(wrongClient)).resolves.toEqual({
       kind: 'duplicate',
       response: {
         type: 'command.rejected',

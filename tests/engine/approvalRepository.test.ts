@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PanelotDB } from '../../src/db/schema';
 import { ThreadTree } from '../../src/db/tree';
 import { ApprovalRepository } from '../../src/engine/approvalRepository';
@@ -26,7 +26,12 @@ async function createPendingApproval() {
     input: { text: 'write' },
   });
   await runs.transition(run.id, 'preparing');
-  await runs.transition(run.id, 'waiting_approval', {
+  const { approval } = await approvals.createPendingWork({
+    id: 'approval-a',
+    threadId: thread.id,
+    runId: run.id,
+    turnId: run.turnId,
+    deadlineAt: now + 300_000,
     pendingTool: {
       itemId: 'call-a',
       toolName: 'write_page',
@@ -34,12 +39,6 @@ async function createPendingApproval() {
       effect: 'write',
       recovery: 'never-retry',
     },
-  });
-  const approval = await approvals.create({
-    id: 'approval-a',
-    threadId: thread.id,
-    runId: run.id,
-    turnId: run.turnId,
     request: {
       tool: 'write_page',
       label: 'Write page',
@@ -103,5 +102,75 @@ describe('ApprovalRepository', () => {
         .filter((node) => node.type === 'approval_decision')
         .count(),
     ).toBe(1);
+  });
+
+  it('atomically claims a decided continuation only once', async () => {
+    const { run } = await createPendingApproval();
+    await approvals.decide('approval-a', { kind: 'accept' });
+
+    const claims = await Promise.all([
+      approvals.claimDecidedContinuation('approval-a'),
+      approvals.claimDecidedContinuation('approval-a'),
+    ]);
+
+    expect(claims.filter((claim) => claim !== null)).toHaveLength(1);
+    expect(claims.find((claim) => claim !== null)?.run).toMatchObject({
+      id: run.id,
+      state: 'executing_tool',
+      pendingTool: { startedAt: 10_000 },
+    });
+    expect(await db.runs.get(run.id)).toMatchObject({
+      state: 'executing_tool',
+      pendingTool: { startedAt: 10_000 },
+    });
+  });
+
+  it('keeps the run and approval atomic when the run write fails', async () => {
+    const thread = await new ThreadTree(db).createThread({ title: 'atomic approval' });
+    const runs = new RunRepository(db, { now: () => now });
+    const run = await runs.enqueue({
+      threadId: thread.id,
+      clientId: 'client-a',
+      submissionId: 'submission-atomic',
+      input: { text: 'write' },
+    });
+    await runs.transition(run.id, 'preparing');
+    vi.spyOn(db.runs, 'put').mockRejectedValueOnce(new Error('injected run write failure'));
+
+    await expect(
+      approvals.createPendingWork({
+        id: 'approval-atomic',
+        threadId: thread.id,
+        runId: run.id,
+        turnId: run.turnId,
+        request: {
+          tool: 'write_page',
+          label: 'Write page',
+          params: {},
+          targetOrigin: 'https://example.test',
+          flags: [],
+        },
+        pendingTool: {
+          itemId: 'call-atomic',
+          toolName: 'write_page',
+          params: {},
+          effect: 'write',
+          recovery: 'never-retry',
+        },
+        deadlineAt: now + 300_000,
+      }),
+    ).rejects.toThrow(/injected run write failure/);
+
+    expect(await db.approvals.get('approval-atomic')).toBeUndefined();
+    expect(await db.runs.get(run.id)).toMatchObject({ state: 'preparing', revision: 1 });
+  });
+
+  it('keeps the first decision when a late response proposes a different result', async () => {
+    await createPendingApproval();
+    await approvals.decide('approval-a', { kind: 'cancel' });
+
+    await expect(approvals.decide('approval-a', { kind: 'accept' })).resolves.toMatchObject({
+      decision: { kind: 'cancel' },
+    });
   });
 });

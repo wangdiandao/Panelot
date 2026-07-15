@@ -1,4 +1,4 @@
-const LOCAL_KEY = 'panelot_local_secret_key';
+export const LOCAL_SECRET_KEY_STORAGE = 'panelot_local_secret_key';
 const SESSION_PREFIX = 'panelot_session_secret:';
 const PBKDF2_ITERATIONS = 600_000;
 
@@ -13,6 +13,54 @@ export interface EncryptedSecretBackup {
   cipher: 'AES-GCM-256';
   iv: string;
   ciphertext: string;
+}
+
+export async function sealSecretWithRawKey(
+  plaintext: string,
+  purpose: string,
+  rawKey: Uint8Array | readonly number[],
+): Promise<string> {
+  const bytes: Uint8Array<ArrayBuffer> = new Uint8Array(rawKey);
+  if (bytes.length !== 32) throw new Error('Invalid local secret key');
+  const key = await crypto.subtle.importKey('raw', bytes, 'AES-GCM', false, ['encrypt']);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv, additionalData: new TextEncoder().encode(purpose) },
+    key,
+    new TextEncoder().encode(plaintext),
+  );
+  return `secret:v1:${encode(iv)}:${encode(new Uint8Array(ciphertext))}`;
+}
+
+export async function unsealSecretWithRawKey(
+  sealed: string,
+  purpose: string,
+  rawKey: Uint8Array | readonly number[],
+): Promise<string> {
+  const bytes: Uint8Array<ArrayBuffer> = new Uint8Array(rawKey);
+  if (bytes.length !== 32) throw new Error('Invalid local secret key');
+  const key = await crypto.subtle.importKey('raw', bytes, 'AES-GCM', false, ['decrypt']);
+  return decryptSealedSecret(sealed, purpose, key);
+}
+
+async function decryptSealedSecret(
+  sealed: string,
+  purpose: string,
+  key: CryptoKey,
+): Promise<string> {
+  const [prefix, version, ivEncoded, ciphertextEncoded, extra] = sealed.split(':');
+  if (prefix !== 'secret' || version !== 'v1' || !ivEncoded || !ciphertextEncoded || extra) {
+    throw new Error('Unsupported sealed secret format');
+  }
+  const iv = decode(ivEncoded);
+  const ciphertext = decode(ciphertextEncoded);
+  if (iv.length !== 12 || ciphertext.length < 16) throw new Error('Invalid sealed secret payload');
+  const plaintext = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv, additionalData: new TextEncoder().encode(purpose) },
+    key,
+    ciphertext,
+  );
+  return new TextDecoder().decode(plaintext);
 }
 
 function encode(bytes: Uint8Array): string {
@@ -52,20 +100,7 @@ export class SecretStore {
   }
 
   async unseal(sealed: string, purpose: string): Promise<string> {
-    const [prefix, version, ivEncoded, ciphertextEncoded] = sealed.split(':');
-    if (prefix !== 'secret' || version !== 'v1' || !ivEncoded || !ciphertextEncoded) {
-      throw new Error('Unsupported sealed secret format');
-    }
-    const plaintext = await crypto.subtle.decrypt(
-      {
-        name: 'AES-GCM',
-        iv: decode(ivEncoded),
-        additionalData: new TextEncoder().encode(purpose),
-      },
-      await this.localKey(),
-      decode(ciphertextEncoded),
-    );
-    return new TextDecoder().decode(plaintext);
+    return decryptSealedSecret(sealed, purpose, await this.localKey());
   }
 
   isSealed(value: string): boolean {
@@ -128,13 +163,13 @@ export class SecretStore {
   }
 
   private async localKey(): Promise<CryptoKey> {
-    const stored = await storageGet('local', LOCAL_KEY);
+    const stored = await storageGet('local', LOCAL_SECRET_KEY_STORAGE);
     let raw: Uint8Array<ArrayBuffer>;
     if (Array.isArray(stored) && stored.length === 32) {
       raw = new Uint8Array(stored as number[]);
     } else {
       raw = crypto.getRandomValues(new Uint8Array(32));
-      await storageSet('local', LOCAL_KEY, [...raw]);
+      await storageSet('local', LOCAL_SECRET_KEY_STORAGE, [...raw]);
     }
     return crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
   }

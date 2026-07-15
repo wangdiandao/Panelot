@@ -10,11 +10,12 @@
 
 import type {
   ApprovalDecision,
-  ApprovalPolicy,
+  PermissionPolicy,
   ApprovalRequestPayload,
-  CapabilityScope,
   ContentBlock,
   ContextBlock,
+  ProviderStopReason,
+  SubmissionBrowserContext,
   ToolLevel,
   TurnOverrides,
   UserInput,
@@ -74,6 +75,7 @@ export interface AssistantMessagePayload {
   connectionId: string;
   reasoning?: string;
   usage?: Usage;
+  providerStopReason?: ProviderStopReason;
 }
 
 export interface ToolCallPayload {
@@ -105,11 +107,11 @@ export interface ApprovalDecisionPayload {
 export interface TurnContextPayload {
   turnId: string;
   model: { connectionId: string; modelId: string };
-  approvalPolicy: ApprovalPolicy;
-  capabilityScope: CapabilityScope;
+  permissionPolicy: PermissionPolicy;
   activeSkills: string[];
   /** Kernel prompt version for attribution (docs/10 §8). */
   promptVersion?: string;
+  browserContext?: SubmissionBrowserContext;
 }
 
 /** Visible to the user but never enters LLM history. */
@@ -160,6 +162,8 @@ export interface Attachment {
   sourceRef?: string;
   refs?: { nodeIds?: string[]; runIds?: string[]; pluginId?: string };
   deleting?: boolean;
+  orphanedAt?: number;
+  detachedReason?: 'overwrite-import';
   meta?: { url?: string; title?: string; w?: number; h?: number };
 }
 
@@ -215,10 +219,78 @@ export interface ResolvedRunEnvironment {
   presetId?: string;
   presetPrompt?: string;
   enabledToolLevels: Exclude<ToolLevel, 'builtin'>[];
-  approvalPolicy: ApprovalPolicy;
-  capabilityScope: CapabilityScope;
+  permissionPolicy: PermissionPolicy;
   activeSkills: string[];
   promptVersion: string;
+  browserContext?: SubmissionBrowserContext;
+}
+
+export interface ProviderCredentialReference {
+  kind: 'api-key' | 'custom-header';
+  connectionId: string;
+  slot?: number;
+  headerName?: string;
+}
+
+export interface ProviderEnvironmentBinding {
+  kind: 'settings' | 'resolver';
+  connectionId: string;
+  protocol?: import('../providers/types').Connection['kind'];
+  baseUrl?: string;
+  quirks?: import('../providers/types').QuirkFlags;
+  credentials: ProviderCredentialReference[];
+}
+
+export interface ToolExecutionBinding {
+  kind: 'local' | 'mcp';
+  id: string;
+  serverId?: string;
+  endpoint?: string;
+  auth?: {
+    kind: 'none' | 'bearer' | 'oauth';
+    credentialRef?: string;
+    resource?: string;
+    issuer?: string;
+    clientId?: string;
+    scopes?: string[];
+  };
+}
+
+export interface RunToolSnapshot {
+  name: string;
+  label: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  level: ToolLevel;
+  effects: ToolEffect;
+  recovery: ToolRecoveryPolicy;
+  resultTrust?: 'trusted' | 'untrusted';
+  resultProvenance?: 'user' | 'page' | 'mcp' | 'tool' | 'import' | 'plugin';
+  execution: ToolExecutionBinding;
+  digest: string;
+}
+
+export interface RunSkillSnapshot {
+  id: string;
+  name: string;
+  body: string;
+  description: string;
+  sites?: string[];
+  digest: string;
+}
+
+/** Immutable request and execution facts used when an interrupted turn resumes. */
+export interface RunEnvironmentSnapshot extends ResolvedRunEnvironment {
+  snapshotVersion: 1;
+  capturedAt: number;
+  inputDigest: string;
+  providerBinding: ProviderEnvironmentBinding;
+  systemPrompt: string;
+  systemPromptDigest: string;
+  skillCatalog: RunSkillSnapshot[];
+  toolCatalog: RunToolSnapshot[];
+  toolCatalogDigest: string;
+  digest: string;
 }
 
 export interface PendingToolExecution {
@@ -241,7 +313,8 @@ export interface RunRecord {
   overrides?: TurnOverrides;
   state: RunState;
   revision: number;
-  environment?: ResolvedRunEnvironment;
+  /** Missing snapshot metadata identifies a run created by an unsupported legacy build. */
+  environment?: ResolvedRunEnvironment | RunEnvironmentSnapshot;
   stepCursor: number;
   pendingTool?: PendingToolExecution;
   pendingSteers?: PendingSteer[];
@@ -292,7 +365,17 @@ export interface ApprovalRecord {
   status: 'pending' | 'decided';
   decision?: ApprovalDecision;
   requestedAt: number;
+  /** Persisted timeout boundary so a restarted worker does not restart the wait window. */
+  deadlineAt?: number;
   decidedAt?: number;
+}
+
+/** Durable proof that a destructive data import committed inside IndexedDB. */
+export interface MaintenanceMarker {
+  id: 'data-import';
+  operationId: string;
+  digest: string;
+  committedAt: number;
 }
 
 export interface PluginRecord {

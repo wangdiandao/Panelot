@@ -1,21 +1,53 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Archive, ExternalLink, Package, Trash2 } from 'lucide-react';
+import {
+  Archive,
+  ExternalLink,
+  FileText,
+  Globe2,
+  Package,
+  ShieldAlert,
+  Sparkles,
+  Trash2,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { PanelotDB } from '../../db/schema';
 import type { PluginAssetRecord, PluginRecord } from '../../db/types';
 import { hostPermissionBroker } from '../../permissions/hostPermissionBroker';
 import { PluginManager, pluginDownloadPermissionOrigins } from '../../plugins/manager';
+import type { PluginInstallPlan, PluginInstallWarning } from '../../plugins/manifest';
+import { FilePickerButton } from '../components/FilePickerButton';
+import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
+import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '../components/ui/dialog';
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '../components/ui/empty';
 import { Input } from '../components/ui/input';
+import { Separator } from '../components/ui/separator';
 import { Switch } from '../components/ui/switch';
+import { t } from '../i18n';
 
 const db = new PanelotDB();
+
+const WARNING_KEYS: Record<PluginInstallWarning, string> = {
+  'prompt-assets-disabled': 'settings.plugins.security.promptAssetsDisabled',
+  'upgrade-disables-plugin': 'settings.plugins.security.upgradeDisabled',
+  'opaque-assets': 'settings.plugins.security.opaqueAssets',
+};
 
 export function PluginsPage() {
   const manager = useMemo(() => new PluginManager(db), []);
   const [plugins, setPlugins] = useState<PluginRecord[]>([]);
   const [assets, setAssets] = useState<PluginAssetRecord[]>([]);
   const [url, setUrl] = useState('');
+  const [plan, setPlan] = useState<PluginInstallPlan | null>(null);
   const [busy, setBusy] = useState(false);
 
   const refresh = async () => {
@@ -31,12 +63,10 @@ export function PluginsPage() {
     void refresh();
   }, []);
 
-  const installZip = async (file: File) => {
+  const analyzeZip = async (file: File) => {
     setBusy(true);
     try {
-      await manager.installZip(await file.arrayBuffer(), { kind: 'zip', ref: file.name });
-      await refresh();
-      toast.success('Plugin 已安装');
+      setPlan(await manager.analyzeZip(await file.arrayBuffer(), { kind: 'zip', ref: file.name }));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
     } finally {
@@ -44,18 +74,31 @@ export function PluginsPage() {
     }
   };
 
-  const installUrl = async () => {
+  const analyzeUrl = async () => {
     setBusy(true);
     try {
       const parsed = new URL(url);
       const granted = await hostPermissionBroker.requestAll(
         pluginDownloadPermissionOrigins(parsed),
       );
-      if (!granted) throw new Error('未授予 GitHub 下载权限');
-      await manager.installFromUrl(parsed.href);
-      setUrl('');
+      if (!granted) throw new Error(t('settings.plugins.permissionDenied'));
+      setPlan(await manager.analyzeUrl(parsed.href));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmInstall = async () => {
+    if (!plan) return;
+    setBusy(true);
+    try {
+      await manager.commit(plan, { confirmed: true });
+      if (plan.source.kind === 'github') setUrl('');
+      setPlan(null);
       await refresh();
-      toast.success('Plugin 已安装');
+      toast.success(t('settings.plugins.installed'));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
     } finally {
@@ -64,12 +107,10 @@ export function PluginsPage() {
   };
 
   return (
-    <div className="max-w-2xl space-y-5">
+    <div className="flex max-w-2xl flex-col gap-5">
       <div>
-        <h2 className="text-[15px] font-semibold">Plugins</h2>
-        <p className="mt-1 text-[11px] text-faint-foreground">
-          安装包限制：10 MB 压缩、50 MB 解压、1000 文件；不执行包内代码。
-        </p>
+        <h2 className="text-[15px] font-semibold">{t('settings.section.plugins')}</h2>
+        <p className="mt-1 text-[11px] text-faint-foreground">{t('settings.plugins.limit')}</p>
       </div>
 
       <div className="grid gap-2 rounded-xl border border-border/40 p-3 sm:grid-cols-[1fr_auto]">
@@ -77,34 +118,39 @@ export function PluginsPage() {
           value={url}
           onChange={(event) => setUrl(event.target.value)}
           placeholder="https://github.com/owner/repo/archive/refs/heads/main.zip"
-          aria-label="GitHub Plugin ZIP URL"
+          aria-label={t('settings.plugins.urlLabel')}
         />
-        <Button size="sm" disabled={busy || !url.trim()} onClick={() => void installUrl()}>
-          <ExternalLink className="mr-1 size-3.5" /> 从 GitHub 安装
+        <Button
+          size="sm"
+          disabled={busy || !url.trim()}
+          aria-busy={busy}
+          onClick={() => void analyzeUrl()}
+        >
+          <ExternalLink data-icon="inline-start" />
+          {busy ? t('settings.plugins.analyzing') : t('settings.plugins.analyzeGithub')}
         </Button>
-        <Button variant="outline" size="sm" asChild disabled={busy}>
-          <label className="cursor-pointer sm:col-span-2 sm:w-fit">
-            <Archive className="mr-1 inline size-3.5" /> 选择本地 ZIP
-            <input
-              type="file"
-              accept=".zip,application/zip"
-              className="hidden"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) void installZip(file);
-                event.target.value = '';
-              }}
-            />
-          </label>
-        </Button>
+        <div className="sm:col-span-2 sm:w-fit">
+          <FilePickerButton
+            id="plugin-zip-import"
+            label={t('settings.plugins.chooseZipLabel')}
+            accept=".zip,application/zip"
+            disabled={busy}
+            onFile={(file) => void analyzeZip(file)}
+          >
+            <Archive data-icon="inline-start" /> {t('settings.plugins.chooseZip')}
+          </FilePickerButton>
+        </div>
       </div>
 
       {plugins.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-border p-8 text-center text-[12px] text-faint-foreground">
-          尚未安装 Plugin
-        </div>
+        <Empty className="border border-dashed p-6 md:p-6">
+          <EmptyHeader>
+            <EmptyTitle className="text-base">{t('settings.plugins.emptyTitle')}</EmptyTitle>
+            <EmptyDescription>{t('settings.plugins.emptyHint')}</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       ) : (
-        <div className="space-y-2">
+        <div className="flex flex-col gap-2">
           {plugins.map((plugin) => {
             const owned = assets.filter((asset) => asset.pluginId === plugin.id);
             return (
@@ -124,24 +170,28 @@ export function PluginsPage() {
                   </div>
                   <Switch
                     checked={plugin.enabled}
-                    aria-label={`${plugin.name} ${plugin.enabled ? '停用' : '启用'}`}
+                    aria-label={t(
+                      plugin.enabled ? 'settings.plugins.disable' : 'settings.plugins.enable',
+                      { name: plugin.name },
+                    )}
                     onCheckedChange={(enabled) =>
                       void manager.setEnabled(plugin.id, enabled).then(refresh)
                     }
                   />
                   <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-8 text-destructive"
-                    aria-label={`卸载 ${plugin.name}`}
+                    variant="destructive"
+                    size="icon-sm"
+                    aria-label={t('settings.plugins.uninstall', { name: plugin.name })}
                     onClick={() => void manager.uninstall(plugin.id).then(refresh)}
                   >
-                    <Trash2 className="size-3.5" />
+                    <Trash2 />
                   </Button>
                 </div>
                 <details className="mt-2 text-[11px] text-muted-foreground">
-                  <summary className="cursor-pointer">安装清单（{owned.length}）</summary>
-                  <ul className="mt-1 space-y-0.5 pl-4 font-mono">
+                  <summary className="cursor-pointer">
+                    {t('settings.plugins.manifest', { n: owned.length })}
+                  </summary>
+                  <ul className="mt-1 flex flex-col gap-0.5 pl-4 font-mono">
                     {owned.map((asset) => (
                       <li key={asset.id}>
                         {asset.kind}: {asset.path}
@@ -154,6 +204,231 @@ export function PluginsPage() {
           })}
         </div>
       )}
+
+      <Dialog
+        open={plan !== null}
+        onOpenChange={(open) => {
+          if (!open && !busy) setPlan(null);
+        }}
+      >
+        {plan && (
+          <DialogContent
+            className="max-h-[min(90vh,52rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-2xl"
+            showCloseButton={!busy}
+            onEscapeKeyDown={(event) => {
+              if (busy) event.preventDefault();
+            }}
+            onInteractOutside={(event) => event.preventDefault()}
+          >
+            <DialogHeader className="p-6 pb-4">
+              <div className="flex flex-wrap items-center gap-2 pr-6">
+                <DialogTitle>
+                  {t(
+                    plan.operation === 'upgrade'
+                      ? 'settings.plugins.preview.upgradeTitle'
+                      : 'settings.plugins.preview.installTitle',
+                  )}
+                </DialogTitle>
+                <Badge variant="outline">{t('settings.plugins.preview.disabled')}</Badge>
+              </div>
+              <DialogDescription>{t('settings.plugins.preview.description')}</DialogDescription>
+            </DialogHeader>
+
+            <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-6 pb-6">
+              <Alert>
+                <ShieldAlert />
+                <AlertTitle>{t('settings.plugins.security.title')}</AlertTitle>
+                <AlertDescription>
+                  <p>{t('settings.plugins.security.body')}</p>
+                  {plan.warnings.length > 0 && (
+                    <ul className="list-disc pl-4">
+                      {plan.warnings.map((warning) => (
+                        <li key={warning}>{t(WARNING_KEYS[warning])}</li>
+                      ))}
+                    </ul>
+                  )}
+                </AlertDescription>
+              </Alert>
+
+              <section aria-labelledby="plugin-preview-package" className="flex flex-col gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 id="plugin-preview-package" className="font-medium">
+                    {plan.manifest.name}
+                  </h3>
+                  <Badge variant="secondary">{plan.manifest.version}</Badge>
+                  <Badge variant="outline">{plan.manifest.id}</Badge>
+                </div>
+                {plan.manifest.description && (
+                  <p className="text-sm text-muted-foreground">{plan.manifest.description}</p>
+                )}
+                {plan.existing && (
+                  <p className="text-sm text-muted-foreground">
+                    {t('settings.plugins.preview.existing', { version: plan.existing.version })}
+                  </p>
+                )}
+                <dl className="grid gap-2 rounded-lg border bg-muted/30 p-3 text-xs">
+                  <div className="grid gap-1">
+                    <dt className="font-medium">{t('settings.plugins.preview.source')}</dt>
+                    <dd className="break-all text-muted-foreground">{plan.source.label}</dd>
+                  </div>
+                  {plan.source.resolvedUrl && plan.source.resolvedUrl !== plan.source.label && (
+                    <div className="grid gap-1">
+                      <dt className="font-medium">
+                        {t('settings.plugins.preview.resolvedSource')}
+                      </dt>
+                      <dd className="break-all text-muted-foreground">{plan.source.resolvedUrl}</dd>
+                    </div>
+                  )}
+                  <div className="grid gap-1">
+                    <dt className="font-medium">{t('settings.plugins.preview.digest')}</dt>
+                    <dd className="break-all font-mono text-muted-foreground">{plan.digest}</dd>
+                  </div>
+                  <div className="text-muted-foreground">
+                    {t('settings.plugins.preview.expires', {
+                      time: new Date(plan.expiresAt).toLocaleTimeString(),
+                    })}
+                  </div>
+                </dl>
+              </section>
+
+              <Separator />
+
+              <PreviewSection
+                id="plugin-preview-assets"
+                icon={<FileText />}
+                title={t('settings.plugins.preview.assets', { n: plan.assets.length })}
+              >
+                <ul className="flex flex-col gap-2">
+                  {plan.assets.map((asset) => (
+                    <li key={asset.path} className="flex min-w-0 items-start gap-2 text-sm">
+                      <Badge variant="outline" className="mt-0.5">
+                        {asset.kind}
+                      </Badge>
+                      <span className="min-w-0 break-all font-mono text-xs">{asset.path}</span>
+                      <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                        {t('settings.plugins.preview.bytes', {
+                          n: asset.bytes.toLocaleString(),
+                        })}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </PreviewSection>
+
+              {plan.skills.length > 0 && (
+                <PreviewSection
+                  id="plugin-preview-skills"
+                  icon={<Sparkles />}
+                  title={t('settings.plugins.preview.skills', { n: plan.skills.length })}
+                >
+                  <ul className="flex flex-col gap-2">
+                    {plan.skills.map((skill) => (
+                      <li key={skill.path} className="rounded-lg border p-3 text-sm">
+                        <div className="font-medium">{skill.name}</div>
+                        <div className="text-muted-foreground">{skill.description}</div>
+                        <div className="mt-1 break-all font-mono text-xs text-muted-foreground">
+                          {skill.path}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </PreviewSection>
+              )}
+
+              {plan.presets.length > 0 && (
+                <PreviewSection
+                  id="plugin-preview-presets"
+                  icon={<Sparkles />}
+                  title={t('settings.plugins.preview.presets', { n: plan.presets.length })}
+                >
+                  <ul className="flex flex-col gap-2">
+                    {plan.presets.map((preset) => (
+                      <li
+                        key={`${preset.path}:${preset.id}`}
+                        className="rounded-lg border p-3 text-sm"
+                      >
+                        <div className="font-medium">{preset.name}</div>
+                        <div className="text-muted-foreground">
+                          {t('settings.plugins.preview.model', { model: preset.model })}
+                        </div>
+                        {preset.systemPromptSummary && (
+                          <div className="mt-1 text-muted-foreground">
+                            {t('settings.plugins.preview.promptSummary', {
+                              summary: preset.systemPromptSummary,
+                            })}
+                          </div>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </PreviewSection>
+              )}
+
+              {plan.siteInstructions.length > 0 && (
+                <PreviewSection
+                  id="plugin-preview-sites"
+                  icon={<Globe2 />}
+                  title={t('settings.plugins.preview.sites', { n: plan.siteInstructions.length })}
+                >
+                  <ul className="flex flex-col gap-2">
+                    {plan.siteInstructions.map((instruction) => (
+                      <li
+                        key={`${instruction.path}:${instruction.pattern}`}
+                        className="rounded-lg border p-3 text-sm"
+                      >
+                        <Badge variant="secondary">{instruction.pattern}</Badge>
+                        <p className="mt-2 text-muted-foreground">
+                          {instruction.instructionSummary}
+                        </p>
+                        <p className="mt-1 break-all font-mono text-xs text-muted-foreground">
+                          {instruction.path}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                </PreviewSection>
+              )}
+            </div>
+
+            <DialogFooter className="border-t bg-background px-6 py-4">
+              <DialogClose asChild>
+                <Button variant="outline" disabled={busy}>
+                  {t('settings.plugins.cancel')}
+                </Button>
+              </DialogClose>
+              <Button disabled={busy} aria-busy={busy} onClick={() => void confirmInstall()}>
+                {t(
+                  plan.operation === 'upgrade'
+                    ? 'settings.plugins.confirmUpgrade'
+                    : 'settings.plugins.confirmInstall',
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        )}
+      </Dialog>
     </div>
+  );
+}
+
+function PreviewSection({
+  id,
+  icon,
+  title,
+  children,
+}: {
+  id: string;
+  icon: React.ReactNode;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section aria-labelledby={id} className="flex flex-col gap-2">
+      <h3 id={id} className="flex items-center gap-2 text-sm font-medium [&_svg]:size-4">
+        {icon}
+        {title}
+      </h3>
+      {children}
+    </section>
   );
 }

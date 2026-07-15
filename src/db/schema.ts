@@ -4,6 +4,7 @@ import type {
   Attachment,
   CommandReceipt,
   MemoryRecord,
+  MaintenanceMarker,
   PluginRecord,
   PluginAssetRecord,
   RunRecord,
@@ -23,6 +24,7 @@ export class PanelotDB extends Dexie {
   approvals!: Table<ApprovalRecord, string>;
   plugins!: Table<PluginRecord, string>;
   pluginAssets!: Table<PluginAssetRecord, string>;
+  maintenance!: Table<MaintenanceMarker, string>;
 
   constructor(name = 'panelot_v1') {
     super(name);
@@ -40,6 +42,9 @@ export class PanelotDB extends Dexie {
     });
     this.version(2).stores({
       skills: 'id, name, enabled, sourceRef',
+    });
+    this.version(3).stores({
+      maintenance: 'id, operationId, committedAt',
     });
   }
 }

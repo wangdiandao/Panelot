@@ -7,10 +7,13 @@ import { PanelotDB } from '../db/schema';
 import { createAdapter } from '../providers/registry';
 import type { Connection, GenParams, ProviderAdapter } from '../providers/types';
 import { mergeParams } from '../providers/types';
+import type { ProviderEnvironmentBinding } from '../db/types';
 import { SettingsStore } from '../settings/store';
+import { resolvePermissionPolicy } from '../settings/permissionPolicy';
 import { decryptHeaderValue, decryptSecret } from '../settings/crypto';
 import type { ProviderResolver } from './core';
 import { listEnabledPluginPresets } from '../plugins/assets';
+import { RunEnvironmentSnapshotError } from './runEnvironmentSnapshot';
 
 export interface TaskModelRef {
   provider: ProviderAdapter;
@@ -84,6 +87,81 @@ export class SettingsProviderResolver implements ProviderResolver {
     return adapter;
   }
 
+  async captureEnvironmentBinding(connectionId: string): Promise<ProviderEnvironmentBinding> {
+    const connections = await SettingsStore.connections.get();
+    const connection = connections.find((candidate) => candidate.id === connectionId);
+    if (!connection) throw new Error(`connection ${connectionId} not found`);
+    const credentials: ProviderEnvironmentBinding['credentials'] = connection.apiKeys.map(
+      (_value, slot) => ({ kind: 'api-key', connectionId, slot }),
+    );
+    for (const headerName of Object.keys(connection.customHeaders ?? {}).sort((a, b) =>
+      a.localeCompare(b),
+    )) {
+      credentials.push({ kind: 'custom-header', connectionId, headerName });
+    }
+    return {
+      kind: 'settings',
+      connectionId,
+      protocol: connection.kind,
+      baseUrl: connection.baseUrl,
+      quirks: structuredClone(connection.quirks),
+      credentials,
+    };
+  }
+
+  async resolveFromEnvironmentBinding(
+    binding: ProviderEnvironmentBinding,
+  ): Promise<ProviderAdapter> {
+    if (binding.kind !== 'settings' || !binding.protocol || !binding.baseUrl) {
+      throw new Error('unsupported provider environment binding');
+    }
+    const connections = await SettingsStore.connections.get();
+    const current = connections.find((candidate) => candidate.id === binding.connectionId);
+    if (!current || !current.enabled) {
+      throw new Error(`connection ${binding.connectionId} not found or disabled`);
+    }
+    assertEnvironmentBindingUnchanged(current, binding);
+    const keyReferences = binding.credentials
+      .filter((reference) => reference.kind === 'api-key')
+      .sort((left, right) => (left.slot ?? -1) - (right.slot ?? -1));
+    const apiKeys = await Promise.all(
+      keyReferences.map(async (reference) => {
+        const encrypted = current.apiKeys[reference.slot ?? -1];
+        if (encrypted === undefined)
+          throw new Error('provider credential reference is unavailable');
+        return decryptSecret(encrypted);
+      }),
+    );
+    const headerReferences = binding.credentials.filter(
+      (reference) => reference.kind === 'custom-header',
+    );
+    const customHeaders = headerReferences.length
+      ? Object.fromEntries(
+          await Promise.all(
+            headerReferences.map(async (reference) => {
+              const name = reference.headerName;
+              if (!name) throw new Error('provider header credential reference is invalid');
+              const encrypted = current.customHeaders?.[name];
+              if (encrypted === undefined) {
+                throw new Error('provider header credential reference is unavailable');
+              }
+              return [name, await decryptHeaderValue(binding.connectionId, name, encrypted)];
+            }),
+          ),
+        )
+      : undefined;
+    return createAdapter({
+      id: binding.connectionId,
+      name: binding.connectionId,
+      kind: binding.protocol,
+      baseUrl: binding.baseUrl,
+      apiKeys,
+      customHeaders,
+      enabled: true,
+      quirks: structuredClone(binding.quirks),
+    });
+  }
+
   async resolve(
     threadId: string,
     override?: { connectionId: string; modelId: string },
@@ -145,10 +223,10 @@ export class SettingsProviderResolver implements ProviderResolver {
       presetId: preset?.id,
       presetPrompt: preset?.systemPrompt,
       enabledToolLevels: preset?.enabledToolLevels,
-      approvalPolicy:
-        preset?.defaultApprovalPolicy ?? asApprovalPolicy(globalSettings.defaultApprovalPolicy),
-      capabilityScope:
-        preset?.defaultCapabilityScope ?? asCapabilityScope(globalSettings.defaultCapabilityScope),
+      permissionPolicy: resolvePermissionPolicy({
+        preset: { policy: preset?.defaultPermissionPolicy },
+        global: { policy: globalSettings.defaultPermissionPolicy },
+      }),
       activeSkills: [...(preset?.skills ?? [])],
       promptVersion: preset?.promptVersion ?? 'kernel',
       modelCapabilities: modelEntry?.capabilities,
@@ -166,6 +244,57 @@ export class SettingsProviderResolver implements ProviderResolver {
     const main = await this.resolve(fallbackThreadId);
     return { provider: main.provider, model: main.model };
   }
+}
+
+function assertEnvironmentBindingUnchanged(
+  current: Connection,
+  binding: ProviderEnvironmentBinding,
+): void {
+  const currentCredentials: ProviderEnvironmentBinding['credentials'] = current.apiKeys.map(
+    (_value, slot) => ({ kind: 'api-key', connectionId: current.id, slot }),
+  );
+  for (const headerName of Object.keys(current.customHeaders ?? {}).sort((left, right) =>
+    left.localeCompare(right),
+  )) {
+    currentCredentials.push({ kind: 'custom-header', connectionId: current.id, headerName });
+  }
+  const bindingCredentials = [...binding.credentials].sort((left, right) =>
+    credentialIdentity(left).localeCompare(credentialIdentity(right)),
+  );
+  currentCredentials.sort((left, right) =>
+    credentialIdentity(left).localeCompare(credentialIdentity(right)),
+  );
+  const unchanged =
+    binding.kind === 'settings' &&
+    binding.connectionId === current.id &&
+    binding.protocol === current.kind &&
+    binding.baseUrl === current.baseUrl &&
+    stableQuirks(binding.quirks) === stableQuirks(current.quirks) &&
+    bindingCredentials.length === currentCredentials.length &&
+    bindingCredentials.every(
+      (reference, index) =>
+        credentialIdentity(reference) === credentialIdentity(currentCredentials[index]!),
+    );
+  if (!unchanged) {
+    throw new RunEnvironmentSnapshotError(
+      'environment_snapshot_invalid',
+      'The provider transport or credential binding changed after this run started.',
+    );
+  }
+}
+
+function credentialIdentity(reference: ProviderEnvironmentBinding['credentials'][number]): string {
+  return reference.kind === 'api-key'
+    ? `${reference.kind}:${reference.connectionId}:${reference.slot ?? -1}`
+    : `${reference.kind}:${reference.connectionId}:${reference.headerName ?? ''}`;
+}
+
+function stableQuirks(quirks: Connection['quirks']): string {
+  return JSON.stringify(
+    Object.fromEntries(
+      Object.entries(quirks ?? {}).sort(([left], [right]) => left.localeCompare(right)),
+    ),
+  );
 }
 
 function stableConnectionFingerprint(connection: Connection): string {
@@ -186,20 +315,4 @@ function stableConnectionFingerprint(connection: Connection): string {
     enabled: connection.enabled,
     quirks: connection.quirks,
   });
-}
-
-function asApprovalPolicy(
-  value: string | undefined,
-): import('../messaging/protocol').ApprovalPolicy | undefined {
-  return value && ['always', 'untrusted', 'on-request', 'never', 'granular', 'auto'].includes(value)
-    ? (value as import('../messaging/protocol').ApprovalPolicy)
-    : undefined;
-}
-
-function asCapabilityScope(
-  value: string | undefined,
-): import('../messaging/protocol').CapabilityScope | undefined {
-  return value && ['read-only', 'same-origin-write', 'cross-origin', 'full'].includes(value)
-    ? (value as import('../messaging/protocol').CapabilityScope)
-    : undefined;
 }

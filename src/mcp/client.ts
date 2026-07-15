@@ -1,5 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { extractWWWAuthenticateParams } from '@modelcontextprotocol/sdk/client/auth.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { McpOAuthChallenge } from './types';
 
 export interface McpTool {
   name: string;
@@ -24,7 +26,8 @@ export interface McpResource {
 export interface McpClientOptions {
   url: string;
   authHeader: () => Promise<string | null>;
-  onUnauthorized?: () => Promise<boolean>;
+  onBeforeFetch?: (url: string) => Promise<void>;
+  onUnauthorized?: (challenge: McpOAuthChallenge) => Promise<boolean>;
   onCapabilitiesChanged?: () => void;
 }
 
@@ -135,13 +138,27 @@ export class McpClient {
 
   private async fetchWithAuth(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     const request = async () => {
+      const url = input instanceof Request ? input.url : String(input);
+      await this.opts.onBeforeFetch?.(url);
       const headers = new Headers(init?.headers);
       const authorization = await this.opts.authHeader();
       if (authorization) headers.set('Authorization', authorization);
-      return fetch(input, { ...init, headers });
+      return fetch(input, { ...init, headers, redirect: 'error' });
     };
     let response = await request();
-    if (response.status === 401 && this.opts.onUnauthorized && (await this.opts.onUnauthorized())) {
+    const challenge = extractWWWAuthenticateParams(response);
+    const shouldReauthorize =
+      response.status === 401 ||
+      (response.status === 403 && challenge.error === 'insufficient_scope');
+    if (
+      shouldReauthorize &&
+      this.opts.onUnauthorized &&
+      (await this.opts.onUnauthorized({
+        resourceMetadataUrl: challenge.resourceMetadataUrl?.toString(),
+        scope: challenge.scope,
+        error: challenge.error,
+      }))
+    ) {
       response = await request();
     }
     return response;

@@ -9,6 +9,7 @@
 import { useState } from 'react';
 import { Globe } from 'lucide-react';
 import { t } from '../i18n';
+import { Button } from './ui/button';
 
 export interface Citation {
   url: string;
@@ -40,33 +41,37 @@ export function CitationsPill({ citations }: { citations: Citation[] }) {
   const shown = citations.slice(0, 3);
   return (
     <div className="mt-1.5">
-      <button
+      <Button
+        variant="outline"
+        size="sm"
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className="flex h-7 items-center gap-1.5 rounded-full border border-border/30 bg-card px-2.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted"
+        className="h-7 rounded-full"
       >
-        <span className="flex -space-x-1">
+        <span className="flex [&>*+*]:-ml-1">
           {shown.map((c, i) => (
             <Favicon key={i} url={c.url} />
           ))}
         </span>
         {t('citations.count', { n: citations.length })}
-      </button>
+      </Button>
       {open && (
-        <div className="mt-1 space-y-0.5">
+        <div className="mt-1 flex flex-col gap-0.5">
           {citations.map((c, i) => (
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               key={i}
               type="button"
               onClick={() => void chrome.tabs.create({ url: c.url })}
-              className="flex w-full items-center gap-1.5 rounded-lg px-2 py-1 text-left text-[12px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className="h-auto w-full justify-start"
               title={c.url}
             >
               <Favicon url={c.url} />
               <span className="truncate font-mono text-[11px]">{domainOf(c.url)}</span>
               <span className="min-w-0 truncate text-faint-foreground">{c.url}</span>
-            </button>
+            </Button>
           ))}
         </div>
       )}

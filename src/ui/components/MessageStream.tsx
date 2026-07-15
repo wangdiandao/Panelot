@@ -22,14 +22,45 @@ import { MessageActions } from './MessageActions';
 import { CitationsPill } from './CitationsPill';
 import { ReasoningBlock } from './ReasoningBlock';
 import { ToolCallGroup, type ToolCardData } from './ToolCallCard';
+import { ChevronRight, Paperclip } from 'lucide-react';
 import { Button } from './ui/button';
+import { Badge } from './ui/badge';
+import { Bubble, BubbleContent } from './ui/bubble';
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from './ui/card';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible';
+import { Message, MessageContent, MessageFooter } from './ui/message';
+import { Separator } from './ui/separator';
+import { Spinner } from './ui/spinner';
+import { Textarea } from './ui/textarea';
+import { cn } from '../lib/utils';
 import { t } from '../i18n';
 
 // ---------------------------------------------------------------------------
 // Row model: fold tool_call + tool_result pairs into cards, group runs
 // ---------------------------------------------------------------------------
 
-type Row =
+type AssistantMessageSegment = {
+  kind: 'message';
+  key: string;
+  payload: AssistantMessagePayload;
+  streaming?: boolean;
+  liveText?: string;
+  liveReasoning?: string;
+  nodeId?: string;
+  branch?: { index: number; count: number };
+  citations?: { url: string }[];
+};
+
+type ToolSegment = {
+  kind: 'tools';
+  key: string;
+  cards: ToolCardData[];
+  historical?: boolean;
+};
+
+type AssistantSegment = AssistantMessageSegment | ToolSegment;
+
+export type MessageStreamRow =
   | {
       kind: 'user';
       key: string;
@@ -40,16 +71,14 @@ type Row =
   | {
       kind: 'assistant';
       key: string;
-      payload: AssistantMessagePayload;
-      streaming?: boolean;
-      liveText?: string;
-      liveReasoning?: string;
-      nodeId?: string;
-      branch?: { index: number; count: number };
-      citations?: { url: string }[];
+      segments: AssistantSegment[];
+      historical?: boolean;
+      startedAt?: number;
+      endedAt?: number;
     }
-  | { kind: 'tools'; key: string; cards: ToolCardData[]; historical?: boolean }
   | { kind: 'notice'; key: string; text: string };
+
+type Row = MessageStreamRow;
 
 /** URLs the agent visited this turn — from navigate/open_tab tool params. */
 function citationUrl(toolName: string, params: unknown): string | null {
@@ -58,20 +87,55 @@ function citationUrl(toolName: string, params: unknown): string | null {
   return typeof url === 'string' && /^https?:/.test(url) ? url : null;
 }
 
+function assistantMessageHasContent(payload: AssistantMessagePayload): boolean {
+  return (
+    Boolean(payload.reasoning?.trim()) ||
+    payload.content.some((content) => content.type === 'text' && content.text.trim() !== '')
+  );
+}
+
 export function buildRows(items: SnapshotItem[], liveItems: LiveItem[]): Row[] {
   const rows: Row[] = [];
-  const resultByItemId = new Map<string, ToolResultPayload>();
+  const resultByItemId = new Map<string, { payload: ToolResultPayload; ts: number }>();
   for (const item of items) {
     if (item.kind === 'tool_result') {
       const p = item.payload as ToolResultPayload;
-      resultByItemId.set(p.itemId, p);
+      resultByItemId.set(p.itemId, { payload: p, ts: item.ts });
     }
   }
 
-  const pushCard = (card: ToolCardData) => {
+  const ensureAssistantRow = (
+    key: string,
+    startedAt?: number,
+    endedAt = startedAt,
+  ): Extract<Row, { kind: 'assistant' }> => {
     const last = rows[rows.length - 1];
+    if (last?.kind === 'assistant') {
+      if (startedAt !== undefined)
+        last.startedAt = Math.min(last.startedAt ?? startedAt, startedAt);
+      if (endedAt !== undefined) last.endedAt = Math.max(last.endedAt ?? endedAt, endedAt);
+      return last;
+    }
+    const row: Extract<Row, { kind: 'assistant' }> = {
+      kind: 'assistant',
+      key: `assistant:${key}`,
+      segments: [],
+      startedAt,
+      endedAt,
+    };
+    rows.push(row);
+    return row;
+  };
+
+  const pushMessage = (segment: AssistantMessageSegment, ts?: number) => {
+    ensureAssistantRow(segment.key, ts).segments.push(segment);
+  };
+
+  const pushCard = (card: ToolCardData, startedAt?: number, endedAt = startedAt) => {
+    const assistant = ensureAssistantRow(card.itemId, startedAt, endedAt);
+    const last = assistant.segments[assistant.segments.length - 1];
     if (last?.kind === 'tools') last.cards.push(card);
-    else rows.push({ kind: 'tools', key: card.itemId, cards: [card] });
+    else assistant.segments.push({ kind: 'tools', key: card.itemId, cards: [card] });
   };
 
   // Visited URLs accumulate per turn; the turn's closing assistant message
@@ -92,17 +156,19 @@ export function buildRows(items: SnapshotItem[], liveItems: LiveItem[]): Row[] {
         break;
       case 'assistant_message': {
         const p = item.payload as AssistantMessagePayload;
-        // Skip empty assistant shells (tool-call-only responses).
-        if (p.content.some((c) => c.type === 'text' && c.text.trim() !== '')) {
+        if (assistantMessageHasContent(p)) {
           const citations = [...new Set(turnUrls)].map((url) => ({ url }));
-          rows.push({
-            kind: 'assistant',
-            key: item.nodeId,
-            payload: p,
-            nodeId: item.nodeId,
-            branch: item.branch,
-            citations: citations.length > 0 ? citations : undefined,
-          });
+          pushMessage(
+            {
+              kind: 'message',
+              key: item.nodeId,
+              payload: p,
+              nodeId: item.nodeId,
+              branch: item.branch,
+              citations: citations.length > 0 ? citations : undefined,
+            },
+            item.ts,
+          );
         }
         break;
       }
@@ -111,18 +177,24 @@ export function buildRows(items: SnapshotItem[], liveItems: LiveItem[]): Row[] {
         const visited = citationUrl(p.toolName, p.params);
         if (visited) turnUrls.push(visited);
         const result = resultByItemId.get(p.itemId);
-        pushCard({
-          itemId: p.itemId,
-          toolName: p.toolName,
-          label: p.toolName,
-          status: result ? (result.ok ? 'ok' : 'fail') : 'pending',
-          params: p.params,
-          paramsSummary: summarizeParams(p.params),
-          resultText: result
-            ? result.contentForLlm.map((c) => (c.type === 'text' ? c.text : '[image]')).join('\n')
-            : undefined,
-          details: result?.details,
-        });
+        pushCard(
+          {
+            itemId: p.itemId,
+            toolName: p.toolName,
+            label: p.toolName,
+            status: result ? (result.payload.ok ? 'ok' : 'fail') : 'pending',
+            params: p.params,
+            paramsSummary: summarizeParams(p.params),
+            resultText: result
+              ? result.payload.contentForLlm
+                  .map((c) => (c.type === 'text' ? c.text : '[image]'))
+                  .join('\n')
+              : undefined,
+            details: result?.payload.details,
+          },
+          item.ts,
+          result?.ts ?? item.ts,
+        );
         break;
       }
       case 'system_notice':
@@ -138,10 +210,8 @@ export function buildRows(items: SnapshotItem[], liveItems: LiveItem[]): Row[] {
     }
   }
 
-  // Historical-turn tool fold (LobeChat process-fold, docs/09 §4.2): tools
-  // rows BEFORE the last user message belong to completed turns — collapse
-  // them to a one-line summary. The latest turn's cards stay expanded
-  // (safety-visibility posture); approval rows never participate.
+  // Tool activity inside completed turns folds to a summary. The latest turn
+  // remains inspectable while it is active; approval rows never participate.
   let lastUserIdx = -1;
   for (let i = rows.length - 1; i >= 0; i--) {
     if (rows[i]!.kind === 'user') {
@@ -151,7 +221,12 @@ export function buildRows(items: SnapshotItem[], liveItems: LiveItem[]): Row[] {
   }
   for (let i = 0; i < lastUserIdx; i++) {
     const row = rows[i]!;
-    if (row.kind === 'tools') row.historical = true;
+    if (row.kind === 'assistant') {
+      row.historical = true;
+      for (const segment of row.segments) {
+        if (segment.kind === 'tools') segment.historical = true;
+      }
+    }
   }
 
   // Live overlay: user echo / streaming assistant text / running tools.
@@ -172,8 +247,8 @@ export function buildRows(items: SnapshotItem[], liveItems: LiveItem[]): Row[] {
       }
     } else if (live.kind === 'assistant_message') {
       if (live.text || live.reasoning) {
-        rows.push({
-          kind: 'assistant',
+        pushMessage({
+          kind: 'message',
           key: live.itemId,
           payload: { content: [], model: '', connectionId: '' },
           streaming: live.status === 'streaming',
@@ -211,7 +286,7 @@ interface Props {
   liveItems: LiveItem[];
   threadId?: string | null;
   /** Branch switch handler (thread.selectBranch); absent in previews. */
-  onSelectBranch?: (nodeId: string) => void;
+  onSelectBranch?: (expectedThreadId: string, nodeId: string) => void;
   /** Branch-and-run: fork at the node with the given input text (turn.fork). */
   onForkAt?: (siblingOfNodeId: string, text: string) => void;
   /** A turn is running — regenerate/edit are disabled (fork rejects busy). */
@@ -242,13 +317,20 @@ export function MessageStream({
   const lastBranchNodeId = useMemo(() => {
     for (let i = rows.length - 1; i >= 0; i--) {
       const r = rows[i]!;
-      if (
-        (r.kind === 'user' || r.kind === 'assistant') &&
-        r.branch &&
-        r.branch.count > 1 &&
-        r.nodeId
-      )
-        return r.nodeId;
+      if (r.kind === 'user' && r.branch && r.branch.count > 1 && r.nodeId) return r.nodeId;
+      if (r.kind === 'assistant') {
+        for (let j = r.segments.length - 1; j >= 0; j--) {
+          const segment = r.segments[j]!;
+          if (
+            segment.kind === 'message' &&
+            segment.branch &&
+            segment.branch.count > 1 &&
+            segment.nodeId
+          ) {
+            return segment.nodeId;
+          }
+        }
+      }
     }
     return null;
   }, [rows]);
@@ -263,7 +345,11 @@ export function MessageStream({
     let last: { nodeId: string; text: string } | null = null;
     for (const r of rows) {
       if (r.kind === 'user' && r.nodeId) last = { nodeId: r.nodeId, text: userText(r.payload) };
-      else if (r.kind === 'assistant' && r.nodeId && last) map.set(r.nodeId, last);
+      else if (r.kind === 'assistant' && last) {
+        for (const segment of r.segments) {
+          if (segment.kind === 'message' && segment.nodeId) map.set(segment.nodeId, last);
+        }
+      }
     }
     return map;
   }, [rows]);
@@ -285,6 +371,7 @@ export function MessageStream({
     lastMessageKey,
     editingNodeId,
     setEditingNodeId,
+    turnActive: Boolean(turnActive),
   };
 
   // Zero-row case is handled by ThreadView's <EmptyState> before this
@@ -312,7 +399,12 @@ export function MessageStream({
         className="h-full"
         itemContent={(_, row) => (
           <div
-            className="mx-auto w-full px-4 py-3"
+            className={cn(
+              'mx-auto w-full px-4',
+              row.kind === 'user' && 'pb-2 pt-5',
+              row.kind === 'assistant' && 'pb-5 pt-2',
+              row.kind === 'notice' && 'py-2',
+            )}
             style={contentMaxWidth ? { maxWidth: contentMaxWidth } : undefined}
           >
             {renderRow(row, ctx)}
@@ -320,7 +412,9 @@ export function MessageStream({
         )}
       />
       {!atBottom && (
-        <button
+        <Button
+          variant="outline"
+          size="sm"
           type="button"
           onClick={() =>
             virtuosoRef.current?.scrollToIndex({
@@ -329,10 +423,10 @@ export function MessageStream({
               behavior: 'smooth',
             })
           }
-          className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-border-soft bg-card px-3 py-1 text-[11px] text-muted-foreground shadow-pop transition-colors hover:bg-muted"
+          className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full"
         >
           {t('stream.backToBottom')}
-        </button>
+        </Button>
       )}
     </div>
   );
@@ -344,18 +438,19 @@ function userText(payload: UserMessagePayload): string {
 
 interface RowCtx {
   threadId: string | null;
-  onSelectBranch?: (nodeId: string) => void;
+  onSelectBranch?: (expectedThreadId: string, nodeId: string) => void;
   /** undefined while a turn is active (fork rejects busy threads). */
   onForkAt?: (siblingOfNodeId: string, text: string) => void;
   precedingUser: Map<string, { nodeId: string; text: string }>;
   lastMessageKey: string | null;
   editingNodeId: string | null;
   setEditingNodeId: (id: string | null) => void;
+  turnActive: boolean;
 }
 
 function renderRow(row: Row, ctx: RowCtx) {
   const { threadId, onSelectBranch, onForkAt } = ctx;
-  const branchSwitcher = (r: Extract<Row, { kind: 'user' | 'assistant' }>) =>
+  const branchSwitcher = (r: Extract<Row, { kind: 'user' }> | AssistantMessageSegment) =>
     r.branch && r.branch.count > 1 && r.nodeId && threadId && onSelectBranch ? (
       <BranchSwitcher
         threadId={threadId}
@@ -381,90 +476,265 @@ function renderRow(row: Row, ctx: RowCtx) {
         );
       }
       return (
-        <div className="group/msg flex flex-col items-end">
-          <div className="max-w-[85%] rounded-2xl rounded-br-md bg-user-bubble px-4 py-2.5 text-[14.5px] leading-[1.65]">
-            {row.payload.attachedContext && row.payload.attachedContext.length > 0 && (
-              <div className="mb-1.5 flex flex-wrap gap-1">
-                {row.payload.attachedContext.map((block, i) => (
-                  <span
-                    key={i}
-                    className="inline-flex items-center gap-1 rounded-full bg-foreground/10 px-2 py-0.5 text-[11px] text-muted-foreground"
-                  >
-                    📎 {block.label}
-                  </span>
-                ))}
-              </div>
-            )}
-            <div className="whitespace-pre-wrap">{text}</div>
-          </div>
-          <div className="flex items-center gap-1">
-            {branchSwitcher(row)}
-            <MessageActions
-              role="user"
-              text={text}
-              align="end"
-              isLast={row.key === ctx.lastMessageKey}
-              onEdit={row.nodeId && onForkAt ? () => ctx.setEditingNodeId(row.nodeId!) : undefined}
-            />
-          </div>
-        </div>
+        <Message align="end" className="group/msg">
+          <MessageContent className="max-w-[88%] gap-1.5">
+            <Bubble variant="tinted" align="end" className="max-w-full">
+              <BubbleContent className="rounded-br-sm px-4 py-2.5 text-[14.5px] leading-[1.65]">
+                {row.payload.attachedContext && row.payload.attachedContext.length > 0 && (
+                  <div className="mb-2 flex flex-wrap gap-1.5">
+                    {row.payload.attachedContext.map((block, i) => (
+                      <Badge key={i} variant="secondary" className="max-w-full">
+                        <Paperclip />
+                        <span className="truncate">{block.label}</span>
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+                <div className="break-words whitespace-pre-wrap [overflow-wrap:anywhere]">
+                  {text}
+                </div>
+              </BubbleContent>
+            </Bubble>
+            <MessageFooter className="gap-1 px-1">
+              {branchSwitcher(row)}
+              <MessageActions
+                role="user"
+                text={text}
+                align="end"
+                isLast={row.key === ctx.lastMessageKey}
+                onEdit={
+                  row.nodeId && onForkAt ? () => ctx.setEditingNodeId(row.nodeId!) : undefined
+                }
+              />
+            </MessageFooter>
+          </MessageContent>
+        </Message>
       );
     }
     case 'assistant': {
-      // Live rows (streaming or completed-awaiting-snapshot) carry their text
-      // in liveText; persisted rows in payload.content.
-      // Codex-style flat turn: no per-message avatar — the user bubble on the
-      // right already marks turn boundaries; repeating an agent icon beside
-      // every reasoning/answer block is noise in multi-step turns.
-      const text =
-        row.liveText ?? row.payload.content.map((c) => (c.type === 'text' ? c.text : '')).join('');
-      const reasoning = row.liveReasoning || row.payload.reasoning;
-      // Reasoning precedes text in the stream: once answer text arrives the
-      // thinking phase is OVER — collapse it even though the row still streams.
-      const reasoningLive = Boolean(row.streaming) && !text;
-      return (
-        <div className="group/msg min-w-0">
-          {reasoning && <ReasoningBlock text={reasoning} streaming={reasoningLive} />}
-          <Markdown content={text} streaming={row.streaming} />
-          {row.streaming && !text && (
-            <span className="inline-block h-4 w-[3px] animate-[blink_1s_ease-in-out_infinite] rounded-full bg-primary align-middle" />
-          )}
-          {!row.streaming && row.citations && <CitationsPill citations={row.citations} />}
-          {!row.streaming && (
-            <div className="flex items-center gap-1">
-              <MessageActions
-                role="assistant"
-                text={text}
-                isLast={row.key === ctx.lastMessageKey}
-                usage={row.payload.usage}
-                model={row.payload.model || undefined}
-                onRegenerate={
-                  row.nodeId && onForkAt && ctx.precedingUser.get(row.nodeId)
-                    ? () => {
-                        const u = ctx.precedingUser.get(row.nodeId!)!;
-                        onForkAt(u.nodeId, u.text);
-                      }
-                    : undefined
-                }
-              />
-              {branchSwitcher(row)}
-            </div>
-          )}
-        </div>
-      );
+      return <AssistantResponse row={row} ctx={ctx} branchSwitcher={branchSwitcher} />;
     }
-    case 'tools':
-      // Full-width with the flat assistant turns (avatar indent is gone).
-      return <ToolCallGroup cards={row.cards} historical={row.historical} />;
     case 'notice':
       return (
         <div className="flex justify-center">
-          <div className="rounded-full border border-border-soft bg-card px-3 py-1 text-[11px] text-faint-foreground">
+          <Badge variant="outline" className="max-w-full whitespace-normal text-center">
             {row.text}
-          </div>
+          </Badge>
         </div>
       );
   }
+}
+
+function segmentText(segment: AssistantMessageSegment): string {
+  return (
+    segment.liveText ??
+    segment.payload.content.map((content) => (content.type === 'text' ? content.text : '')).join('')
+  );
+}
+
+function segmentReasoning(segment: AssistantMessageSegment): string {
+  return segment.liveReasoning ?? segment.payload.reasoning ?? '';
+}
+
+function formatTurnDuration(startedAt?: number, endedAt?: number): string | null {
+  if (startedAt === undefined || endedAt === undefined || endedAt - startedAt < 1000) return null;
+  const totalSeconds = Math.round((endedAt - startedAt) / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return [hours > 0 ? `${hours}h` : '', minutes > 0 ? `${minutes}m` : '', `${seconds}s`]
+    .filter(Boolean)
+    .join(' ');
+}
+
+export function partitionAssistantSegments(
+  row: Extract<MessageStreamRow, { kind: 'assistant' }>,
+  running: boolean,
+) {
+  const displaySegments = row.segments.filter(
+    (segment) =>
+      segment.kind === 'tools' ||
+      segmentText(segment).length > 0 ||
+      segmentReasoning(segment).length > 0,
+  );
+  const messages = displaySegments.filter(
+    (segment): segment is AssistantMessageSegment => segment.kind === 'message',
+  );
+  const resultMessage = running
+    ? undefined
+    : [...messages].reverse().find((message) => segmentText(message).trim().length > 0);
+  const processSegments = displaySegments.filter(
+    (segment) =>
+      segment.kind === 'tools' ||
+      segment !== resultMessage ||
+      segmentReasoning(segment).trim().length > 0,
+  );
+
+  return { processSegments, resultMessage };
+}
+
+function AssistantResponse({
+  row,
+  ctx,
+  branchSwitcher,
+}: {
+  row: Extract<Row, { kind: 'assistant' }>;
+  ctx: RowCtx;
+  branchSwitcher: (segment: AssistantMessageSegment) => React.ReactNode;
+}) {
+  const messages = row.segments.filter(
+    (segment): segment is AssistantMessageSegment => segment.kind === 'message',
+  );
+  const finalMessage = messages[messages.length - 1];
+  const responseText = messages.map(segmentText).filter(Boolean).join('\n\n');
+  const running =
+    (ctx.turnActive && row.key === ctx.lastMessageKey) ||
+    row.segments.some(
+      (segment) =>
+        (segment.kind === 'message' && segment.streaming) ||
+        (segment.kind === 'tools' &&
+          segment.cards.some((card) => card.status === 'pending' || card.status === 'running')),
+    );
+  const citations = Array.from(
+    new Map(
+      messages
+        .flatMap((message) => message.citations ?? [])
+        .map((citation) => [citation.url, citation]),
+    ).values(),
+  );
+  const regenerateFrom =
+    finalMessage?.nodeId && ctx.onForkAt ? ctx.precedingUser.get(finalMessage.nodeId) : undefined;
+  const { processSegments, resultMessage } = partitionAssistantSegments(row, running);
+  const durationLabel = running ? null : formatTurnDuration(row.startedAt, row.endedAt);
+  const [manualProcessOpen, setManualProcessOpen] = useState<boolean | null>(null);
+  const processOpen = manualProcessOpen ?? running;
+
+  return (
+    <Message className="group/msg">
+      <MessageContent className="gap-1.5">
+        <Bubble variant="ghost" className="w-full max-w-full">
+          <BubbleContent className="w-full px-0 py-0">
+            <div className="flex min-w-0 flex-col">
+              {processSegments.length > 0 && (
+                <Collapsible open={processOpen} onOpenChange={setManualProcessOpen}>
+                  <CollapsibleTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="group/process h-auto w-full justify-start rounded-none px-0 py-2 text-muted-foreground hover:bg-transparent hover:text-foreground"
+                    >
+                      {running && <Spinner data-icon="inline-start" />}
+                      <span>{running ? t('stream.working') : t('stream.completed')}</span>
+                      {durationLabel && <span className="text-xs opacity-70">{durationLabel}</span>}
+                      <ChevronRight
+                        data-icon="inline-end"
+                        className="opacity-60 transition-transform group-data-[state=open]/process:rotate-90"
+                      />
+                    </Button>
+                  </CollapsibleTrigger>
+                  <Separator />
+                  <CollapsibleContent>
+                    <div className="flex min-w-0 flex-col gap-4 py-4">
+                      {processSegments.map((segment) => (
+                        <div key={segment.key} className="min-w-0">
+                          {segment.kind === 'tools' ? (
+                            <ToolCallGroup
+                              cards={segment.cards}
+                              historical={!running || segment.historical}
+                            />
+                          ) : (
+                            <AssistantTimelineMessage
+                              segment={segment}
+                              showText={segment !== resultMessage}
+                            />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
+              )}
+              {running && processSegments.length === 0 && (
+                <div
+                  className="flex items-center gap-2 py-2 text-sm text-muted-foreground"
+                  role="status"
+                >
+                  <Spinner />
+                  {t('stream.working')}
+                </div>
+              )}
+              {resultMessage && (
+                <div className={cn('min-w-0', processSegments.length > 0 && 'pt-4')}>
+                  <AssistantMessageContent segment={resultMessage} />
+                </div>
+              )}
+            </div>
+          </BubbleContent>
+        </Bubble>
+        {!running && finalMessage && (
+          <MessageFooter className="min-h-7 justify-between gap-2 px-0">
+            <div className="min-w-0">
+              {citations.length > 0 && <CitationsPill citations={citations} />}
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              <MessageActions
+                role="assistant"
+                text={responseText}
+                isLast={row.key === ctx.lastMessageKey}
+                usage={finalMessage.payload.usage}
+                model={finalMessage.payload.model || undefined}
+                onRegenerate={
+                  regenerateFrom && ctx.onForkAt
+                    ? () => ctx.onForkAt!(regenerateFrom.nodeId, regenerateFrom.text)
+                    : undefined
+                }
+              />
+              {branchSwitcher(finalMessage)}
+            </div>
+          </MessageFooter>
+        )}
+      </MessageContent>
+    </Message>
+  );
+}
+
+function AssistantTimelineMessage({
+  segment,
+  showText = true,
+}: {
+  segment: AssistantMessageSegment;
+  showText?: boolean;
+}) {
+  const reasoning = segmentReasoning(segment);
+  const text = segmentText(segment);
+
+  return (
+    <div className="flex min-w-0 flex-col gap-3">
+      {reasoning && (
+        <ReasoningBlock
+          text={reasoning}
+          streaming={Boolean(segment.streaming) && text.length === 0}
+        />
+      )}
+      {showText && text && <AssistantMessageContent segment={segment} />}
+    </div>
+  );
+}
+
+function AssistantMessageContent({ segment }: { segment: AssistantMessageSegment }) {
+  const text = segmentText(segment);
+
+  return (
+    <div className="min-w-0">
+      {text && <Markdown content={text} streaming={segment.streaming} />}
+      {segment.streaming && !text && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
+          <Spinner />
+          {t('stream.working')}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -492,31 +762,37 @@ function EditInPlace({
     if (value.trim()) onResend(value.trim());
   };
   return (
-    <div className="w-full rounded-2xl bg-muted px-4 py-3">
-      <textarea
-        ref={ref}
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-          if (e.key === 'Escape') onCancel();
-          else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-            e.preventDefault();
-            resend();
-          }
-        }}
-        rows={Math.min(10, Math.max(2, value.split('\n').length))}
-        className="w-full resize-none bg-transparent text-[14.5px] leading-[1.65] outline-none"
-      />
-      <div className="mt-2 flex items-center justify-end gap-2">
+    <Card className="w-full gap-0 overflow-hidden py-0 shadow-soft">
+      <CardHeader className="sr-only">
+        <CardTitle>{t('actions.edit')}</CardTitle>
+        <CardDescription>{t('actions.editHint')}</CardDescription>
+      </CardHeader>
+      <CardContent className="px-3 py-3">
+        <Textarea
+          ref={ref}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+            if (e.key === 'Escape') onCancel();
+            else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+              e.preventDefault();
+              resend();
+            }
+          }}
+          rows={Math.min(10, Math.max(2, value.split('\n').length))}
+          className="w-full resize-none border-0 bg-transparent shadow-none focus-visible:ring-0"
+        />
+      </CardContent>
+      <CardFooter className="justify-end gap-2 border-t border-border-soft bg-muted/40 px-3 py-2">
         <span className="mr-auto text-[11px] text-faint-foreground">{t('actions.editHint')}</span>
-        <Button variant="outline" size="sm" className="h-7 text-[12px]" onClick={onCancel}>
+        <Button variant="outline" size="sm" onClick={onCancel}>
           {t('app.cancel')}
         </Button>
-        <Button size="sm" className="h-7 text-[12px]" disabled={!value.trim()} onClick={resend}>
+        <Button size="sm" disabled={!value.trim()} onClick={resend}>
           {t('actions.resend')}
         </Button>
-      </div>
-    </div>
+      </CardFooter>
+    </Card>
   );
 }

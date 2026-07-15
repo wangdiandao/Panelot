@@ -1,42 +1,73 @@
 import { describe, expect, it } from 'vitest';
-import { buildInstallPlan, PluginManifest, type PluginContents } from '../../src/plugins/manifest';
-import { parseSkill } from '../../src/skills/parse';
+import {
+  freezeInstallPlan,
+  parsePluginManifest,
+  type PluginInstallPlan,
+} from '../../src/plugins/manifest';
 
-const skillName = (raw: string) => parseSkill(raw).frontmatter.name;
-
-describe('buildInstallPlan (docs/08 §5)', () => {
-  const contents: PluginContents = {
-    manifest: { name: 'shopping-helper', version: '1.0.0', description: '购物助手' },
-    skills: [
-      '---\nname: price-compare\ndescription: 比价\n---\n比价指令',
-      '---\nname: coupon-finder\ndescription: 找券\n---\n找券指令',
-    ],
-    mcpJson: JSON.stringify({ mcpServers: { prices: { url: 'https://mcp.prices.example/mcp' } } }),
-    rules: [
-      { tool: 'click', origin: 'https://shop.example.com', verdict: 'allow' },
-      { tool: 'run_javascript', origin: '*', verdict: 'deny' },
-    ],
-    sitePrompts: { 'shop.example.com': '优先展示带图评价' },
-  };
-
-  it('lists everything that will be written', () => {
-    const plan = buildInstallPlan(contents, skillName);
-    expect(plan.skillNames).toEqual(['price-compare', 'coupon-finder']);
-    expect(plan.mcpServerNames).toEqual(['prices']);
-    expect(plan.ruleCount).toBe(2);
-    expect(plan.sitePromptPatterns).toEqual(['shop.example.com']);
+describe('canonical plugin manifest', () => {
+  it('accepts only the production plugin.json contract', () => {
+    expect(
+      parsePluginManifest({
+        id: 'shopping-helper',
+        name: 'Shopping Helper',
+        version: '1.0.0',
+        assets: [{ path: 'skills/compare/SKILL.md', kind: 'skill' }],
+      }),
+    ).toMatchObject({ id: 'shopping-helper', version: '1.0.0' });
+    expect(() =>
+      parsePluginManifest({
+        name: 'old-schema',
+        version: '1.0.0',
+        mcpServers: {},
+      }),
+    ).toThrow(/unsupported|id/i);
   });
 
-  it('downgrades plugin-suggested allow rules to ask (trust boundary)', () => {
-    const plan = buildInstallPlan(contents, skillName);
-    const clickRule = plan.effectiveRules.find((r) => r.tool === 'click')!;
-    expect(clickRule.verdict).toBe('ask'); // NOT allow
-    const denyRule = plan.effectiveRules.find((r) => r.tool === 'run_javascript')!;
-    expect(denyRule.verdict).toBe('deny'); // deny is preserved
+  it('rejects unsupported manifest and asset fields instead of hiding them', () => {
+    expect(() =>
+      parsePluginManifest({
+        id: 'unsafe-plugin',
+        name: 'Unsafe',
+        version: '1.0.0',
+        assets: [],
+        rules: [{ verdict: 'allow' }],
+      }),
+    ).toThrow(/unsupported field: rules/i);
+    expect(() =>
+      parsePluginManifest({
+        id: 'unsafe-plugin',
+        name: 'Unsafe',
+        version: '1.0.0',
+        assets: [{ path: 'prompt.md', kind: 'other', execute: true }],
+      }),
+    ).toThrow(/unsupported field: execute/i);
   });
 
-  it('validates the manifest schema', () => {
-    expect(PluginManifest.safeParse({ name: 'x', version: '1.0.0' }).success).toBe(true);
-    expect(PluginManifest.safeParse({ version: '1.0.0' }).success).toBe(false);
+  it('deep-freezes install plans used by the confirmation boundary', () => {
+    const plan = freezeInstallPlan({
+      format: 'panelot-plugin-install-plan',
+      digest: 'sha256:abc',
+      analyzedAt: 1,
+      expiresAt: 2,
+      source: { kind: 'zip', label: 'plugin.zip' },
+      operation: 'install',
+      manifest: {
+        id: 'example-plugin',
+        name: 'Example',
+        version: '1.0.0',
+        assets: [{ path: 'prompt.md', kind: 'other' }],
+      },
+      assets: [],
+      skills: [],
+      presets: [],
+      siteInstructions: [],
+      warnings: [],
+    } satisfies PluginInstallPlan);
+
+    expect(Object.isFrozen(plan)).toBe(true);
+    expect(Object.isFrozen(plan.manifest)).toBe(true);
+    expect(Object.isFrozen(plan.manifest.assets)).toBe(true);
+    expect(Object.isFrozen(plan.manifest.assets[0])).toBe(true);
   });
 });

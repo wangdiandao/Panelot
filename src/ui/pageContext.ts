@@ -5,7 +5,11 @@
  * this stays as the cheap "ask about this page" path.
  */
 
-import type { ContextBlock } from '../messaging/protocol';
+import type {
+  BrowserTabIdentity,
+  ContextBlock,
+  SubmissionBrowserContext,
+} from '../messaging/protocol';
 
 /** Rough token estimate (~4 chars/token). */
 const approxTokens = (s: string) => Math.ceil(s.length / 4);
@@ -39,6 +43,36 @@ export async function getActiveTab(): Promise<chrome.tabs.Tab | null> {
   return web[0] ?? null;
 }
 
+function tabIdentity(tab: chrome.tabs.Tab): BrowserTabIdentity | undefined {
+  if (tab.id === undefined || !tab.url || !/^https?:/.test(tab.url)) return undefined;
+  return { tabId: tab.id, url: tab.url, title: tab.title ?? tab.url };
+}
+
+export async function captureSubmissionBrowserContext(
+  contexts: ContextBlock[] = [],
+): Promise<SubmissionBrowserContext> {
+  const referencedTabs = [
+    ...new Map(
+      contexts
+        .filter((context) => context.tab)
+        .map((context) => [context.tab!.tabId, context.tab!]),
+    ).values(),
+  ];
+  let active: chrome.tabs.Tab | null = null;
+  if (referencedTabs.length === 0) {
+    try {
+      active = await getActiveTab();
+    } catch {
+      // Non-extension render/test environments have no tabs API.
+    }
+  }
+  return {
+    capturedAt: Date.now(),
+    defaultTab: referencedTabs[0] ?? (active ? tabIdentity(active) : undefined),
+    referencedTabs,
+  };
+}
+
 /** Extract a tab's readable text as a context block (null if not scriptable). */
 async function attachTabById(
   tabId: number,
@@ -59,6 +93,7 @@ async function attachTabById(
       kind,
       label: page.title || new URL(page.url).hostname,
       origin: new URL(page.url).origin,
+      tab: { tabId, url: page.url, title: page.title || page.url },
       content: [{ type: 'text', text: `Page: ${page.title}\nURL: ${page.url}\n\n${clipped}` }],
       approxTokens: approxTokens(clipped),
     };
@@ -99,13 +134,14 @@ export async function attachScreenshot(): Promise<ContextBlock | null> {
   try {
     const tab = await getActiveTab();
     if (!tab?.url || !/^https?:/.test(tab.url)) return null;
-    const dataUrl = await chrome.tabs.captureVisibleTab({ format: 'png' });
+    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
     const base64 = dataUrl.split(',')[1];
     if (!base64) return null;
     return {
       kind: 'screenshot',
       label: `截图 (${tab.title ?? '当前页'})`,
       origin: new URL(tab.url).origin,
+      tab: tabIdentity(tab),
       content: [{ type: 'image', mime: 'image/png', data: base64 }],
       approxTokens: 1100, // rough vision-token estimate for a viewport shot
     };
@@ -117,10 +153,18 @@ export async function attachScreenshot(): Promise<ContextBlock | null> {
 /** Attach the current selection, if any. */
 export async function attachSelection(): Promise<ContextBlock | null> {
   const tab = await getActiveTab();
-  if (!tab?.id || !tab.url || !/^https?:/.test(tab.url)) return null;
+  const identity = tab ? tabIdentity(tab) : undefined;
+  return identity ? attachSelectionFromTab(identity) : null;
+}
+
+/** Attach the selection from the exact tab captured for this submission. */
+export async function attachSelectionFromTab(
+  tab: BrowserTabIdentity,
+): Promise<ContextBlock | null> {
+  if (!/^https?:/.test(tab.url)) return null;
   try {
     const [result] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
+      target: { tabId: tab.tabId },
       func: () => ({
         text: window.getSelection()?.toString() ?? '',
         title: document.title,
@@ -133,6 +177,7 @@ export async function attachSelection(): Promise<ContextBlock | null> {
       kind: 'selection',
       label: `选中文本 (${sel.title})`,
       origin: new URL(sel.url).origin,
+      tab: { tabId: tab.tabId, url: sel.url, title: sel.title || sel.url },
       content: [{ type: 'text', text: `Selection from ${sel.url}:\n\n${sel.text}` }],
       approxTokens: approxTokens(sel.text),
     };

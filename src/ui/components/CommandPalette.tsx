@@ -67,14 +67,21 @@ export function CommandPalette({
   const [query, setQuery] = useState('');
   const [hits, setHits] = useState<ThreadSearchHit[]>([]);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchGeneration = useRef(0);
 
   // Debounced full-text search (300ms — body scan hits IndexedDB).
   useEffect(() => {
-    if (!open) return;
+    const generation = ++searchGeneration.current;
+    if (!open) {
+      setHits([]);
+      return;
+    }
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(
       () => {
-        void searchThreads(db, query).then(setHits);
+        void searchThreads(db, query).then((nextHits) => {
+          if (searchGeneration.current === generation) setHits(nextHits);
+        });
       },
       query.trim() ? 300 : 0,
     );
@@ -120,13 +127,13 @@ export function CommandPalette({
           <CommandGroup heading={t('palette.actions')}>
             {actionMatch(t('app.newChat')) && (
               <CommandItem value="__new__" onSelect={runAndClose(onNewThread)}>
-                <Plus className="size-4" /> {t('app.newChat')}
+                <Plus /> {t('app.newChat')}
                 <span className="ml-auto text-[11px] text-faint-foreground">Ctrl+N</span>
               </CommandItem>
             )}
             {actionMatch(t('app.settings')) && (
               <CommandItem value="__settings__" onSelect={runAndClose(() => onOpenSettings())}>
-                <Settings className="size-4" /> {t('app.settings')}
+                <Settings /> {t('app.settings')}
                 <span className="ml-auto text-[11px] text-faint-foreground">Ctrl+,</span>
               </CommandItem>
             )}
@@ -150,7 +157,7 @@ export function CommandPalette({
               value={thread.id}
               onSelect={runAndClose(() => onOpenThread(thread.id))}
             >
-              <MessageSquare className="size-4 shrink-0 text-muted-foreground" />
+              <MessageSquare />
               <div className="flex min-w-0 flex-col">
                 <span className="truncate">
                   <Highlight text={thread.title || t('app.untitled')} query={query} />

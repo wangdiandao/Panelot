@@ -16,7 +16,7 @@
  * column is exactly: new chat, search, list.
  */
 
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import {
   ChevronDown,
   Ellipsis,
@@ -34,9 +34,12 @@ import {
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
+import { InputGroup, InputGroupAddon, InputGroupInput } from './ui/input-group';
+import { Separator } from './ui/separator';
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
@@ -44,6 +47,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { cn } from '../lib/utils';
 import { t } from '../i18n';
+import { handoffMenuCloseToApproval } from '../focusHandoff';
 import type { ThreadMeta } from '../../db/types';
 import {
   SIDEBAR_DEFAULT,
@@ -120,7 +124,18 @@ export interface ThreadActivity {
   pendingApprovals: number;
 }
 
+interface SidebarDragState {
+  pointerId: number;
+  startX: number;
+  startWidth: number;
+  lastWidth: number;
+  target: HTMLElement;
+  bodyUserSelect: string;
+  bodyCursor: string;
+}
+
 interface Props {
+  variant?: 'desktop' | 'mobile';
   threads: ThreadMeta[];
   activeThreadId: string | null;
   seen: Record<string, number>;
@@ -145,6 +160,7 @@ interface Props {
 }
 
 export function ThreadSidebar({
+  variant = 'desktop',
   threads,
   activeThreadId,
   seen,
@@ -167,7 +183,13 @@ export function ThreadSidebar({
   const [search, setSearch] = useState('');
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<ThreadMeta | null>(null);
-  const dragging = useRef(false);
+  const drag = useRef<SidebarDragState | null>(null);
+  const currentWidth = useRef(width);
+  const currentCollapsed = useRef(collapsed);
+  const widthCallbacks = useRef({ onWidthChange, onWidthCommit });
+  currentWidth.current = width;
+  currentCollapsed.current = collapsed;
+  widthCallbacks.current = { onWidthChange, onWidthCommit };
 
   // Live width rides a CSS variable on <html> so drag is a single style write
   // (OpenWebUI's trick) — React state only commits on release.
@@ -178,29 +200,63 @@ export function ThreadSidebar({
     );
   }, [width, collapsed]);
 
-  const startDrag = (e: React.PointerEvent) => {
+  const finishDrag = useCallback((commit: boolean) => {
+    const active = drag.current;
+    if (!active) return;
+    drag.current = null;
+    document.body.style.userSelect = active.bodyUserSelect;
+    document.body.style.cursor = active.bodyCursor;
+    if (active.target.hasPointerCapture(active.pointerId)) {
+      active.target.releasePointerCapture(active.pointerId);
+    }
+    if (commit) {
+      widthCallbacks.current.onWidthChange(active.lastWidth);
+      widthCallbacks.current.onWidthCommit(active.lastWidth);
+    } else {
+      document.documentElement.style.setProperty(
+        SIDEBAR_WIDTH_VAR,
+        `${currentCollapsed.current ? SIDEBAR_RAIL : clampSidebarWidth(currentWidth.current || SIDEBAR_DEFAULT)}px`,
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    const onWindowBlur = () => finishDrag(false);
+    window.addEventListener('blur', onWindowBlur);
+    return () => {
+      window.removeEventListener('blur', onWindowBlur);
+      finishDrag(false);
+    };
+  }, [finishDrag]);
+
+  useEffect(() => {
+    if (collapsed) finishDrag(false);
+  }, [collapsed, finishDrag]);
+
+  const startDrag = (e: React.PointerEvent<HTMLElement>) => {
     e.preventDefault();
-    dragging.current = true;
-    const startX = e.clientX;
-    const startW = clampSidebarWidth(width || SIDEBAR_DEFAULT);
+    finishDrag(false);
+    const target = e.currentTarget;
+    target.setPointerCapture(e.pointerId);
+    const startWidth = clampSidebarWidth(width || SIDEBAR_DEFAULT);
+    drag.current = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startWidth,
+      lastWidth: startWidth,
+      target,
+      bodyUserSelect: document.body.style.userSelect,
+      bodyCursor: document.body.style.cursor,
+    };
     document.body.style.userSelect = 'none';
     document.body.style.cursor = 'col-resize';
-    let lastW = startW;
-    const onMove = (ev: PointerEvent) => {
-      lastW = clampSidebarWidth(startW + (ev.clientX - startX));
-      document.documentElement.style.setProperty(SIDEBAR_WIDTH_VAR, `${lastW}px`);
-    };
-    const onUp = () => {
-      dragging.current = false;
-      document.body.style.userSelect = '';
-      document.body.style.cursor = '';
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      onWidthChange(lastW);
-      onWidthCommit(lastW);
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
+  };
+
+  const moveDrag = (e: React.PointerEvent<HTMLElement>) => {
+    const active = drag.current;
+    if (!active || active.pointerId !== e.pointerId) return;
+    active.lastWidth = clampSidebarWidth(active.startWidth + (e.clientX - active.startX));
+    document.documentElement.style.setProperty(SIDEBAR_WIDTH_VAR, `${active.lastWidth}px`);
   };
 
   const filtered = search.trim()
@@ -208,9 +264,9 @@ export function ThreadSidebar({
     : threads;
   const groups = groupThreads(filtered);
 
-  if (collapsed) {
+  if (collapsed && variant === 'desktop') {
     return (
-      <aside className="flex w-[var(--sidebar-width)] shrink-0 flex-col items-center gap-1 border-r border-border-soft bg-card py-3">
+      <aside className="hidden w-[var(--sidebar-width)] shrink-0 flex-col items-center gap-1 border-r border-border-soft bg-card py-3 lg:flex">
         {railButton(t('app.expandSidebar'), PanelLeftOpen, onToggleCollapsed)}
         {railButton(t('app.newChat'), Plus, onNewThread)}
         {railButton(t('app.searchThreads'), Search, () => {
@@ -225,41 +281,53 @@ export function ThreadSidebar({
   }
 
   return (
-    <aside className="relative flex w-[var(--sidebar-width)] shrink-0 flex-col border-r border-border-soft bg-card">
+    <aside
+      className={cn(
+        'relative min-h-0 shrink-0 flex-col bg-card',
+        variant === 'mobile'
+          ? 'flex h-full w-full'
+          : 'hidden w-[var(--sidebar-width)] border-r border-border-soft lg:flex',
+      )}
+    >
       <div className="flex items-center gap-1.5 p-3 pb-0">
         <Button
           variant="outline"
           className="h-8 min-w-0 flex-1 justify-start gap-2 text-[13px] font-medium"
           onClick={onNewThread}
         >
-          <Plus className="size-4" /> {t('app.newChat')}
+          <Plus data-icon="inline-start" /> {t('app.newChat')}
         </Button>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-8 shrink-0 text-muted-foreground"
-              aria-label={t('app.collapseSidebar')}
-              onClick={onToggleCollapsed}
-            >
-              <PanelLeftClose className="size-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>{t('app.collapseSidebar')}</TooltipContent>
-        </Tooltip>
+        {variant === 'desktop' && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="shrink-0"
+                aria-label={t('app.collapseSidebar')}
+                onClick={onToggleCollapsed}
+              >
+                <PanelLeftClose />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{t('app.collapseSidebar')}</TooltipContent>
+          </Tooltip>
+        )}
       </div>
       <div className="p-3 pb-1">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-faint-foreground" />
-          <Input
+        <InputGroup className="h-8 border-transparent bg-muted shadow-none">
+          <InputGroupAddon>
+            <Search aria-hidden="true" />
+          </InputGroupAddon>
+          <InputGroupInput
             ref={searchInputRef}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder={t('app.searchThreads')}
-            className="h-8 border-transparent bg-muted pl-8 text-[13px] shadow-none"
+            aria-label={t('app.searchThreads')}
+            className="text-[13px]"
           />
-        </div>
+        </InputGroup>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
@@ -268,11 +336,12 @@ export function ThreadSidebar({
           const collapsed = !search.trim() && collapsedGroups.includes(g.id);
           return (
             <div key={g.id} className="mb-3">
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => onToggleGroup?.(g.id)}
                 aria-expanded={!collapsed}
-                className="flex w-full items-center gap-1 rounded px-2 py-1 text-left text-[11px] font-medium uppercase tracking-wide text-faint-foreground hover:text-muted-foreground"
+                className="h-auto w-full justify-start"
               >
                 {t(`group.${g.id}`)}
                 {onToggleGroup && (
@@ -284,7 +353,7 @@ export function ThreadSidebar({
                   />
                 )}
                 {collapsed && <span className="ml-auto normal-case">{g.threads.length}</span>}
-              </button>
+              </Button>
               {!collapsed &&
                 g.threads.map((th) => (
                   <ThreadRow
@@ -316,35 +385,49 @@ export function ThreadSidebar({
       </div>
 
       {onOpenSettings && (
-        <div className="border-t border-border-soft p-2">
-          <Button
-            variant="ghost"
-            className="w-full justify-start gap-2 text-[13px] text-muted-foreground"
-            onClick={onOpenSettings}
-          >
-            <Settings className="size-4 opacity-70" /> {t('app.settings')}
-          </Button>
+        <div>
+          <Separator />
+          <div className="p-2">
+            <Button
+              variant="ghost"
+              className="w-full justify-start gap-2 text-[13px] text-muted-foreground"
+              onClick={onOpenSettings}
+            >
+              <Settings data-icon="inline-start" /> {t('app.settings')}
+            </Button>
+          </div>
         </div>
       )}
 
-      {/* Resize strip: 12px hit area straddling the border; keyboard-resizable. */}
-      <div
-        role="separator"
-        aria-orientation="vertical"
-        aria-label={t('app.resizeSidebar')}
-        tabIndex={0}
-        onPointerDown={startDrag}
-        onKeyDown={(e) => {
-          if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-          e.preventDefault();
-          const next = clampSidebarWidth(
-            (width || SIDEBAR_DEFAULT) + (e.key === 'ArrowRight' ? 16 : -16),
-          );
-          onWidthChange(next);
-          onWidthCommit(next);
-        }}
-        className="absolute -right-1.5 top-0 z-10 h-full w-3 cursor-col-resize outline-none after:absolute after:inset-y-0 after:left-1/2 after:w-[2px] after:-translate-x-1/2 after:bg-transparent hover:after:bg-primary/30 focus-visible:after:bg-primary/50"
-      />
+      {variant === 'desktop' && (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t('app.resizeSidebar')}
+          tabIndex={0}
+          onPointerDown={startDrag}
+          onPointerMove={moveDrag}
+          onPointerUp={(event) => {
+            if (drag.current?.pointerId === event.pointerId) finishDrag(true);
+          }}
+          onPointerCancel={(event) => {
+            if (drag.current?.pointerId === event.pointerId) finishDrag(false);
+          }}
+          onLostPointerCapture={(event) => {
+            if (drag.current?.pointerId === event.pointerId) finishDrag(false);
+          }}
+          onKeyDown={(e) => {
+            if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+            e.preventDefault();
+            const next = clampSidebarWidth(
+              (width || SIDEBAR_DEFAULT) + (e.key === 'ArrowRight' ? 16 : -16),
+            );
+            onWidthChange(next);
+            onWidthCommit(next);
+          }}
+          className="absolute -right-1.5 top-0 z-10 h-full w-3 cursor-col-resize outline-none after:absolute after:inset-y-0 after:left-1/2 after:w-[2px] after:-translate-x-1/2 after:bg-transparent hover:after:bg-primary/30 focus-visible:after:bg-primary/50"
+        />
+      )}
 
       {deleting && (
         <Suspense fallback={null}>
@@ -363,14 +446,8 @@ function railButton(label: string, Icon: typeof Plus, onClick: () => void) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-9 text-muted-foreground"
-          aria-label={label}
-          onClick={onClick}
-        >
-          <Icon className="size-4" />
+        <Button variant="ghost" size="icon" aria-label={label} onClick={onClick}>
+          <Icon />
         </Button>
       </TooltipTrigger>
       <TooltipContent side="right">{label}</TooltipContent>
@@ -408,7 +485,9 @@ function ThreadRow({
   onDelete,
 }: RowProps) {
   const [draft, setDraft] = useState(thread.title);
+  const [menuFocusVisible, setMenuFocusVisible] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (renaming) {
@@ -435,7 +514,7 @@ function ThreadRow({
   if (renaming) {
     return (
       <div className="rounded-lg bg-muted px-2.5 py-1">
-        <input
+        <Input
           ref={inputRef}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -446,7 +525,7 @@ function ThreadRow({
             else if (e.key === 'Escape') onCancelRename();
           }}
           onBlur={() => onCommitRename(draft)}
-          className="w-full bg-transparent py-1 text-[13px] outline-none"
+          className="h-8 border-0 bg-transparent shadow-none focus-visible:ring-0"
           aria-label={t('app.rename')}
         />
       </div>
@@ -462,18 +541,18 @@ function ThreadRow({
           : 'hover:bg-muted/60',
       )}
     >
-      <button
-        type="button"
+      <Button
+        variant="ghost"
         onClick={onOpen}
         className={cn(
-          'flex min-w-0 flex-1 items-center gap-1.5 px-2.5 py-2 text-left text-[13px]',
+          'h-auto min-w-0 flex-1 justify-start rounded-lg px-2.5 py-2',
           unread && 'font-medium',
         )}
       >
         {statusGlyph}
         {thread.pinned && <Pin className="size-3 shrink-0 text-faint-foreground" />}
         <span className="truncate">{thread.title || t('app.untitled')}</span>
-      </button>
+      </Button>
 
       {/* Right edge: time-ago at rest; the ⋯ menu fades in OVER it on
           hover/focus-within with a gradient so the row never reflows. */}
@@ -489,31 +568,51 @@ function ThreadRow({
           'bg-linear-to-l from-80% to-transparent',
           active ? 'from-muted' : 'from-card group-hover:from-muted/60',
           'invisible group-focus-within:visible group-hover:visible',
+          menuFocusVisible && 'visible',
         )}
       >
-        <DropdownMenu>
+        <DropdownMenu
+          onOpenChange={(open) => {
+            if (open) setMenuFocusVisible(true);
+          }}
+        >
           <DropdownMenuTrigger asChild>
             <Button
+              ref={menuTriggerRef}
               variant="ghost"
-              size="icon"
-              className="size-6 text-faint-foreground data-[state=open]:visible"
+              size="icon-xs"
+              className="data-[state=open]:visible"
               aria-label={t('app.threadMenu', { title: thread.title || t('app.untitled') })}
             >
-              <Ellipsis className="size-3.5" />
+              <Ellipsis />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-36">
-            <DropdownMenuItem onClick={onTogglePin}>
-              {thread.pinned ? <PinOff /> : <Pin />}
-              {thread.pinned ? t('app.unpin') : t('app.pin')}
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={onStartRename}>
-              <Pencil /> {t('app.rename')}
-            </DropdownMenuItem>
+          <DropdownMenuContent
+            align="start"
+            className="w-36"
+            onCloseAutoFocus={(event) => {
+              if (!handoffMenuCloseToApproval(event)) {
+                event.preventDefault();
+                menuTriggerRef.current?.focus({ preventScroll: true });
+              }
+              setMenuFocusVisible(false);
+            }}
+          >
+            <DropdownMenuGroup>
+              <DropdownMenuItem onClick={onTogglePin}>
+                {thread.pinned ? <PinOff /> : <Pin />}
+                {thread.pinned ? t('app.unpin') : t('app.pin')}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={onStartRename}>
+                <Pencil /> {t('app.rename')}
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" onClick={onDelete}>
-              <Trash2 /> {t('app.delete')}
-            </DropdownMenuItem>
+            <DropdownMenuGroup>
+              <DropdownMenuItem variant="destructive" onClick={onDelete}>
+                <Trash2 /> {t('app.delete')}
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

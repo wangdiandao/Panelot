@@ -4,12 +4,15 @@
  * when to use, what to do on failure.
  */
 
-import { z } from 'zod';
+import { schema } from '../agent/schema';
 import type { AnyAgentTool } from '../agent/tool';
 import { waitForTabLoad, type BrowserToolGateway } from './gateway';
 import type { ExecuteResult } from './content/executor';
 import type { PanelotDB } from '../db/schema';
 import { ActionRunner } from './action/runner';
+import { actionError, ActionError } from './action/errors';
+import { ActionDeadline, abortedAction, deadlineForTool, waitWithContext } from './action/deadline';
+import type { ActionEvidence } from './action/types';
 
 /**
  * How much extracted markdown to feed the model per call. Beyond this the full
@@ -18,6 +21,49 @@ import { ActionRunner } from './action/runner';
  * browser-use's file_system: big page text must not flood context.
  */
 const EXTRACT_WINDOW_CHARS = 8_000;
+
+function throwIfToolDone(signal: AbortSignal | undefined, deadlineAt: number): void {
+  new ActionDeadline(Number.POSITIVE_INFINITY, signal, deadlineAt).throwIfDone();
+}
+
+function awaitBrowserOperation<T>(
+  operation: Promise<T>,
+  signal: AbortSignal | undefined,
+  deadlineAt: number,
+  effectMayHaveOccurred = false,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      callback();
+    };
+    const onAbort = () => finish(() => reject(abortedAction('execute', { effectMayHaveOccurred })));
+    const timer = setTimeout(
+      () =>
+        finish(() =>
+          reject(
+            actionError('timeout', '工具执行超时（超过总截止时间）。', 'execute', true, {
+              effectMayHaveOccurred,
+            }),
+          ),
+        ),
+      Math.max(0, deadlineAt - Date.now()),
+    );
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    void operation.then(
+      (value) => finish(() => resolve(value)),
+      (error) => finish(() => reject(error)),
+    );
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -32,9 +78,45 @@ function contentResult(result: ExecuteResult) {
   };
 }
 
+function tabbedContentResult(result: ExecuteResult, fallbackTabId: number) {
+  const rendered = contentResult(result);
+  rendered.content[0]!.text = `[tabId=${result.resultTabId ?? fallbackTabId}] ${rendered.content[0]!.text}`;
+  return rendered;
+}
+
 function urlOrigin(value: string): string {
   const parsed = new URL(value);
   return parsed.origin === 'null' ? value : parsed.origin;
+}
+
+function canonicalHref(value: string): string {
+  return new URL(value).href;
+}
+
+function verifiedNavigationEvidence(
+  tabId: number,
+  startedAt: number,
+  urlBefore: string | undefined,
+  urlAfter: string,
+  effect: 'tab_created' | 'url_changed',
+): ActionEvidence {
+  return {
+    attemptId: crypto.randomUUID(),
+    tabId,
+    ...(urlBefore ? { urlBefore } : {}),
+    urlAfter,
+    attempts: [
+      {
+        phase: 'verify',
+        strategy: 'l0',
+        startedAt,
+        durationMs: Date.now() - startedAt,
+      },
+    ],
+    effectState: 'verified',
+    observedEffects: [effect],
+    outcome: 'verified',
+  };
 }
 
 async function tabTarget(tabId: number): Promise<{ tabId: number; origin?: string }> {
@@ -52,14 +134,13 @@ export async function currentBrowserTarget(
 
 /** element + ref dual params (docs/05 §3): element for approval display & model self-check. */
 const elementRef = {
-  element: z
-    .string()
-    .describe('Human-readable description of the element, shown to the user in approvals'),
-  ref: z
-    .string()
-    .describe(
-      'Exact ref from the LATEST snapshot, e.g. "s3_12". Fails if stale — re-run read_page.',
-    ),
+  element: schema.string({
+    description: 'Human-readable description of the element, shown to the user in approvals',
+  }),
+  ref: schema.string({
+    description:
+      'Exact opaque ref copied from the LATEST snapshot. Fails if stale — re-run read_page.',
+  }),
 };
 
 // ---------------------------------------------------------------------------
@@ -75,16 +156,25 @@ export function createL0Tools(
   const withSnapshot = async (
     text: string,
     tabId: number,
-  ): Promise<{ content: { type: 'text'; text: string }[] }> => {
+    signal?: AbortSignal,
+    deadlineAt = deadlineForTool('read_page', {}),
+    actionEvidence?: ActionEvidence,
+  ): Promise<{
+    content: { type: 'text'; text: string }[];
+    details?: { actionEvidence: ActionEvidence };
+  }> => {
     try {
       const snap = await gateway.callContentTool(
         threadId(),
         'read_page',
         { maxTokens: 1500 },
         tabId,
+        signal,
+        deadlineAt,
       );
       return {
         content: [{ type: 'text', text: `[tabId=${tabId}] ${text}\n\n${snap.resultText}` }],
+        ...(actionEvidence ? { details: { actionEvidence } } : {}),
       };
     } catch {
       return {
@@ -94,6 +184,7 @@ export function createL0Tools(
             text: `[tabId=${tabId}] ${text}\n（页面快照暂不可用，需要交互时先 read_page）`,
           },
         ],
+        ...(actionEvidence ? { details: { actionEvidence } } : {}),
       };
     }
   };
@@ -103,10 +194,12 @@ export function createL0Tools(
       label: '列出标签页',
       description:
         'List open tabs in the current window (all:true = every window). Returns tab ids for direct use by every page tool and marks the tab the user is looking at.',
-      parameters: z.object({ all: z.boolean().optional() }),
+      parameters: schema.object({ all: schema.optional(schema.boolean()) }),
       level: 'L0',
       effects: 'read',
-      execute: async (_id, params: { all?: boolean }) => {
+      execute: async (_id, params: { all?: boolean }, signal) => {
+        const deadlineAt = deadlineForTool('tabs_list', params);
+        throwIfToolDone(signal, deadlineAt);
         // The tab the USER is looking at (active in the focused window) — the
         // model must be able to identify the default when tabId is omitted.
         const userTab = await gateway.getUserActiveTab();
@@ -126,46 +219,72 @@ export function createL0Tools(
       label: '打开标签页',
       description:
         'Navigate to a URL. Reuses an existing tab if the URL is already open; otherwise opens a new one. Returns the tab id.',
-      parameters: z.object({ url: z.string().url() }),
+      parameters: schema.object({ url: schema.string({ url: true }) }),
       level: 'L0',
       effects: 'write',
       resolveTarget: async (params: { url: string }) => ({ origin: urlOrigin(params.url) }),
-      execute: async (_id, params: { url: string }) => {
-        // Reuse an existing tab for the same origin+path to avoid duplicates
-        // (page-agent / browser-use pattern: prefer activate over create).
+      execute: async (_id, params: { url: string }, signal) => {
+        const deadlineAt = deadlineForTool('tab_open', params);
+        const startedAt = Date.now();
+        throwIfToolDone(signal, deadlineAt);
+        const target = new URL(params.url);
+        const targetHref = target.href;
         const allTabs = await chrome.tabs.query({});
         const existing = allTabs.find((t) => {
-          if (!t.url || !t.id) return false;
+          if (!t.url || t.id === undefined) return false;
           try {
-            const existing = new URL(t.url);
-            const target = new URL(params.url);
-            return existing.origin === target.origin && existing.pathname === target.pathname;
+            return canonicalHref(t.url) === targetHref;
           } catch {
             return false;
           }
         });
         if (existing?.id !== undefined) {
           await gateway.getOperationTab(threadId(), existing.id);
-          await waitForTabLoad(existing.id);
+          await waitForTabLoad(existing.id, 15_000, signal, deadlineAt);
           return {
             content: [
               {
                 type: 'text',
-                text: `已复用已打开的后台标签页 [${existing.id}] ${params.url}。后续工具可直接传 tabId=${existing.id}，用户看到的页面没有变化。`,
+                text: `已复用 URL 完全相同的后台标签页 [${existing.id}] ${targetHref}。后续工具可直接传 tabId=${existing.id}，用户看到的页面没有变化。`,
               },
             ],
           };
         }
-        const tab = await chrome.tabs.create({ url: params.url, active: false });
-        if (tab.id !== undefined) await gateway.getOperationTab(threadId(), tab.id);
-        await waitForTabLoad(tab.id!);
+        const tab = await awaitBrowserOperation(
+          chrome.tabs.create({ url: targetHref, active: false }),
+          signal,
+          deadlineAt,
+          true,
+        );
+        if (tab.id === undefined) throw new Error('浏览器创建了标签页，但没有返回 tab id。');
+        await gateway.getOperationTab(threadId(), tab.id);
+        await waitForTabLoad(tab.id, 15_000, signal, deadlineAt);
+        const loaded = await chrome.tabs.get(tab.id);
+        if (!loaded.url || canonicalHref(loaded.url) !== targetHref) {
+          throw actionError(
+            'navigation_uncertain',
+            `新标签页未确认加载完整 URL：${targetHref}`,
+            'verify',
+            true,
+            { tabId: tab.id, actualUrl: loaded.url, effectMayHaveOccurred: true },
+          );
+        }
         return {
           content: [
             {
               type: 'text',
-              text: `已在后台打开标签页 [${tab.id}] ${params.url}（用户看到的页面没有变化）。`,
+              text: `已在后台打开标签页 [${tab.id}] ${targetHref}（用户看到的页面没有变化）。`,
             },
           ],
+          details: {
+            actionEvidence: verifiedNavigationEvidence(
+              tab.id,
+              startedAt,
+              undefined,
+              targetHref,
+              'tab_created',
+            ),
+          },
         };
       },
     },
@@ -174,15 +293,28 @@ export function createL0Tools(
       label: '显示标签页',
       description:
         'Bring an already-open tab to the foreground. Use only when the user explicitly asks to see it; other browser tools operate background tabs directly via tabId.',
-      parameters: z.object({ tabId: z.number() }),
+      parameters: schema.object({ tabId: schema.number() }),
       level: 'L0',
       effects: 'write',
       resolveTarget: async (params: { tabId: number }) => tabTarget(params.tabId),
-      execute: async (_id, params: { tabId: number }) => {
+      execute: async (_id, params: { tabId: number }, signal) => {
+        const deadlineAt = deadlineForTool('tab_focus', params);
+        throwIfToolDone(signal, deadlineAt);
         const tab = await chrome.tabs.get(params.tabId);
-        await chrome.tabs.update(params.tabId, { active: true });
+        await awaitBrowserOperation(
+          chrome.tabs.update(params.tabId, { active: true }),
+          signal,
+          deadlineAt,
+          true,
+        );
         if (tab.windowId !== undefined) {
-          await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {
+          await awaitBrowserOperation(
+            chrome.windows.update(tab.windowId, { focused: true }),
+            signal,
+            deadlineAt,
+            true,
+          ).catch((error) => {
+            if (error instanceof ActionError) throw error;
             /* window may be gone */
           });
         }
@@ -201,11 +333,13 @@ export function createL0Tools(
       label: '关闭标签页',
       description:
         "Close a tab by id (from tabs_list). Closing a background tab does not change what the user sees — the result states whether the user's visible tab changed.",
-      parameters: z.object({ tabId: z.number() }),
+      parameters: schema.object({ tabId: schema.number() }),
       level: 'L0',
       effects: 'write',
       resolveTarget: async (params: { tabId: number }) => tabTarget(params.tabId),
-      execute: async (_id, params: { tabId: number }) => {
+      execute: async (_id, params: { tabId: number }, signal) => {
+        const deadlineAt = deadlineForTool('tab_close', params);
+        throwIfToolDone(signal, deadlineAt);
         const tab = await chrome.tabs.get(params.tabId).catch(() => null);
         if (!tab) {
           throw new Error(
@@ -217,7 +351,7 @@ export function createL0Tools(
         const userTab = await gateway.getUserActiveTab();
         const wasUserVisible = userTab?.id === params.tabId;
         gateway.clearTarget(threadId(), params.tabId);
-        await chrome.tabs.remove(params.tabId);
+        await awaitBrowserOperation(chrome.tabs.remove(params.tabId), signal, deadlineAt, true);
         if (wasUserVisible) {
           const now = await gateway.getUserActiveTab();
           return {
@@ -244,18 +378,56 @@ export function createL0Tools(
       label: '导航',
       description:
         'Navigate a tab to a URL. Pass tabId from tabs_list to operate it in the background. Returns a fresh snapshot; old refs are void.',
-      parameters: z.object({ tabId: z.number().optional(), url: z.string().url() }),
+      parameters: schema.object({
+        tabId: schema.optional(schema.number()),
+        url: schema.string({ url: true }),
+      }),
       level: 'L0',
       effects: 'write',
       resolveTarget: async (params: { tabId?: number; url: string }) => ({
         ...(await currentBrowserTarget(gateway, getThreadId, params.tabId)),
         origin: urlOrigin(params.url),
       }),
-      execute: async (_id, params: { tabId?: number; url: string }) => {
+      execute: async (_id, params: { tabId?: number; url: string }, signal) => {
+        const deadlineAt = deadlineForTool('navigate', params);
+        const startedAt = Date.now();
+        throwIfToolDone(signal, deadlineAt);
         const tabId = await gateway.getOperationTab(threadId(), params.tabId);
-        await chrome.tabs.update(tabId, { url: params.url });
-        await waitForTabLoad(tabId);
-        return withSnapshot(`已导航到 ${params.url}`, tabId);
+        const targetHref = canonicalHref(params.url);
+        const before = await chrome.tabs.get(tabId);
+        const beforeHref = before.url ? canonicalHref(before.url) : undefined;
+        if (beforeHref === targetHref) {
+          return withSnapshot(
+            `页面已经位于 ${targetHref}，未派发导航。`,
+            tabId,
+            signal,
+            deadlineAt,
+          );
+        }
+        await awaitBrowserOperation(
+          chrome.tabs.update(tabId, { url: targetHref }),
+          signal,
+          deadlineAt,
+          true,
+        );
+        await waitForTabLoad(tabId, 15_000, signal, deadlineAt);
+        const loaded = await chrome.tabs.get(tabId);
+        if (!loaded.url || canonicalHref(loaded.url) !== targetHref) {
+          throw actionError(
+            'navigation_uncertain',
+            `标签页未确认导航到完整 URL：${targetHref}`,
+            'verify',
+            true,
+            { actualUrl: loaded.url, effectMayHaveOccurred: true },
+          );
+        }
+        return withSnapshot(
+          `已导航到 ${targetHref}`,
+          tabId,
+          signal,
+          deadlineAt,
+          verifiedNavigationEvidence(tabId, startedAt, beforeHref, targetHref, 'url_changed'),
+        );
       },
     },
     {
@@ -263,16 +435,18 @@ export function createL0Tools(
       label: '后退',
       description:
         'Go back in a tab history. Pass tabId from tabs_list to operate it in the background. Returns a fresh snapshot.',
-      parameters: z.object({ tabId: z.number().optional() }),
+      parameters: schema.object({ tabId: schema.optional(schema.number()) }),
       level: 'L0',
       effects: 'write',
       resolveTarget: (params: { tabId?: number }) =>
         currentBrowserTarget(gateway, getThreadId, params.tabId),
-      execute: async (_id, params: { tabId?: number }) => {
+      execute: async (_id, params: { tabId?: number }, signal) => {
+        const deadlineAt = deadlineForTool('go_back', params);
+        throwIfToolDone(signal, deadlineAt);
         const tabId = await gateway.getOperationTab(threadId(), params.tabId);
-        await chrome.tabs.goBack(tabId);
-        await waitForTabLoad(tabId);
-        return withSnapshot('已后退', tabId);
+        await awaitBrowserOperation(chrome.tabs.goBack(tabId), signal, deadlineAt, true);
+        await waitForTabLoad(tabId, 15_000, signal, deadlineAt);
+        return withSnapshot('已后退', tabId, signal, deadlineAt);
       },
     },
     {
@@ -280,16 +454,18 @@ export function createL0Tools(
       label: '前进',
       description:
         'Go forward in a tab history. Pass tabId from tabs_list to operate it in the background. Returns a fresh snapshot.',
-      parameters: z.object({ tabId: z.number().optional() }),
+      parameters: schema.object({ tabId: schema.optional(schema.number()) }),
       level: 'L0',
       effects: 'write',
       resolveTarget: (params: { tabId?: number }) =>
         currentBrowserTarget(gateway, getThreadId, params.tabId),
-      execute: async (_id, params: { tabId?: number }) => {
+      execute: async (_id, params: { tabId?: number }, signal) => {
+        const deadlineAt = deadlineForTool('go_forward', params);
+        throwIfToolDone(signal, deadlineAt);
         const tabId = await gateway.getOperationTab(threadId(), params.tabId);
-        await chrome.tabs.goForward(tabId);
-        await waitForTabLoad(tabId);
-        return withSnapshot('已前进', tabId);
+        await awaitBrowserOperation(chrome.tabs.goForward(tabId), signal, deadlineAt, true);
+        await waitForTabLoad(tabId, 15_000, signal, deadlineAt);
+        return withSnapshot('已前进', tabId, signal, deadlineAt);
       },
     },
   ];
@@ -301,10 +477,15 @@ export function createL0Tools(
 
 export interface L1Deps {
   /** AXTree fallback for the perception degradation chain (docs/05 §1.4). */
-  axTreeFallback?: (tabId: number) => Promise<string>;
+  axTreeFallback?: (tabId: number, signal?: AbortSignal, deadlineAt?: number) => Promise<string>;
   getTabId?: (threadId: string) => Promise<number>;
   /** Trusted CDP key dispatch — synthetic events can't trigger native behavior. */
-  dispatchKey?: (tabId: number, combo: string) => Promise<void>;
+  dispatchKey?: (
+    tabId: number,
+    combo: string,
+    signal?: AbortSignal,
+    deadlineAt?: number,
+  ) => Promise<void>;
   /** When present, oversized extract output is offloaded here instead of context. */
   db?: PanelotDB;
 }
@@ -364,11 +545,12 @@ export function createL1Tools(
   deps: L1Deps = {},
 ): AnyAgentTool[] {
   const tabIdParameter = {
-    tabId: z
-      .number()
-      .int()
-      .optional()
-      .describe('Target tab id from tabs_list; omitted = the user-visible web tab'),
+    tabId: schema.optional(
+      schema.number({
+        integer: true,
+        description: 'Target tab id from tabs_list; omitted = the user-visible web tab',
+      }),
+    ),
   };
   const splitTabParams = (params: unknown): { tabId?: number; contentParams: unknown } => {
     const { tabId, ...contentParams } = params as Record<string, unknown> & { tabId?: number };
@@ -376,20 +558,26 @@ export function createL1Tools(
   };
   const resolveTarget = (params: { tabId?: number }) =>
     currentBrowserTarget(gateway, getThreadId, params.tabId);
-  const call = async (tool: string, params: unknown) => {
+  const call = async (tool: string, params: unknown, signal?: AbortSignal) => {
     const threadId = getThreadId();
     const { tabId: requestedTabId, contentParams } = splitTabParams(params);
     const tabId = await gateway.getOperationTab(threadId, requestedTabId);
+    const deadlineAt = deadlineForTool(tool, contentParams);
     try {
       const result = ['click', 'type', 'select_option'].includes(tool)
         ? await new ActionRunner({
-            execute: (name, actionParams) =>
-              gateway.callContentTool(threadId, name, actionParams, tabId),
-          }).run(tool, contentParams)
-        : await gateway.callContentTool(threadId, tool, contentParams, tabId);
-      const rendered = contentResult(result);
-      rendered.content[0]!.text = `[tabId=${tabId}] ${rendered.content[0]!.text}`;
-      return rendered;
+            execute: (name, actionParams, actionSignal, actionDeadlineAt) =>
+              gateway.callContentTool(
+                threadId,
+                name,
+                actionParams,
+                tabId,
+                actionSignal,
+                actionDeadlineAt,
+              ),
+          }).run(tool, contentParams, signal, deadlineAt)
+        : await gateway.callContentTool(threadId, tool, contentParams, tabId, signal, deadlineAt);
+      return tabbedContentResult(result, tabId);
     } catch (e) {
       // Perception degradation: L1 empty tree → CDP AXTree (docs/05 §1.4).
       if (
@@ -398,7 +586,7 @@ export function createL1Tools(
         deps.axTreeFallback &&
         deps.getTabId
       ) {
-        const axText = await deps.axTreeFallback(tabId);
+        const axText = await deps.axTreeFallback(tabId, signal, deadlineAt);
         return contentResult({ resultText: `[tabId=${tabId}] ${axText}` });
       }
       throw e;
@@ -410,58 +598,65 @@ export function createL1Tools(
       name: 'read_page',
       label: '读取页面',
       description:
-        "Returns a snapshot of the page: each interactive element appears as `role \"name\" [ref=sN_M]`. Call this before your first interaction with a page and whenever refs go stale. mode:'article' extracts readable text for content reading; 'snapshot' (default) is for interaction.",
-      parameters: z.object({
+        "Returns a snapshot of the page: each interactive element appears as `role \"name\" [ref=<snapshot-ref>]`. Copy the opaque ref exactly; call this before your first interaction with a page and whenever refs go stale. mode:'article' extracts readable text for content reading; 'snapshot' (default) is for interaction.",
+      parameters: schema.object({
         ...tabIdParameter,
-        mode: z.enum(['snapshot', 'article']).optional(),
-        maxTokens: z.number().max(6000).optional(),
+        mode: schema.optional(schema.enum(['snapshot', 'article'])),
+        maxTokens: schema.optional(schema.number({ max: 6000 })),
       }),
       level: 'L1',
       effects: 'read',
-      execute: (_id, params) => call('read_page', params),
+      execute: (_id, params, signal) => call('read_page', params, signal),
     },
     {
       name: 'find_in_page',
       label: '页内查找',
       description:
         'Find elements/text in the current snapshot by query. Cheaper than a full read_page for targeted lookups. Returns matching snapshot lines with refs.',
-      parameters: z.object({ ...tabIdParameter, query: z.string().min(1) }),
+      parameters: schema.object({ ...tabIdParameter, query: schema.string({ min: 1 }) }),
       level: 'L1',
       effects: 'read',
-      execute: (_id, params) => call('find_in_page', params),
+      execute: (_id, params, signal) => call('find_in_page', params, signal),
     },
     {
       name: 'extract',
       label: '提取正文',
       description:
         "Extract the page (or a ref'd subtree via scope) as clean Markdown with links preserved — cheaper and more readable than a full read_page snapshot for reading content or collecting URLs. Long pages truncate; pass fromChar to continue from where it stopped. Oversized results are saved to an attachment and summarized.",
-      parameters: z.object({
+      parameters: schema.object({
         ...tabIdParameter,
-        scope: z
-          .string()
-          .optional()
-          .describe(
-            'Ref of a container from the latest snapshot to limit extraction to that subtree',
-          ),
-        fromChar: z
-          .number()
-          .optional()
-          .describe(
-            'Character offset to continue a long extraction from (see the previous result)',
-          ),
+        scope: schema.optional(
+          schema.string({
+            description:
+              'Ref of a container from the latest snapshot to limit extraction to that subtree',
+          }),
+        ),
+        fromChar: schema.optional(
+          schema.number({
+            description:
+              'Character offset to continue a long extraction from (see the previous result)',
+          }),
+        ),
       }),
       level: 'L1',
       effects: 'read',
-      execute: async (_id, params: { tabId?: number; scope?: string; fromChar?: number }) => {
+      execute: async (
+        _id,
+        params: { tabId?: number; scope?: string; fromChar?: number },
+        signal,
+      ) => {
         const threadId = getThreadId();
         // Content script returns the FULL markdown; windowing + offload happen
         // here (engine side has db access; the content script does not).
         const tabId = await gateway.getOperationTab(threadId, params.tabId);
+        const deadlineAt = deadlineForTool('extract', params);
         const result = await gateway.callContentTool(
           threadId,
           'extract',
           { scope: params.scope },
           tabId,
+          signal,
+          deadlineAt,
         );
         const origin = await gateway.getTabOrigin(threadId, tabId);
         const { text, attachmentId } = await windowAndOffload(
@@ -481,86 +676,107 @@ export function createL1Tools(
       name: 'get_selection',
       label: '获取选中文本',
       description: "Get the user's current text selection on the page.",
-      parameters: z.object({ ...tabIdParameter }),
+      parameters: schema.object({ ...tabIdParameter }),
       level: 'L1',
       effects: 'read',
-      execute: (_id, params) => call('get_selection', params),
+      execute: (_id, params, signal) => call('get_selection', params, signal),
     },
     {
       name: 'click',
       label: '点击元素',
       description:
         'Click an element. element: human-readable description shown to the user for approval; ref: from the LATEST snapshot. Fails if the ref is stale — re-run read_page and retry with a fresh ref. If the click navigates, the result says so — do NOT retry a click that navigated.',
-      parameters: z.object({
+      parameters: schema.object({
         ...tabIdParameter,
         ...elementRef,
-        button: z.enum(['left', 'right']).optional(),
-        doubleClick: z.boolean().optional(),
+        button: schema.optional(schema.enum(['left', 'right'])),
+        doubleClick: schema.optional(schema.boolean()),
       }),
       level: 'L1',
       effects: 'write',
-      execute: (_id, params) => call('click', params),
+      execute: (_id, params, signal) => call('click', params, signal),
     },
     {
       name: 'type',
       label: '输入文本',
       description:
         'Set a field value and dispatch input events. Use submit:true to press Enter after (may navigate — the result says so). mode:"append" keeps existing text. If the field ignores the input, retry with slowly:true.',
-      parameters: z.object({
+      parameters: schema.object({
         ...tabIdParameter,
         ...elementRef,
-        text: z.string(),
-        mode: z.enum(['replace', 'append']).optional(),
-        submit: z.boolean().optional(),
-        slowly: z.boolean().optional(),
+        text: schema.string(),
+        mode: schema.optional(schema.enum(['replace', 'append'])),
+        submit: schema.optional(schema.boolean()),
+        slowly: schema.optional(schema.boolean()),
       }),
       level: 'L1',
       effects: 'write',
-      execute: (_id, params) => call('type', params),
+      execute: (_id, params, signal) => call('type', params, signal),
     },
     {
       name: 'select_option',
       label: '选择下拉项',
       description:
         'Select option(s) in a <select> by value or visible text. On mismatch the error lists available options.',
-      parameters: z.object({
+      parameters: schema.object({
         ...tabIdParameter,
         ...elementRef,
-        values: z.array(z.string()).min(1),
+        values: schema.array(schema.string(), { min: 1 }),
       }),
       level: 'L1',
       effects: 'write',
-      execute: (_id, params) => call('select_option', params),
+      execute: (_id, params, signal) => call('select_option', params, signal),
     },
     {
       name: 'press_key',
       label: '按键',
       description:
         "Press a key or combo with TRUSTED input (triggers native behavior: Enter submits, Tab moves focus, Escape dismisses). e.g. 'Enter', 'Escape', 'Control+a', 'Shift+Tab'. Optional ref focuses that element first. May trigger navigation — the result will say so.",
-      parameters: z.object({
+      parameters: schema.object({
         ...tabIdParameter,
-        key: z.string().min(1),
-        ref: z
-          .string()
-          .optional()
-          .describe('Element to focus before pressing (from the latest snapshot)'),
+        key: schema.string({ min: 1 }),
+        ref: schema.optional(
+          schema.string({
+            description: 'Element to focus before pressing (from the latest snapshot)',
+          }),
+        ),
       }),
       level: 'L2',
       effects: 'write',
-      execute: async (_id, params: { tabId?: number; key: string; ref?: string }) => {
+      execute: async (_id, params: { tabId?: number; key: string; ref?: string }, signal) => {
         const threadId = getThreadId();
         const tabId = await gateway.getOperationTab(threadId, params.tabId);
+        const deadlineAt = deadlineForTool('press_key', params);
         // Focus the target element first when a ref is given.
         if (params.ref)
-          await gateway.callContentTool(threadId, 'focus', { ref: params.ref }, tabId);
+          await gateway.callContentTool(
+            threadId,
+            'focus',
+            { ref: params.ref },
+            tabId,
+            signal,
+            deadlineAt,
+          );
         if (deps.dispatchKey && deps.getTabId) {
           const urlBefore = (await chrome.tabs.get(tabId)).url;
-          await deps.dispatchKey(tabId, params.key);
-          // Key presses (Enter on forms) routinely navigate — report it.
-          await new Promise((r) => setTimeout(r, 300));
-          const after = await chrome.tabs.get(tabId);
+          const captured = await gateway.runWithNewTabCapture(
+            threadId,
+            tabId,
+            async () => {
+              await deps.dispatchKey!(tabId, params.key, signal, deadlineAt);
+              // Key presses (Enter on forms) routinely navigate — report it.
+              await waitWithContext(300, { signal, deadlineAt });
+              return chrome.tabs.get(tabId);
+            },
+            signal,
+            deadlineAt,
+          );
+          if (captured.createdTabResult) {
+            return tabbedContentResult(captured.createdTabResult, tabId);
+          }
+          const after = captured.value;
           if (after.url !== urlBefore || after.status === 'loading') {
-            await waitForTabLoad(tabId);
+            await waitForTabLoad(tabId, 15_000, signal, deadlineAt);
             const navigated = await chrome.tabs.get(tabId);
             return {
               content: [
@@ -583,6 +799,8 @@ export function createL1Tools(
           'press_key',
           { key: params.key },
           tabId,
+          signal,
+          deadlineAt,
         );
         const r = contentResult(result);
         r.content[0]!.text = `[tabId=${tabId}] ${r.content[0]!.text}\n[合成事件：可能未触发原生行为（表单提交/焦点移动）。]`;
@@ -594,80 +812,113 @@ export function createL1Tools(
       label: '滚动',
       description:
         "Scroll the page or a container (target ref). amount: 'page' (default), 'end', or pixels. New content may appear after scrolling — re-read if needed.",
-      parameters: z.object({
+      parameters: schema.object({
         ...tabIdParameter,
-        target: z.string().optional(),
-        direction: z.enum(['up', 'down']),
-        amount: z.union([z.enum(['page', 'end']), z.number()]).optional(),
+        target: schema.optional(schema.string()),
+        direction: schema.enum(['up', 'down']),
+        amount: schema.optional(schema.union([schema.enum(['page', 'end']), schema.number()])),
       }),
       level: 'L1',
       effects: 'read',
-      execute: (_id, params) => call('scroll', params),
+      execute: (_id, params, signal) => call('scroll', params, signal),
     },
     {
       name: 'hover',
       label: '悬停',
       description:
         'Hover over an element to reveal menus/tooltips. Follow with read_page to see what appeared.',
-      parameters: z.object({ ...tabIdParameter, ...elementRef }),
+      parameters: schema.object({ ...tabIdParameter, ...elementRef }),
       level: 'L1',
       effects: 'write',
-      execute: (_id, params) => call('hover', params),
+      execute: (_id, params, signal) => call('hover', params, signal),
     },
     {
       name: 'wait_for',
       label: '等待',
       description:
         'Wait for text to appear (text), disappear (textGone), or a fixed time (timeMs). Text conditions time out at 30s. Prefer text conditions over raw time after async actions.',
-      parameters: z.object({
+      parameters: schema.object({
         ...tabIdParameter,
-        text: z.string().optional(),
-        textGone: z.union([z.boolean(), z.string()]).optional(),
-        timeMs: z.number().max(30_000).optional(),
+        text: schema.optional(schema.string()),
+        textGone: schema.optional(schema.union([schema.boolean(), schema.string()])),
+        timeMs: schema.optional(schema.number({ max: 30_000 })),
       }),
       level: 'L1',
       effects: 'read',
-      execute: (_id, params) => call('wait_for', params),
+      execute: (_id, params, signal) => call('wait_for', params, signal),
     },
     {
       name: 'run_javascript',
       label: '执行 JavaScript',
       description:
         "Run JavaScript in the page's MAIN world (full access to the page's own variables/functions) and return the JSON-serialized result. Powerful and risky — DENIED by default; the user must enable it in settings. Prefer the structured tools (click/type/extract) whenever possible.",
-      parameters: z.object({ ...tabIdParameter, code: z.string() }),
+      parameters: schema.object({ ...tabIdParameter, code: schema.string() }),
       level: 'L1',
       effects: 'write',
-      execute: async (_id, params: { tabId?: number; code: string }) => {
+      execute: async (_id, params: { tabId?: number; code: string }, signal) => {
         const tabId = await gateway.getOperationTab(getThreadId(), params.tabId);
+        const deadlineAt = deadlineForTool('run_javascript', params);
+        throwIfToolDone(signal, deadlineAt);
         gateway.markDriven(getThreadId(), tabId);
-        const [frame] = await chrome.scripting.executeScript({
-          target: { tabId },
-          world: 'MAIN', // the real page context — isolated world can't see page JS
-          func: async (code: string) => {
-            try {
-              // eslint-disable-next-line no-new-func
-              const value = await new Function(`return (async () => { ${code} })()`)();
-              if (value === undefined) return { ok: true, value: 'undefined' };
+        const timeoutMs = Math.max(1, deadlineAt - Date.now());
+        const [frame] = await awaitBrowserOperation(
+          chrome.scripting.executeScript({
+            target: { tabId },
+            world: 'MAIN', // the real page context — isolated world can't see page JS
+            func: async (code: string, executionTimeoutMs: number) => {
               try {
-                return { ok: true, value: JSON.stringify(value) };
-              } catch {
+                const deadlineMarker = { timeout: true };
+                // eslint-disable-next-line no-new-func
+                const execution = new Function(`return (async () => { ${code} })()`)();
+                const value = await Promise.race([
+                  execution,
+                  new Promise((resolve) =>
+                    setTimeout(() => resolve(deadlineMarker), executionTimeoutMs),
+                  ),
+                ]);
+                if (value === deadlineMarker) {
+                  return {
+                    ok: false,
+                    error:
+                      'PanelotDeadlineError: script exceeded the total deadline; page effects may continue',
+                  };
+                }
+                if (value === undefined) return { ok: true, value: 'undefined' };
+                try {
+                  return { ok: true, value: JSON.stringify(value) };
+                } catch {
+                  return {
+                    ok: true,
+                    value: `[不可序列化: ${Object.prototype.toString.call(value)}]`,
+                  };
+                }
+              } catch (e) {
                 return {
-                  ok: true,
-                  value: `[不可序列化: ${Object.prototype.toString.call(value)}]`,
+                  ok: false,
+                  error: e instanceof Error ? `${e.name}: ${e.message}` : String(e),
                 };
               }
-            } catch (e) {
-              return {
-                ok: false,
-                error: e instanceof Error ? `${e.name}: ${e.message}` : String(e),
-              };
-            }
-          },
-          args: [params.code],
-        });
+            },
+            args: [params.code, timeoutMs],
+          }),
+          signal,
+          deadlineAt,
+          true,
+        );
         const r = frame?.result as { ok: boolean; value?: string; error?: string } | undefined;
         if (!r) throw new Error('脚本执行无结果（页面可能不允许注入）');
         if (!r.ok) {
+          if (/PanelotDeadlineError/.test(r.error ?? '')) {
+            throw actionError(
+              'timeout',
+              '脚本超过总截止时间；已派发的页面代码仍可能继续运行。',
+              'execute',
+              false,
+              {
+                effectMayHaveOccurred: true,
+              },
+            );
+          }
           // CSP-hardened sites (GitHub, X, banks) block new Function/eval as
           // 'unsafe-eval'. Tell the model plainly instead of a raw EvalError so
           // it switches to structured tools rather than retrying.
@@ -688,21 +939,19 @@ export function createL1Tools(
       label: '批量操作',
       description:
         'Up to 4 click/type/select_option actions executed in order; stops early if the page changes significantly. Prefer this for multi-field forms — one approval, one round-trip.',
-      parameters: z.object({
+      parameters: schema.object({
         ...tabIdParameter,
-        actions: z
-          .array(
-            z.object({
-              kind: z.enum(['click', 'type', 'select_option']),
-              params: z.record(z.string(), z.unknown()),
-            }),
-          )
-          .min(1)
-          .max(4),
+        actions: schema.array(
+          schema.object({
+            kind: schema.enum(['click', 'type', 'select_option']),
+            params: schema.record(schema.string(), schema.unknown()),
+          }),
+          { min: 1, max: 4 },
+        ),
       }),
       level: 'L1',
       effects: 'write',
-      execute: (_id, params) => call('batch_actions', params),
+      execute: (_id, params, signal) => call('batch_actions', params, signal),
     },
   ];
   return tools.map((tool) => ({ ...tool, resolveTarget: tool.resolveTarget ?? resolveTarget }));

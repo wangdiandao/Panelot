@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { SecretStore } from '../../src/security/secretStore';
+import {
+  LOCAL_SECRET_KEY_STORAGE,
+  sealSecretWithRawKey,
+  SecretStore,
+} from '../../src/security/secretStore';
 
 const local = new Map<string, unknown>();
 const session = new Map<string, unknown>();
@@ -42,6 +46,30 @@ describe('SecretStore', () => {
 
     await expect(secrets.getSessionSecret('mcp-a:access')).resolves.toBe('access-token');
     expect(JSON.stringify([...local.entries()])).not.toContain('access-token');
+  });
+
+  it('seals with an existing raw key without mutating storage', async () => {
+    const raw = Array.from({ length: 32 }, (_, index) => index);
+    local.set(LOCAL_SECRET_KEY_STORAGE, raw);
+    const before = structuredClone([...local.entries()]);
+
+    const fromArray = await sealSecretWithRawKey('array-secret', 'provider-key', raw);
+    const fromTypedArray = await sealSecretWithRawKey(
+      'typed-secret',
+      'provider-key',
+      new Uint8Array(raw),
+    );
+
+    const secrets = new SecretStore();
+    await expect(secrets.unseal(fromArray, 'provider-key')).resolves.toBe('array-secret');
+    await expect(secrets.unseal(fromTypedArray, 'provider-key')).resolves.toBe('typed-secret');
+    expect([...local.entries()]).toEqual(before);
+  });
+
+  it('rejects raw keys that are not 256 bits', async () => {
+    await expect(
+      sealSecretWithRawKey('secret', 'provider-key', new Uint8Array(31)),
+    ).rejects.toThrow('Invalid local secret key');
   });
 
   it('creates a portable PBKDF2 600000 iteration backup', async () => {

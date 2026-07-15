@@ -4,6 +4,44 @@ All notable changes to Panelot are documented here.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-15
+
+### Added
+
+- Background-coordinated data import maintenance with validation, conflict previews, reload
+  handoff, and recovery-safe commit markers.
+- Runtime schema validation for Agent events, messaging envelopes, maintenance RPC, and imported
+  data.
+- Run environment snapshots and browser-session routing state for safer service-worker recovery.
+- Hardened MCP OAuth discovery, issuer/resource binding, staged host-permission approval, token
+  isolation, refresh, and reauthorization flows.
+- Browser automation coverage for nested frame geometry, dialog safety, new-tab continuation,
+  deep references, and interrupted-run recovery.
+
+### Changed
+
+- Permission settings now expose three default policies: ask throughout, ask for operations, and
+  no approval, while explicit permission rules remain mandatory constraints.
+- The settings default-model selector now requires a concrete available model; the conversation
+  selector's default option follows that configured model unless a Thread preset applies.
+- Agent responses now preserve the real interleaving of reasoning, tool calls, progress, and final
+  output in one timeline, with clearer provider stop reasons and failure-circuit behavior.
+- Settings, onboarding, provider diagnostics, plugins, attachments, data maintenance, and the
+  bilingual UI were normalized around shared accessible components and race-safe storage hooks.
+- Browser targeting, stale-reference rejection, protocol negotiation, queued commands, and
+  connection recovery now fail closed across reloads and document changes.
+- CI, release, Pages, bundle budgets, documentation, and regression coverage were expanded for the
+  current production architecture.
+
+### Security
+
+- MCP credentials are bound to canonical resources and issuers; access tokens remain session-only
+  and persistent secrets stay encrypted.
+- Import, endpoint, OAuth, content-script, and Agent-event inputs receive stricter validation before
+  they can mutate state or dispatch browser actions.
+- Approval recovery revalidates prepared targets, host permissions, deny rules, and manual tab
+  activity before dispatch.
+
 ## [0.2.0] - 2026-07-12
 
 ### Added
@@ -39,5 +77,6 @@ All notable changes to Panelot are documented here.
 - Plugin archives reject traversal, symlinks, executable payloads, and archive bombs.
 - Provider error details are sanitized before display or persistence.
 
-[Unreleased]: https://github.com/wangdiandao/Panelot/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/wangdiandao/Panelot/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/wangdiandao/Panelot/releases/tag/v0.3.0
 [0.2.0]: https://github.com/wangdiandao/Panelot/releases/tag/v0.2.0

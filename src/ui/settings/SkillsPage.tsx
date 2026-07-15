@@ -12,6 +12,9 @@ import { Badge } from '../components/ui/badge';
 import { Input } from '../components/ui/input';
 import { Switch } from '../components/ui/switch';
 import { CodeEditor } from '../components/CodeEditor';
+import { FilePickerButton } from '../components/FilePickerButton';
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '../components/ui/empty';
+import { FieldError } from '../components/ui/field';
 import {
   Dialog,
   DialogContent,
@@ -26,20 +29,23 @@ import { PluginManager } from '../../plugins/manager';
 import { listSkillFileDependencies, parseSkill } from '../../skills/parse';
 import type { SkillRecord } from '../../db/types';
 import { hostPermissionBroker } from '../../permissions/hostPermissionBroker';
+import { t } from '../i18n';
 
 const db = new PanelotDB();
 const manager = new SkillManager(db);
 const pluginManager = new PluginManager(db);
 
-const TEMPLATE = `---
+function skillTemplate(): string {
+  return `---
 name: my-skill
-description: 简述这个技能做什么，以及何时使用。
+description: ${t('settings.skills.templateDescription')}
 panelot:
   sites: ["*.example.com"]
   auto_suggest: true
 ---
-# 指令正文
-在这里写详细指令。`;
+# ${t('settings.skills.templateHeading')}
+${t('settings.skills.templateBody')}`;
+}
 
 export function SkillsPage() {
   const [skills, setSkills] = useState<SkillRecord[]>([]);
@@ -66,7 +72,7 @@ export function SkillsPage() {
       setError(null);
       setEditing(null);
       await refresh();
-      toast.success('Skill 已保存');
+      toast.success(t('settings.skills.saved'));
     } catch (e) {
       if (e instanceof SkillNameConflictError) {
         setConflict({ raw: draft, source: 'user' });
@@ -80,7 +86,7 @@ export function SkillsPage() {
     const dependencies = listSkillFileDependencies(text);
     setError(
       dependencies.length > 0
-        ? `该 Skill 引用了 ${dependencies.join('、')}；单文件导入不会包含这些依赖，请确认指令仍可独立使用。`
+        ? t('settings.skills.dependencyWarning', { files: dependencies.join(', ') })
         : null,
     );
     setDraft(text);
@@ -93,28 +99,28 @@ export function SkillsPage() {
     let text = '';
     try {
       const parsed = new URL(url);
-      if (parsed.protocol !== 'https:') throw new Error('Skill URL 必须使用 HTTPS');
+      if (parsed.protocol !== 'https:') throw new Error(t('settings.skills.httpsOnly'));
       if (!(await hostPermissionBroker.request(parsed.origin)))
-        throw new Error('未授予该 URL 的访问权限');
+        throw new Error(t('settings.skills.permissionDenied'));
       const response = await fetch(parsed.href);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       text = await response.text();
       if (new TextEncoder().encode(text).byteLength > 1024 * 1024)
-        throw new Error('SKILL.md 超过 1 MB 限制');
+        throw new Error(t('settings.skills.tooLarge'));
       const dependencies = listSkillFileDependencies(text);
       if (dependencies.length > 0) {
-        toast.warning(`该 Skill 还引用 ${dependencies.length} 个外部文件，当前仅导入 SKILL.md`);
+        toast.warning(t('settings.skills.externalFiles', { n: dependencies.length }));
       }
       await manager.importFromText(text, 'imported', url);
       await refresh();
       setUrlDialogOpen(false);
       setImportUrl('');
-      toast.success('已从 URL 导入');
+      toast.success(t('settings.skills.imported'));
     } catch (e) {
       if (e instanceof SkillNameConflictError && text) {
         setConflict({ raw: text, source: 'imported', sourceRef: url });
       }
-      setError(`导入失败: ${(e as Error).message}`);
+      setError(t('settings.skills.importFailed', { error: (e as Error).message }));
       setUrlDialogOpen(false);
     }
   };
@@ -139,28 +145,28 @@ export function SkillsPage() {
       /* invalid while typing */
     }
     return (
-      <div className="max-w-2xl space-y-3">
-        <h2 className="text-[15px] font-semibold">编辑 Skill</h2>
-        <CodeEditor value={draft} onChange={setDraft} placeholder={TEMPLATE} />
+      <div className="flex max-w-2xl flex-col gap-3">
+        <h2 className="text-[15px] font-semibold">{t('settings.skills.edit')}</h2>
+        <CodeEditor value={draft} onChange={setDraft} placeholder={skillTemplate()} />
         {preview && (
           <div className="text-[12px] text-success">
             ✓ {preview.name} — {preview.description}
           </div>
         )}
-        {error && <div className="text-[12px] text-destructive">{error}</div>}
+        {error && <FieldError>{error}</FieldError>}
         {conflict && (
           <div className="flex gap-2 rounded-lg border border-border p-3">
             <Button size="sm" onClick={() => void resolveConflict('overwrite')}>
-              覆盖同名 Skill
+              {t('settings.skills.overwrite')}
             </Button>
             <Button variant="outline" size="sm" onClick={() => void resolveConflict('rename')}>
-              自动改名
+              {t('settings.skills.rename')}
             </Button>
           </div>
         )}
         <div className="flex gap-2">
           <Button size="sm" className="px-4" onClick={() => void save()}>
-            保存
+            {t('app.save')}
           </Button>
           <Button
             variant="outline"
@@ -170,7 +176,7 @@ export function SkillsPage() {
               setError(null);
             }}
           >
-            取消
+            {t('app.cancel')}
           </Button>
         </div>
       </div>
@@ -178,50 +184,50 @@ export function SkillsPage() {
   }
 
   return (
-    <div className="max-w-2xl space-y-3">
+    <div className="flex max-w-2xl flex-col gap-3">
       <div className="flex items-center gap-2">
         <h2 className="text-[15px] font-semibold">Skills</h2>
         <div className="ml-auto flex gap-2">
-          <Button variant="outline" size="sm" asChild>
-            <label className="cursor-pointer">
-              导入文件
-              <input
-                type="file"
-                accept=".md"
-                className="hidden"
-                onChange={(e) => e.target.files?.[0] && void onFile(e.target.files[0])}
-              />
-            </label>
-          </Button>
+          <FilePickerButton
+            id="skill-file-import"
+            label={t('settings.skills.importFileLabel')}
+            accept=".md"
+            onFile={(file) => void onFile(file)}
+          >
+            {t('settings.skills.importFile')}
+          </FilePickerButton>
           <Button variant="outline" size="sm" onClick={() => setUrlDialogOpen(true)}>
-            从 URL 导入
+            {t('settings.skills.importUrl')}
           </Button>
           <Button
             size="sm"
             onClick={() => {
-              setDraft(TEMPLATE);
+              setDraft(skillTemplate());
               setEditing('new');
             }}
           >
-            <Plus /> 新建
+            <Plus data-icon="inline-start" /> {t('settings.skills.new')}
           </Button>
         </div>
       </div>
-      {error && <div className="text-[12px] text-destructive">{error}</div>}
+      {error && <FieldError>{error}</FieldError>}
       {conflict && (
         <div className="flex gap-2 rounded-lg border border-border p-3">
           <Button size="sm" onClick={() => void resolveConflict('overwrite')}>
-            覆盖同名 Skill
+            {t('settings.skills.overwrite')}
           </Button>
           <Button variant="outline" size="sm" onClick={() => void resolveConflict('rename')}>
-            自动改名
+            {t('settings.skills.rename')}
           </Button>
         </div>
       )}
       {skills.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border p-6 text-center text-[13px] text-muted-foreground">
-          还没有 Skill。新建一个，或从社区导入兼容 Claude Code 的 SKILL.md。
-        </div>
+        <Empty className="border border-dashed p-6 md:p-6">
+          <EmptyHeader>
+            <EmptyTitle className="text-base">{t('settings.skills.emptyTitle')}</EmptyTitle>
+            <EmptyDescription>{t('settings.skills.emptyHint')}</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       ) : (
         skills.map((s) => {
           const fm = s.frontmatter as {
@@ -235,7 +241,7 @@ export function SkillsPage() {
                   checked={s.enabled}
                   disabled={s.source === 'plugin'}
                   onCheckedChange={(on) => void manager.setEnabled(s.id, on).then(refresh)}
-                  aria-label={`启用 ${s.name}`}
+                  aria-label={t('settings.skills.enable', { name: s.name })}
                 />
                 <span className="text-[13px] font-medium">{s.name}</span>
                 {fm.panelot?.command && (
@@ -269,13 +275,14 @@ export function SkillsPage() {
                     }
                   }}
                 >
-                  {s.source === 'plugin' ? '复制并编辑' : '编辑'}
+                  {s.source === 'plugin'
+                    ? t('settings.skills.copyEdit')
+                    : t('settings.providers.edit')}
                 </Button>
                 <Button
                   variant="ghost"
-                  size="icon"
-                  className="size-6 text-muted-foreground"
-                  aria-label={`导出 ${s.name}`}
+                  size="icon-xs"
+                  aria-label={t('settings.skills.export', { name: s.name })}
                   onClick={() => {
                     const url = URL.createObjectURL(new Blob([s.raw], { type: 'text/markdown' }));
                     const anchor = document.createElement('a');
@@ -285,16 +292,16 @@ export function SkillsPage() {
                     URL.revokeObjectURL(url);
                   }}
                 >
-                  <Download className="size-3" />
+                  <Download />
                 </Button>
                 {s.source !== 'plugin' && (
                   <Button
-                    variant="ghost"
+                    variant="destructive"
                     size="sm"
-                    className="h-6 px-2 text-[12px] text-muted-foreground hover:text-destructive"
+                    className="h-6 px-2 text-[12px]"
                     onClick={() => void manager.remove(s.id).then(refresh)}
                   >
-                    删除
+                    {t('settings.skills.delete')}
                   </Button>
                 )}
               </div>
@@ -307,8 +314,8 @@ export function SkillsPage() {
       <Dialog open={urlDialogOpen} onOpenChange={setUrlDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>从 URL 导入 Skill</DialogTitle>
-            <DialogDescription>输入 SKILL.md 的 URL（GitHub raw 等）。</DialogDescription>
+            <DialogTitle>{t('settings.skills.urlTitle')}</DialogTitle>
+            <DialogDescription>{t('settings.skills.urlHint')}</DialogDescription>
           </DialogHeader>
           <Input
             value={importUrl}
@@ -320,10 +327,10 @@ export function SkillsPage() {
           />
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setUrlDialogOpen(false)}>
-              取消
+              {t('app.cancel')}
             </Button>
             <Button size="sm" onClick={() => void doImportUrl()}>
-              导入
+              {t('settings.skills.import')}
             </Button>
           </DialogFooter>
         </DialogContent>

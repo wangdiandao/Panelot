@@ -4,7 +4,7 @@
  * (they used to vanish on item.complete for the rest of a multi-step turn).
  */
 import { describe, expect, it } from 'vitest';
-import { buildRows } from '../../src/ui/components/MessageStream';
+import { buildRows, partitionAssistantSegments } from '../../src/ui/components/MessageStream';
 import type { LiveItem } from '../../src/ui/engineClient';
 
 const live = (over: Partial<LiveItem>): LiveItem => ({
@@ -46,8 +46,9 @@ describe('buildRows live overlay', () => {
   it('keeps a completed live assistant item visible (no flicker mid-turn)', () => {
     const rows = buildRows([], [live({ text: 'partial answer', status: 'ok' })]);
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({
-      kind: 'assistant',
+    expect(rows[0]).toMatchObject({ kind: 'assistant' });
+    expect(rows[0]!.kind === 'assistant' && rows[0]!.segments[0]).toMatchObject({
+      kind: 'message',
       streaming: false,
       liveText: 'partial answer',
     });
@@ -55,7 +56,10 @@ describe('buildRows live overlay', () => {
 
   it('still marks streaming assistant rows as streaming', () => {
     const rows = buildRows([], [live({ text: 'typing…', status: 'streaming' })]);
-    expect(rows[0]).toMatchObject({ kind: 'assistant', streaming: true });
+    expect(rows[0]!.kind === 'assistant' && rows[0]!.segments[0]).toMatchObject({
+      kind: 'message',
+      streaming: true,
+    });
   });
 
   it('skips empty live items (no text yet)', () => {
@@ -79,13 +83,18 @@ const item = (kind: SnapshotItem['kind'], payload: unknown): SnapshotItem => ({
   payload,
 });
 const userMsg = (text: string) => item('user_message', { content: [{ type: 'text', text }] });
-const assistantMsg = (text: string) =>
-  item('assistant_message', { content: [{ type: 'text', text }], model: 'm', connectionId: 'c' });
+const assistantMsg = (text: string, reasoning?: string) =>
+  item('assistant_message', {
+    content: [{ type: 'text', text }],
+    model: 'm',
+    connectionId: 'c',
+    reasoning,
+  });
 const toolCall = (toolName: string, params: unknown = {}) =>
   item('tool_call', { itemId: `t${seq}`, toolName, params, level: 'L1' });
 
 describe('buildRows historical fold (docs/09 §4.2)', () => {
-  it('marks tools rows BEFORE the last user message as historical', () => {
+  it('marks tool segments before the last user message as historical', () => {
     const rows = buildRows(
       [
         userMsg('q1'),
@@ -97,16 +106,105 @@ describe('buildRows historical fold (docs/09 §4.2)', () => {
       ],
       [],
     );
-    const toolsRows = rows.filter((r) => r.kind === 'tools') as { historical?: boolean }[];
-    expect(toolsRows).toHaveLength(2);
-    expect(toolsRows[0]!.historical).toBe(true);
-    expect(toolsRows[1]!.historical).toBeUndefined();
+    const assistants = rows.filter((r) => r.kind === 'assistant');
+    expect(assistants).toHaveLength(2);
+    expect(assistants[0]!.historical).toBe(true);
+    expect(assistants[0]!.segments.find((segment) => segment.kind === 'tools')).toMatchObject({
+      historical: true,
+    });
+    expect(assistants[1]!.historical).toBeUndefined();
   });
 
   it('single-turn conversations keep their tools row un-folded', () => {
     const rows = buildRows([userMsg('q'), toolCall('click'), assistantMsg('a')], []);
-    const tools = rows.find((r) => r.kind === 'tools') as { historical?: boolean };
-    expect(tools.historical).toBeUndefined();
+    const assistant = rows.find((r) => r.kind === 'assistant');
+    expect(assistant?.kind).toBe('assistant');
+    const tools =
+      assistant?.kind === 'assistant' &&
+      assistant.segments.find((segment) => segment.kind === 'tools');
+    expect(tools && tools.kind === 'tools' && tools.historical).toBeUndefined();
+  });
+
+  it('keeps interleaved reasoning, tools, and the answer in their real order', () => {
+    const rows = buildRows(
+      [
+        userMsg('q'),
+        assistantMsg('', 'inspect the page'),
+        toolCall('read_page'),
+        assistantMsg('', 'open the matching result'),
+        toolCall('click'),
+        assistantMsg('answer', 'summarize the evidence'),
+      ],
+      [],
+    );
+    expect(rows.map((row) => row.kind)).toEqual(['user', 'assistant']);
+    const assistant = rows[1];
+    expect(assistant?.kind).toBe('assistant');
+    if (assistant?.kind !== 'assistant') throw new Error('expected assistant row');
+    expect(assistant.segments.map((segment) => segment.kind)).toEqual([
+      'message',
+      'tools',
+      'message',
+      'tools',
+      'message',
+    ]);
+    expect(
+      assistant.segments.map((segment) =>
+        segment.kind === 'message'
+          ? segment.payload.reasoning ||
+            segment.payload.content.find((content) => content.type === 'text')?.text
+          : segment.cards[0]?.toolName,
+      ),
+    ).toEqual([
+      'inspect the page',
+      'read_page',
+      'open the matching result',
+      'click',
+      'summarize the evidence',
+    ]);
+  });
+});
+
+describe('assistant process presentation', () => {
+  const interleavedRow = () => {
+    const rows = buildRows(
+      [
+        userMsg('q'),
+        assistantMsg('', 'inspect the page'),
+        toolCall('read_page'),
+        assistantMsg('', 'check the result'),
+        toolCall('click'),
+        assistantMsg('final answer', 'summarize the evidence'),
+      ],
+      [],
+    );
+    const row = rows.find((candidate) => candidate.kind === 'assistant');
+    if (!row || row.kind !== 'assistant') throw new Error('expected assistant row');
+    return row;
+  };
+
+  it('keeps the final answer outside the process after completion', () => {
+    const { processSegments, resultMessage } = partitionAssistantSegments(interleavedRow(), false);
+
+    expect(resultMessage?.kind).toBe('message');
+    expect(resultMessage?.kind === 'message' && resultMessage.payload.content[0]).toMatchObject({
+      type: 'text',
+      text: 'final answer',
+    });
+    expect(processSegments.map((segment) => segment.kind)).toEqual([
+      'message',
+      'tools',
+      'message',
+      'tools',
+      'message',
+    ]);
+  });
+
+  it('keeps every stage in the expanded process while the turn is running', () => {
+    const { processSegments, resultMessage } = partitionAssistantSegments(interleavedRow(), true);
+
+    expect(resultMessage).toBeUndefined();
+    expect(processSegments).toHaveLength(5);
   });
 });
 
@@ -122,8 +220,12 @@ describe('buildRows citations (visited-page pill)', () => {
       ],
       [],
     );
-    const assistant = rows.find((r) => r.kind === 'assistant') as { citations?: { url: string }[] };
-    expect(assistant.citations?.map((c) => c.url)).toEqual([
+    const assistant = rows.find((r) => r.kind === 'assistant');
+    const message =
+      assistant?.kind === 'assistant'
+        ? assistant.segments.find((segment) => segment.kind === 'message')
+        : undefined;
+    expect(message?.kind === 'message' && message.citations?.map((c) => c.url)).toEqual([
       'https://a.example/x',
       'https://b.example/y',
     ]);
@@ -141,10 +243,12 @@ describe('buildRows citations (visited-page pill)', () => {
       ],
       [],
     );
-    const assistants = rows.filter((r) => r.kind === 'assistant') as {
-      citations?: { url: string }[];
-    }[];
-    expect(assistants[0]!.citations?.map((c) => c.url)).toEqual(['https://a.example']);
-    expect(assistants[1]!.citations).toBeUndefined();
+    const assistants = rows.filter((r) => r.kind === 'assistant');
+    const firstMessage = assistants[0]?.segments.find((segment) => segment.kind === 'message');
+    const secondMessage = assistants[1]?.segments.find((segment) => segment.kind === 'message');
+    expect(firstMessage?.kind === 'message' && firstMessage.citations?.map((c) => c.url)).toEqual([
+      'https://a.example',
+    ]);
+    expect(secondMessage?.kind === 'message' && secondMessage.citations).toBeUndefined();
   });
 });

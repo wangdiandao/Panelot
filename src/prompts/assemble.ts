@@ -24,9 +24,8 @@ export interface AssembleOptions {
   environment?: {
     date?: string;
     language?: string;
-    activeTab?: { url: string; title: string };
-    approvalPolicy?: string;
-    capabilityScope?: string;
+    activeTab?: { tabId?: number; url: string; title: string };
+    permissionPolicy?: string;
   };
   /** Preset-level system prompt (ModelPreset.systemPrompt) sits with the user layer. */
   presetPrompt?: string;
@@ -66,9 +65,11 @@ export function assembleSystemPrompt(opts: AssembleOptions = {}): string {
     const lines: string[] = [];
     if (e.date) lines.push(`Date: ${e.date}`);
     if (e.language) lines.push(`User language: ${e.language}`);
-    if (e.activeTab) lines.push(`Active tab: ${e.activeTab.title} — ${e.activeTab.url}`);
-    if (e.approvalPolicy) lines.push(`Approval policy: ${e.approvalPolicy}`);
-    if (e.capabilityScope) lines.push(`Capability scope: ${e.capabilityScope}`);
+    if (e.activeTab) {
+      const id = e.activeTab.tabId === undefined ? '' : ` [tabId=${e.activeTab.tabId}]`;
+      lines.push(`Submission tab${id}: ${e.activeTab.title} — ${e.activeTab.url}`);
+    }
+    if (e.permissionPolicy) lines.push(`Permission policy: ${e.permissionPolicy}`);
     if (lines.length) layers.push(`# Environment\n${lines.join('\n')}`);
   }
 

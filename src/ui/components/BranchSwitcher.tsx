@@ -5,7 +5,7 @@
  * the sibling list comes from Dexie, not the LLM.
  */
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { Button } from './ui/button';
 import { PanelotDB } from '../../db/schema';
@@ -18,7 +18,7 @@ interface Props {
   threadId: string;
   nodeId: string;
   branch: { index: number; count: number };
-  onSelectBranch: (nodeId: string) => void;
+  onSelectBranch: (expectedThreadId: string, nodeId: string) => void;
 }
 
 async function siblingAt(threadId: string, nodeId: string, offset: number): Promise<string | null> {
@@ -33,34 +33,33 @@ async function siblingAt(threadId: string, nodeId: string, offset: number): Prom
 
 export function BranchSwitcher({ threadId, nodeId, branch, onSelectBranch }: Props) {
   const go = async (offset: number) => {
+    const expectedThreadId = threadId;
     const target = await siblingAt(threadId, nodeId, offset);
-    if (target) onSelectBranch(target);
+    if (target) onSelectBranch(expectedThreadId, target);
   };
 
   return (
     <div className="mt-1 flex items-center gap-0.5 text-[11px] text-faint-foreground">
       <Button
         variant="ghost"
-        size="icon"
-        className="size-5 text-faint-foreground"
+        size="icon-xs"
         disabled={branch.index <= 1}
         aria-label="上一分支"
         onClick={() => void go(-1)}
       >
-        <ChevronLeft className="size-3" />
+        <ChevronLeft />
       </Button>
       <span className="tabular-nums">
         {branch.index}/{branch.count}
       </span>
       <Button
         variant="ghost"
-        size="icon"
-        className="size-5 text-faint-foreground"
+        size="icon-xs"
         disabled={branch.index >= branch.count}
         aria-label="下一分支"
         onClick={() => void go(1)}
       >
-        <ChevronRight className="size-3" />
+        <ChevronRight />
       </Button>
     </div>
   );
@@ -73,18 +72,26 @@ export function BranchSwitcher({ threadId, nodeId, branch, onSelectBranch }: Pro
 export function useBranchShortcuts(
   threadId: string | null,
   lastBranchNodeId: string | null,
-  onSelectBranch: (nodeId: string) => void,
+  onSelectBranch: (expectedThreadId: string, nodeId: string) => void,
 ): void {
+  const selectBranchRef = useRef(onSelectBranch);
+  useEffect(() => {
+    selectBranchRef.current = onSelectBranch;
+  }, [onSelectBranch]);
+
   useEffect(() => {
     if (!threadId || !lastBranchNodeId) return;
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
       e.preventDefault();
-      void siblingAt(threadId, lastBranchNodeId, e.key === 'ArrowUp' ? -1 : 1).then((target) => {
-        if (target) onSelectBranch(target);
-      });
+      const expectedThreadId = threadId;
+      void siblingAt(expectedThreadId, lastBranchNodeId, e.key === 'ArrowUp' ? -1 : 1).then(
+        (target) => {
+          if (target) selectBranchRef.current(expectedThreadId, target);
+        },
+      );
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [threadId, lastBranchNodeId, onSelectBranch]);
+  }, [threadId, lastBranchNodeId]);
 }

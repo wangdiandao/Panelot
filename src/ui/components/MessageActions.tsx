@@ -14,6 +14,7 @@ import { useState } from 'react';
 import { Check, Copy, Info, Pencil, RefreshCw } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
+import { Button } from './ui/button';
 import { cn } from '../lib/utils';
 import { t } from '../i18n';
 import type { Usage } from '../../messaging/protocol';
@@ -70,16 +71,16 @@ export function MessageActions({
       )}
     >
       <ActionButton label={copied ? t('actions.copied') : t('actions.copy')} onClick={copy}>
-        {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
+        {copied ? <Check /> : <Copy />}
       </ActionButton>
       {role === 'assistant' && onRegenerate && (
         <ActionButton label={t('actions.regenerate')} onClick={onRegenerate}>
-          <RefreshCw className="size-3.5" />
+          <RefreshCw />
         </ActionButton>
       )}
       {role === 'user' && onEdit && (
         <ActionButton label={t('actions.edit')} onClick={onEdit}>
-          <Pencil className="size-3.5" />
+          <Pencil />
         </ActionButton>
       )}
       {role === 'assistant' && usage && (
@@ -87,19 +88,20 @@ export function MessageActions({
           <Tooltip>
             <TooltipTrigger asChild>
               <PopoverTrigger asChild>
-                <button
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
                   type="button"
                   aria-label={t('actions.usage')}
-                  className="rounded-lg p-1.5 text-faint-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
                 >
-                  <Info className="size-3.5" />
-                </button>
+                  <Info />
+                </Button>
               </PopoverTrigger>
             </TooltipTrigger>
             <TooltipContent>{t('actions.usage')}</TooltipContent>
           </Tooltip>
           <PopoverContent side="top" align="start" className="w-56 p-3 text-[12px]">
-            <div className="space-y-0.5 font-mono text-muted-foreground">
+            <div className="flex flex-col gap-0.5 font-mono text-muted-foreground">
               {model && (
                 <div className="mb-1 truncate border-b border-border-soft pb-1 font-sans font-medium text-foreground">
                   {model}
@@ -139,14 +141,9 @@ function ActionButton({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button
-          type="button"
-          aria-label={label}
-          onClick={onClick}
-          className="rounded-lg p-1.5 text-faint-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
-        >
+        <Button variant="ghost" size="icon-sm" type="button" aria-label={label} onClick={onClick}>
           {children}
-        </button>
+        </Button>
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>

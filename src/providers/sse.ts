@@ -13,9 +13,13 @@
  * simplified from the eventsource-parser package's design.
  */
 
+import { ProviderError } from './types';
+
 export interface SseEvent {
   event?: string;
   data: string;
+  /** OpenAI's explicit stream terminator; never inferred from transport EOF. */
+  terminal?: 'done';
 }
 
 /**
@@ -114,13 +118,29 @@ export async function* iterateSse(
   try {
     for (;;) {
       if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
-      const { value, done } = await reader.read();
+      let result: ReadableStreamReadResult<Uint8Array>;
+      try {
+        result = await reader.read();
+      } catch (error) {
+        if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+          throw new DOMException('aborted', 'AbortError');
+        }
+        throw new ProviderError('network', 'provider stream disconnected');
+      }
+      const { value, done } = result;
       if (done) break;
-      const result = parser.feed(decoder.decode(value, { stream: true }));
-      for (const ev of result.events) yield ev;
-      if (result.done) return;
+      const parsed = parser.feed(decoder.decode(value, { stream: true }));
+      for (const ev of parsed.events) yield ev;
+      if (parsed.done) {
+        yield { data: '', terminal: 'done' };
+        return;
+      }
     }
-    for (const ev of parser.flush()) yield ev;
+    const trailing = parser.feed(`${decoder.decode()}\n\n`);
+    for (const ev of trailing.events) yield ev;
+    if (trailing.done) {
+      yield { data: '', terminal: 'done' };
+    }
   } finally {
     reader.releaseLock();
   }

@@ -4,7 +4,7 @@ Panelot is a WXT, React, and TypeScript Chrome MV3 extension. Read the relevant 
 
 ## Development
 
-Use Node.js 20.12 or newer and pnpm 9.12.3:
+Use Node.js 20.19 or newer and pnpm 9.12.3. GitHub Actions uses Node.js 22.12.0:
 
 ```bash
 pnpm install --frozen-lockfile

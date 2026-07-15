@@ -2,22 +2,37 @@ import type { ExecuteResult } from '../content/executor';
 import { ActionError } from './errors';
 
 export interface ActionAdapter {
-  execute(tool: string, params: unknown): Promise<ExecuteResult>;
+  execute(
+    tool: string,
+    params: unknown,
+    signal?: AbortSignal,
+    deadlineAt?: number,
+  ): Promise<ExecuteResult>;
 }
 
 export class ActionRunner {
   constructor(private readonly l1: ActionAdapter) {}
 
-  async run(tool: string, params: unknown): Promise<ExecuteResult> {
+  async run(
+    tool: string,
+    params: unknown,
+    signal?: AbortSignal,
+    deadlineAt?: number,
+  ): Promise<ExecuteResult> {
     try {
-      return await this.l1.execute(tool, params);
+      return await (signal === undefined && deadlineAt === undefined
+        ? this.l1.execute(tool, params)
+        : this.l1.execute(tool, params, signal, deadlineAt));
     } catch (error) {
       if (!(error instanceof ActionError)) throw error;
       if (error.failure.code === 'stale_ref' && params && typeof params === 'object') {
-        return this.l1.execute(tool, {
+        const recoveredParams = {
           ...(params as Record<string, unknown>),
           allowRecovery: true,
-        });
+        };
+        return signal === undefined && deadlineAt === undefined
+          ? this.l1.execute(tool, recoveredParams)
+          : this.l1.execute(tool, recoveredParams, signal, deadlineAt);
       }
       if (error.failure.code === 'l1_not_effective') {
         const escalation =

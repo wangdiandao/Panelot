@@ -31,6 +31,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from '../components/ui/empty';
+import { getLang, t } from '../i18n';
 
 const db = new PanelotDB();
 const repository = new AttachmentRepository(db);
@@ -57,9 +58,12 @@ export function AttachmentsPage() {
   return (
     <div className="flex max-w-3xl flex-col gap-4">
       <div>
-        <h2 className="text-[15px] font-semibold">Attachments</h2>
+        <h2 className="text-[15px] font-semibold">{t('settings.section.attachments')}</h2>
         <p className="mt-1 text-[12px] text-muted-foreground">
-          {attachments.length} records · {formatBytes(totalBytes)} stored locally
+          {t('settings.attachments.summary', {
+            count: attachments.length,
+            size: formatBytes(totalBytes),
+          })}
         </p>
       </div>
 
@@ -69,10 +73,8 @@ export function AttachmentsPage() {
             <EmptyMedia variant="icon">
               <FileArchive />
             </EmptyMedia>
-            <EmptyTitle>No stored attachments</EmptyTitle>
-            <EmptyDescription>
-              Screenshots, page extracts, and user uploads referenced by chats appear here.
-            </EmptyDescription>
+            <EmptyTitle>{t('settings.attachments.emptyTitle')}</EmptyTitle>
+            <EmptyDescription>{t('settings.attachments.emptyHint')}</EmptyDescription>
           </EmptyHeader>
         </Empty>
       ) : (
@@ -85,13 +87,13 @@ export function AttachmentsPage() {
                 </CardTitle>
                 <CardDescription>
                   {attachment.mime} · {formatBytes(attachment.bytes.size)} ·{' '}
-                  {new Date(attachment.createdAt).toLocaleString()}
+                  {new Date(attachment.createdAt).toLocaleString(getLang())}
                 </CardDescription>
                 <CardAction>
                   <Button
-                    variant="ghost"
+                    variant="destructive"
                     size="icon-sm"
-                    aria-label="Delete attachment"
+                    aria-label={t('settings.attachments.delete')}
                     onClick={() => setDeleting(attachment)}
                   >
                     <Trash2 />
@@ -101,12 +103,18 @@ export function AttachmentsPage() {
               <CardContent className="flex flex-wrap gap-2">
                 <Badge variant="secondary">{attachment.kind}</Badge>
                 <Badge variant={attachment.trust === 'untrusted' ? 'outline' : 'secondary'}>
-                  {attachment.trust ?? 'unclassified'}
+                  {attachment.trust ?? t('settings.attachments.unclassified')}
                 </Badge>
-                <Badge variant="outline">{attachment.provenance ?? 'unknown source'}</Badge>
+                <Badge variant="outline">
+                  {attachment.provenance ?? t('settings.attachments.unknownSource')}
+                </Badge>
                 <Badge variant="outline">{attachment.threadId}</Badge>
                 {(attachment.refs?.nodeIds?.length ?? 0) > 0 && (
-                  <Badge variant="outline">{attachment.refs!.nodeIds!.length} node refs</Badge>
+                  <Badge variant="outline">
+                    {t('settings.attachments.nodeRefs', {
+                      count: attachment.refs!.nodeIds!.length,
+                    })}
+                  </Badge>
                 )}
               </CardContent>
             </Card>
@@ -117,24 +125,22 @@ export function AttachmentsPage() {
       <AlertDialog open={deleting !== null} onOpenChange={(open) => !open && setDeleting(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete this attachment?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Referencing message nodes will be marked unavailable before the bytes are removed.
-            </AlertDialogDescription>
+            <AlertDialogTitle>{t('settings.attachments.deleteTitle')}</AlertDialogTitle>
+            <AlertDialogDescription>{t('settings.attachments.deleteHint')}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{t('app.cancel')}</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
               onClick={() => {
                 if (deleting) {
                   void repository.remove(deleting.id).then(refresh);
-                  toast.success('Attachment deleted');
+                  toast.success(t('settings.attachments.deleted'));
                 }
                 setDeleting(null);
               }}
             >
-              Delete
+              {t('settings.attachments.delete')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

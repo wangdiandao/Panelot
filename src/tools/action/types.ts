@@ -12,6 +12,7 @@ export type ActionFailureCode =
   | 'unsupported_frame'
   | 'l1_not_effective'
   | 'navigation_uncertain'
+  | 'safety_boundary_unavailable'
   | 'timeout'
   | 'aborted'
   | 'unknown';
@@ -26,7 +27,7 @@ export interface ActionFailure {
 
 export interface ActionAttemptEvidence {
   phase: ActionPhase;
-  strategy: 'l1' | 'l2';
+  strategy: 'l0' | 'l1' | 'l2';
   startedAt: number;
   durationMs: number;
   failureCode?: ActionFailureCode;
@@ -41,6 +42,8 @@ export interface ActionEvidence {
   generationBefore?: number;
   generationAfter?: number;
   attempts: ActionAttemptEvidence[];
+  /** How far effect confirmation progressed after dispatch. */
+  effectState: 'dispatched' | 'observed' | 'verified';
   observedEffects: string[];
   outcome: 'verified' | 'failed' | 'uncertain';
 }

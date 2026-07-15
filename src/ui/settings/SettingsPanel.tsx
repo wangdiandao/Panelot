@@ -9,9 +9,12 @@
 import { useEffect, useState } from 'react';
 import {
   Bot,
+  Code2,
   Cog,
   Database,
+  ExternalLink,
   Globe2,
+  Info,
   Plug,
   Package,
   Paperclip,
@@ -20,13 +23,16 @@ import {
   Sparkles,
   Zap,
 } from 'lucide-react';
+import { Button } from '../components/ui/button';
+import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from '../components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { Input } from '../components/ui/input';
-import { Label } from '../components/ui/label';
 import { Textarea } from '../components/ui/textarea';
+import { Field, FieldDescription, FieldGroup, FieldLabel } from '../components/ui/field';
+import { InputGroup, InputGroupAddon, InputGroupInput } from '../components/ui/input-group';
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -42,19 +48,20 @@ import { SiteInstructionsPage } from './SiteInstructionsPage';
 import { AttachmentsPage } from './AttachmentsPage';
 import { SettingsStore, type GlobalSettings } from '../../settings/store';
 import { setLang, t } from '../i18n';
+import { useStorageValue } from '../useStorageValue';
 
 const SECTIONS = [
-  { id: 'attachments', label: 'Attachments', Icon: Paperclip },
-  { id: 'sites', label: 'Sites', Icon: Globe2 },
-  { id: 'presets', label: 'Presets', Icon: Bot },
-  { id: 'general', label: '通用', Icon: Cog },
-  { id: 'providers', label: '模型', Icon: Zap },
-  { id: 'permissions', label: '浏览器权限', Icon: Shield },
-  { id: 'skills', label: 'Skills', Icon: Sparkles },
-  { id: 'plugins', label: 'Plugins', Icon: Package },
-  { id: 'mcp', label: 'MCP 服务器', Icon: Plug },
-  { id: 'data', label: '数据', Icon: Database },
-  { id: 'about', label: '关于', Icon: Cog },
+  { id: 'attachments', labelKey: 'settings.section.attachments', Icon: Paperclip },
+  { id: 'sites', labelKey: 'settings.section.sites', Icon: Globe2 },
+  { id: 'presets', labelKey: 'settings.section.presets', Icon: Bot },
+  { id: 'general', labelKey: 'settings.section.general', Icon: Cog },
+  { id: 'providers', labelKey: 'settings.section.providers', Icon: Zap },
+  { id: 'permissions', labelKey: 'settings.section.permissions', Icon: Shield },
+  { id: 'skills', labelKey: 'settings.section.skills', Icon: Sparkles },
+  { id: 'plugins', labelKey: 'settings.section.plugins', Icon: Package },
+  { id: 'mcp', labelKey: 'settings.section.mcp', Icon: Plug },
+  { id: 'data', labelKey: 'settings.section.data', Icon: Database },
+  { id: 'about', labelKey: 'settings.section.about', Icon: Info },
 ] as const;
 
 export type SettingsSectionId = (typeof SECTIONS)[number]['id'];
@@ -141,10 +148,13 @@ export function filterSections(query: string): SettingsSectionId[] {
   if (!q) return all;
   return all.filter(
     (id) =>
-      SECTIONS.find((s) => s.id === id)!
-        .label.toLowerCase()
-        .includes(q) || SECTION_KEYWORDS[id].some((k) => k.toLowerCase().includes(q)),
+      settingsSectionLabel(id).toLowerCase().includes(q) ||
+      SECTION_KEYWORDS[id].some((k) => k.toLowerCase().includes(q)),
   );
+}
+
+export function settingsSectionLabel(id: SettingsSectionId): string {
+  return t(SECTIONS.find((section) => section.id === id)!.labelKey);
 }
 
 interface Props {
@@ -173,33 +183,34 @@ export function SettingsPanel({ initialSection = 'providers', footer }: Props) {
       value={active}
       onValueChange={(v) => setActive(v as SettingsSectionId)}
       orientation="vertical"
-      className="flex h-full min-h-0 flex-row gap-0 bg-background text-foreground"
+      className="flex h-full min-h-0 flex-col gap-0 bg-background text-foreground sm:flex-row"
     >
-      <nav className="flex w-52 shrink-0 flex-col border-r border-border-soft bg-card p-3">
-        <div className="mb-3 px-2 text-[15px] font-semibold">
-          <span className="text-primary">Panelot</span> 设置
-        </div>
-        <div className="relative mb-2">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-faint-foreground" />
-          <Input
+      <nav className="flex max-h-[45vh] w-full shrink-0 flex-col border-b border-border-soft bg-card p-3 sm:max-h-none sm:w-52 sm:border-r sm:border-b-0">
+        <div className="mb-3 px-2 text-[15px] font-semibold">{t('settings.title')}</div>
+        <InputGroup className="mb-2 h-8 border-transparent bg-muted shadow-none">
+          <InputGroupAddon>
+            <Search aria-hidden="true" />
+          </InputGroupAddon>
+          <InputGroupInput
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={t('settings.search')}
-            className="h-8 border-transparent bg-muted pl-8 text-[13px] shadow-none"
+            aria-label={t('settings.search')}
+            className="text-[13px]"
           />
-        </div>
+        </InputGroup>
         <TabsList
           variant="line"
-          className="flex h-auto w-full flex-1 flex-col items-stretch justify-start gap-0.5 overflow-y-auto bg-transparent p-0"
+          className="flex h-auto w-full flex-1 flex-row items-stretch justify-start gap-0.5 overflow-x-auto overflow-y-hidden bg-transparent p-0 sm:flex-col sm:overflow-x-hidden sm:overflow-y-auto"
         >
-          {SECTIONS.filter(({ id }) => visible.includes(id)).map(({ id, label, Icon }) => (
+          {SECTIONS.filter(({ id }) => visible.includes(id)).map(({ id, Icon }) => (
             <TabsTrigger
               key={id}
               value={id}
-              className="h-auto w-full flex-none justify-start gap-2.5 rounded-lg px-2.5 py-2 text-[13px] after:hidden data-[state=active]:bg-muted data-[state=active]:font-medium dark:data-[state=active]:border-transparent dark:data-[state=active]:bg-muted"
+              className="h-auto w-auto flex-none justify-start gap-2.5 rounded-lg px-2.5 py-2 text-[13px] after:hidden data-[state=active]:border-transparent data-[state=active]:bg-muted data-[state=active]:font-medium sm:w-full"
             >
-              <Icon className="size-4 opacity-70" />
-              {label}
+              <Icon aria-hidden="true" />
+              {settingsSectionLabel(id)}
             </TabsTrigger>
           ))}
         </TabsList>
@@ -208,7 +219,7 @@ export function SettingsPanel({ initialSection = 'providers', footer }: Props) {
         )}
         {footer && <div className="pt-2">{footer}</div>}
       </nav>
-      <main className="min-w-0 flex-1 overflow-y-auto px-8 py-7">
+      <main className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-5 sm:px-8 sm:py-7">
         <TabsContent value="attachments">
           <AttachmentsPage />
         </TabsContent>
@@ -248,70 +259,66 @@ export function SettingsPanel({ initialSection = 'providers', footer }: Props) {
 }
 
 function GeneralPage() {
-  const [settings, setSettings] = useState<GlobalSettings>({});
-
-  useEffect(() => {
-    void SettingsStore.global.get().then(setSettings);
-  }, []);
+  const settings = useStorageValue<GlobalSettings | null>('global_settings', null) ?? {};
 
   const update = async (patch: Partial<GlobalSettings>) => {
-    const next = { ...settings, ...patch };
-    setSettings(next);
     if (patch.language) setLang(patch.language);
-    await SettingsStore.global.set(next);
+    await SettingsStore.global.patch(patch);
   };
 
   return (
-    <div className="max-w-xl space-y-5">
-      <h2 className="text-[15px] font-semibold">通用</h2>
-      <div className="space-y-1.5">
-        <Label htmlFor="global-prompt" className="text-[12px] text-muted-foreground">
-          全局自定义指令
-        </Label>
-        <Textarea
-          id="global-prompt"
-          rows={4}
-          value={settings.userGlobalPrompt ?? ''}
-          onChange={(e) => void update({ userGlobalPrompt: e.target.value })}
-          placeholder="例如：回复保持简洁；表格优先。"
-        />
-        <p className="text-[11px] text-faint-foreground">
-          拼入 system prompt 的用户层，对所有会话生效。
-        </p>
-      </div>
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-1.5">
-          <Label className="text-[12px] text-muted-foreground">语言</Label>
+    <div className="flex max-w-xl flex-col gap-5">
+      <h2 className="text-[15px] font-semibold">{t('settings.section.general')}</h2>
+      <FieldGroup>
+        <Field>
+          <FieldLabel htmlFor="global-prompt">{t('settings.general.prompt')}</FieldLabel>
+          <Textarea
+            id="global-prompt"
+            rows={4}
+            value={settings.userGlobalPrompt ?? ''}
+            onChange={(e) => void update({ userGlobalPrompt: e.target.value })}
+            placeholder={t('settings.general.promptPlaceholder')}
+          />
+          <FieldDescription>{t('settings.general.promptHint')}</FieldDescription>
+        </Field>
+      </FieldGroup>
+      <FieldGroup className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Field>
+          <FieldLabel htmlFor="settings-language">{t('settings.general.language')}</FieldLabel>
           <Select
             value={settings.language ?? 'zh-CN'}
             onValueChange={(v) => void update({ language: v as GlobalSettings['language'] })}
           >
-            <SelectTrigger className="w-full">
+            <SelectTrigger id="settings-language" className="w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="zh-CN">中文</SelectItem>
-              <SelectItem value="en">English</SelectItem>
+              <SelectGroup>
+                <SelectItem value="zh-CN">中文</SelectItem>
+                <SelectItem value="en">English</SelectItem>
+              </SelectGroup>
             </SelectContent>
           </Select>
-        </div>
-        <div className="space-y-1.5">
-          <Label className="text-[12px] text-muted-foreground">主题</Label>
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="settings-theme">{t('settings.general.theme')}</FieldLabel>
           <Select
             value={settings.theme ?? 'system'}
             onValueChange={(v) => void update({ theme: v as GlobalSettings['theme'] })}
           >
-            <SelectTrigger className="w-full">
+            <SelectTrigger id="settings-theme" className="w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="system">跟随系统</SelectItem>
-              <SelectItem value="dark">暗色</SelectItem>
-              <SelectItem value="light">亮色</SelectItem>
+              <SelectGroup>
+                <SelectItem value="system">{t('settings.general.theme.system')}</SelectItem>
+                <SelectItem value="dark">{t('settings.general.theme.dark')}</SelectItem>
+                <SelectItem value="light">{t('settings.general.theme.light')}</SelectItem>
+              </SelectGroup>
             </SelectContent>
           </Select>
-        </div>
-      </div>
+        </Field>
+      </FieldGroup>
     </div>
   );
 }
@@ -324,23 +331,40 @@ function AboutPage() {
       ? chrome.runtime.getManifest().version
       : null;
   return (
-    <div className="max-w-xl space-y-3 text-[13px] leading-relaxed text-muted-foreground">
-      <h2 className="text-[15px] font-semibold text-foreground">
-        关于 Panelot
-        {version && <span className="ml-2 font-normal text-faint-foreground">v{version}</span>}
-      </h2>
-      <p>浏览器原生 AI Agent — 模型自带（BYOK）、能力可扩展（Skills / MCP）、数据全本地。</p>
-      <p>会话、配置与 API Key 全部存储在本机，仅发往你自己配置的模型端点。无遥测。</p>
-      <p>
-        <a
-          href="https://github.com/wangdiandao/Panelot"
-          target="_blank"
-          rel="noreferrer"
-          className="text-primary underline-offset-2 hover:underline"
-        >
-          github.com/wangdiandao/Panelot
-        </a>
-      </p>
+    <div className="flex max-w-2xl flex-col gap-5">
+      <h2 className="text-[15px] font-semibold">{t('settings.about.title')}</h2>
+
+      <Card className="gap-0 overflow-hidden py-0">
+        <CardHeader className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-4 p-5 sm:p-6">
+          <img
+            src="/icon/128.png"
+            alt=""
+            aria-hidden="true"
+            className="size-14 rounded-2xl shadow-sm sm:size-16"
+          />
+          <div className="flex min-w-0 flex-col gap-2">
+            <CardTitle className="flex flex-wrap items-baseline gap-2">
+              <span>Panelot</span>
+              {version && (
+                <span className="text-xs font-normal text-muted-foreground">v{version}</span>
+              )}
+            </CardTitle>
+            <CardDescription className="leading-relaxed">
+              {t('settings.about.summary')}
+            </CardDescription>
+          </div>
+        </CardHeader>
+
+        <CardFooter className="justify-start px-5 pb-5 sm:px-6 sm:pb-6">
+          <Button variant="outline" size="sm" asChild>
+            <a href="https://github.com/wangdiandao/Panelot" target="_blank" rel="noreferrer">
+              <Code2 data-icon="inline-start" aria-hidden="true" />
+              {t('settings.about.github')}
+              <ExternalLink data-icon="inline-end" aria-hidden="true" />
+            </a>
+          </Button>
+        </CardFooter>
+      </Card>
     </div>
   );
 }

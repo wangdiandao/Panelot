@@ -1,4 +1,10 @@
 import type { GenParams, ModelPreset } from '../providers/types';
+import { normalizePermissionPolicy } from './permissionPolicy';
+
+export type LegacyModelPreset = ModelPreset & {
+  defaultApprovalPolicy?: string;
+  defaultCapabilityScope?: string;
+};
 
 function optionalText(value: string | undefined): string | undefined {
   const normalized = value?.trim();
@@ -30,15 +36,16 @@ function normalizeParams(params: GenParams | undefined): GenParams | undefined {
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-export function normalizeModelPreset(preset: ModelPreset): ModelPreset {
+export function normalizeModelPreset(preset: LegacyModelPreset): ModelPreset {
   const name = preset.name.trim();
   const connectionId = preset.base.connectionId.trim();
   const modelId = preset.base.modelId.trim();
   if (!name) throw new Error('Preset name is required.');
   if (!connectionId || !modelId) throw new Error('A base model is required.');
 
+  const { defaultApprovalPolicy, defaultCapabilityScope, ...current } = preset;
   return {
-    ...preset,
+    ...current,
     name,
     icon: optionalText(preset.icon),
     base: { connectionId, modelId },
@@ -47,6 +54,9 @@ export function normalizeModelPreset(preset: ModelPreset): ModelPreset {
     enabledToolLevels: preset.enabledToolLevels
       ? [...new Set(preset.enabledToolLevels)]
       : undefined,
+    defaultPermissionPolicy:
+      preset.defaultPermissionPolicy ??
+      normalizePermissionPolicy(defaultApprovalPolicy, defaultCapabilityScope),
     skills: preset.skills ? [...new Set(preset.skills)] : undefined,
     promptVersion: optionalText(preset.promptVersion),
   };

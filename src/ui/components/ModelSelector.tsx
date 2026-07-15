@@ -12,7 +12,7 @@
  * jumps straight to Settings → Providers (the BYOK dead-end killer).
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, Cpu } from 'lucide-react';
 import { Button } from './ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
@@ -26,10 +26,10 @@ import {
 } from './ui/command';
 import { cn } from '../lib/utils';
 import { t } from '../i18n';
-import { SettingsStore } from '../../settings/store';
 import { decryptSecret } from '../../settings/crypto';
 import { fetchAllModels } from '../../providers/registry';
 import type { Connection } from '../../providers/types';
+import { useStorageValue } from '../useStorageValue';
 
 export interface ModelChoice {
   connectionId: string;
@@ -40,34 +40,57 @@ export interface ModelChoice {
 }
 
 interface Props {
-  /** Currently selected model (sticky override), or null = preset default. */
+  /** Currently selected model, or null = the configured global/preset default. */
   value: { connectionId: string; modelId: string } | null;
   onSelect: (choice: ModelChoice | null) => void;
+  /** Whether the selector may store a null value that follows the configured default. */
+  allowDefaultSelection?: boolean;
   /** Trigger placement variant; popover content is shared. */
   variant?: 'composer' | 'header';
   /** Empty-state CTA: open settings on the Providers tab. */
   onOpenSettings?: () => void;
 }
 
-export function ModelSelector({ value, onSelect, variant = 'composer', onOpenSettings }: Props) {
+export function ModelSelector({
+  value,
+  onSelect,
+  allowDefaultSelection = true,
+  variant = 'composer',
+  onOpenSettings,
+}: Props) {
   const [open, setOpen] = useState(false);
   const [choices, setChoices] = useState<ModelChoice[] | null>(null);
   const [connFilter, setConnFilter] = useState<string | null>(null);
+  const storedConnections = useStorageValue<Connection[] | null>('connections', null);
+  const choicesSource = useRef<Connection[] | null>(null);
+  const loadGeneration = useRef(0);
+  const automaticSelection = useRef<string | null>(null);
 
-  // Fetch on first open; cached for the component's lifetime (PV-3: all
-  // connections concurrently, per-connection 4s timeout inside fetchAllModels).
+  // Required selectors load eagerly so a missing or stale value can be replaced
+  // with a concrete model before the user starts a conversation.
+  // Stale decrypt/model requests cannot replace choices for a newer snapshot.
   useEffect(() => {
-    if (!open || choices !== null) return;
+    if (choicesSource.current !== storedConnections) {
+      setChoices(null);
+      setConnFilter(null);
+    }
+    if (
+      (!open && allowDefaultSelection) ||
+      storedConnections === null ||
+      choicesSource.current === storedConnections
+    )
+      return;
+    const generation = ++loadGeneration.current;
     void (async () => {
-      const stored: Connection[] = await SettingsStore.connections.get();
       // Keys are AES-GCM obfuscated at rest — decrypt before the live fetch.
       const connections = await Promise.all(
-        stored.map(async (c) => ({
+        storedConnections.map(async (c) => ({
           ...c,
           apiKeys: await Promise.all(c.apiKeys.map(decryptSecret)),
         })),
       );
       const results = await fetchAllModels(connections);
+      if (loadGeneration.current !== generation) return;
       const byId = new Map(connections.map((c) => [c.id, c]));
       const list: ModelChoice[] = results.flatMap((r) => {
         const conn = byId.get(r.connectionId);
@@ -79,14 +102,37 @@ export function ModelSelector({ value, onSelect, variant = 'composer', onOpenSet
           connectionName: conn.name || conn.baseUrl,
         }));
       });
+      choicesSource.current = storedConnections;
       setChoices(list);
     })();
-  }, [open, choices]);
+    return () => {
+      if (loadGeneration.current === generation) loadGeneration.current += 1;
+    };
+  }, [allowDefaultSelection, open, storedConnections]);
+
+  useEffect(() => {
+    if (allowDefaultSelection || choices === null || choices.length === 0) return;
+    const selectedIsAvailable =
+      value !== null &&
+      choices.some(
+        (choice) => choice.connectionId === value.connectionId && choice.modelId === value.modelId,
+      );
+    if (selectedIsAvailable) {
+      automaticSelection.current = null;
+      return;
+    }
+    const first = choices[0];
+    if (!first) return;
+    const key = `${first.connectionId}:${first.modelId}`;
+    if (automaticSelection.current === key) return;
+    automaticSelection.current = key;
+    onSelect(first);
+  }, [allowDefaultSelection, choices, onSelect, value]);
 
   const current = value
     ? (choices?.find((c) => c.connectionId === value.connectionId && c.modelId === value.modelId)
         ?.label ?? value.modelId)
-    : t('model.default');
+    : t(allowDefaultSelection ? 'model.default' : 'model.select');
 
   const connNames = [...new Set((choices ?? []).map((c) => c.connectionName))];
   const visible = connFilter
@@ -108,11 +154,11 @@ export function ModelSelector({ value, onSelect, variant = 'composer', onOpenSet
         {variant === 'header' ? (
           <Button
             variant="ghost"
-            className="h-8 gap-1 px-2 text-[15px] font-medium"
+            className="h-8 min-w-0 max-w-full gap-1 px-2 text-[14px] font-medium sm:text-[15px]"
             aria-label={t('model.select')}
           >
-            <span className="max-w-56 truncate">{current}</span>
-            <ChevronDown className="size-3.5 text-faint-foreground" />
+            <span className="max-w-24 truncate sm:max-w-40 lg:max-w-56">{current}</span>
+            <ChevronDown data-icon="inline-end" />
           </Button>
         ) : (
           <Button
@@ -121,9 +167,9 @@ export function ModelSelector({ value, onSelect, variant = 'composer', onOpenSet
             className="h-6 gap-1 rounded-full px-2 text-[11px] text-muted-foreground hover:text-foreground"
             aria-label={t('model.select')}
           >
-            <Cpu className="size-3" />
+            <Cpu data-icon="inline-start" />
             <span className="max-w-32 truncate">{current}</span>
-            <ChevronDown className="size-3 opacity-60" />
+            <ChevronDown data-icon="inline-end" />
           </Button>
         )}
       </PopoverTrigger>
@@ -173,23 +219,25 @@ export function ModelSelector({ value, onSelect, variant = 'composer', onOpenSet
             )}
             <CommandList>
               <CommandEmpty>{loaded ? t('model.noMatch') : t('model.loading')}</CommandEmpty>
-              <CommandGroup>
-                <CommandItem
-                  value="__default__"
-                  onSelect={() => {
-                    onSelect(null);
-                    setOpen(false);
-                  }}
-                >
-                  <Check className={cn('size-4', value === null ? 'opacity-100' : 'opacity-0')} />
-                  <div className="flex flex-col">
-                    <span>{t('model.default')}</span>
-                    <span className="text-[11px] text-muted-foreground">
-                      {t('model.defaultHint')}
-                    </span>
-                  </div>
-                </CommandItem>
-              </CommandGroup>
+              {allowDefaultSelection && (
+                <CommandGroup>
+                  <CommandItem
+                    value="__default__"
+                    onSelect={() => {
+                      onSelect(null);
+                      setOpen(false);
+                    }}
+                  >
+                    <Check className={cn(value === null ? 'opacity-100' : 'opacity-0')} />
+                    <div className="flex flex-col">
+                      <span>{t('model.default')}</span>
+                      <span className="text-[11px] text-muted-foreground">
+                        {t('model.defaultHint')}
+                      </span>
+                    </div>
+                  </CommandItem>
+                </CommandGroup>
+              )}
               {[...groups.entries()].map(([connName, models]) => (
                 <CommandGroup key={connName} heading={connName}>
                   {models.map((m) => {
@@ -204,7 +252,7 @@ export function ModelSelector({ value, onSelect, variant = 'composer', onOpenSet
                           setOpen(false);
                         }}
                       >
-                        <Check className={cn('size-4', selected ? 'opacity-100' : 'opacity-0')} />
+                        <Check className={cn(selected ? 'opacity-100' : 'opacity-0')} />
                         <span className="truncate font-mono text-[12px]">{m.label}</span>
                       </CommandItem>
                     );
@@ -229,18 +277,15 @@ function FilterPill({
   onClick: () => void;
 }) {
   return (
-    <button
+    <Button
+      variant={active ? 'secondary' : 'ghost'}
+      size="sm"
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={cn(
-        'shrink-0 rounded-full border px-2 py-0.5 text-[11px] transition-colors',
-        active
-          ? 'border-primary/30 bg-primary/10 text-primary'
-          : 'border-transparent bg-muted text-muted-foreground hover:text-foreground',
-      )}
+      className="h-6 shrink-0 rounded-full"
     >
       {label}
-    </button>
+    </Button>
   );
 }

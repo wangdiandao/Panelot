@@ -7,10 +7,10 @@
 
 ## 1. 设计哲学
 
-**Pi 的极简内核 + Codex 的安全外壳。** loop 本身保持最小——循环到模型不再调工具为止；复杂度全部推到外层（Gatekeeper、能力域、UI）。不加没有用例的旋钮：
+**Pi 的极简内核 + Codex 的安全外壳。** loop 本身保持最小——循环到模型不再调工具为止；复杂度全部推到外层（Gatekeeper、能力域、UI）。工具调用次数没有软提醒或硬上限，不以预设步骤数替 Agent 决定任务何时结束。
 
-- 步数分两级：25 步**软提醒**（落一条 `system_notice`，并在下一次 LLM 调用注入反思提示）；超过 60 次工具调用时直接暂停 turn，返回 `stopReason:'budget_pause'`。当前不会额外发起一次“禁用工具的收尾 LLM 调用”；继续需用户再次发送；
-- **token 预算**（可选配置）：超预算同样 `turn.complete{stopReason:'budget_pause'}`，可继续。
+- **token 预算**（可选配置）：超预算时 `turn.complete{stopReason:'budget_pause'}`，可继续；这是资源配置，不是步数限制；
+- **连续失败熔断**：3 次连续工具失败时提醒模型换路；5 次连续失败后停止工具执行，再给模型一次禁用工具的收尾回复，明确已验证结果、错误与下一步。成功调用会重置计数，用户拒绝和策略拒绝不计为工具故障。
 
 ## 2. Agent Loop
 
@@ -54,12 +54,13 @@ async function runTurn(thread: Thread, input: UserInput, overrides?: TurnOverrid
 }
 ```
 
-除“模型不再调用工具”外，interrupt、token budget、60 步上限和连续失败熔断也会退出 loop。标题生成由 `RealEngineCore.startTurn()` 在首轮开始时并行触发：先写首行 fallback，再 best-effort 调 task model；当前没有 follow-up 建议任务。
+除“模型不再调用工具”外，interrupt、token budget 和连续失败熔断也会退出 loop。标题生成由 `RealEngineCore.startTurn()` 在首轮开始时并行触发：先写首行 fallback，再 best-effort 调 task model；当前没有 follow-up 建议任务。
 
 行为规范：
 
 - **错误靠 throw**：工具失败抛异常，引擎捕获后以 `isError` 语义回填给模型，loop 继续——模型自己重试或换路（元素找不到→重新快照，是 05 章工具的标准自纠路径）。
 - **中断（interrupt）**：abort `signal` → 当前 fetch 与工具执行终止（L2 工具安全 detach）→ 已落库节点保留 → `turn.complete{stopReason:'interrupted'}`。
+- **Provider 停止原因**：每个 `assistant_message` 持久化实际 `providerStopReason`；中间 `tool_use` 执行工具后继续 loop，不作为 turn 终态；最终 `end`、`max_tokens`、`content_filter` 原样进入 Run 与 `turn.complete`，后两者由 UI 明示回复可能不完整。
 - **结束的定义**：`turn.complete` 在所有落库写入 ack 之后才发出（Pi 的 "await 所有订阅者" 语义）——防 SW 在持久化前被挂起。
 
 ## 3. Steering / Queueing / Interrupt 三通路
@@ -110,7 +111,7 @@ interface ToolResult<D> {
 
 ## 5. 恢复语义
 
-每个 Thread 由 `ThreadActor` 串行调度，Run 使用固定状态机并持久化环境、步骤游标与 `PreparedToolCall`。SW 重启时：queued/preparing 自动继续；waiting_approval 从 approvals 表恢复；只读或 retry-safe 工具可重放；已开始且结果不明的写操作进入 `paused_uncertain`，只能由用户选择 retry / mark_done / fail；模型流中断进入 `interrupted`。`ResolvedRunEnvironment` 固化实际 connection/model、参数、Preset prompt、工具级别、审批策略、能力域、Skills、prompt version 与能力/价格元数据，恢复不重新解析可变设置。
+每个 Thread 由 `ThreadActor` 串行调度，Run 使用固定状态机并持久化环境、步骤游标与 `PreparedToolCall`。SW 重启时：从未开始且仍为 queued 的 Run 可首次解析环境；已开始的 Run 必须通过 `RunEnvironmentSnapshot` 的版本、输入摘要、嵌套摘要与总摘要校验。waiting_approval 从 approvals 表恢复；只读或 retry-safe 工具可重放；已开始且结果不明的写操作进入 `paused_uncertain`，只能由用户选择 retry / mark_done / fail；模型流中断进入 `interrupted`。恢复使用快照中的完整 prompt、Skill 内容、模型参数和 tool catalog；Provider transport、credential reference 形状、MCP endpoint/auth binding 或本地工具 schema/安全元数据漂移时拒绝恢复，只有同一 credential reference 指向的密文值可以轮换。快照在 clone、摘要与落库前受总字节数、目录项数、单项体积和嵌套深度上限约束。
 
 ## 6. 关键时序图
 
@@ -143,7 +144,7 @@ sequenceDiagram
   EN-->>UI: item.complete{details}
   EN->>LLM: 下一轮调用（含 tool_result）
   LLM-->>EN: 纯文本（无工具调用）
-  EN-->>UI: item.* / token.usage / turn.complete{done}
+  EN-->>UI: item.* / token.usage / turn.complete{end}
 ```
 
 ### 6.2 SW 休眠恢复

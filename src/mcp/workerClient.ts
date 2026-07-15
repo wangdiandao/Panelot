@@ -1,4 +1,5 @@
 import type { McpPrompt, McpResource, McpTool } from './client';
+import { ensureMcpWorkerDocument } from './offscreenWorker';
 
 interface McpCatalog {
   tools: McpTool[];
@@ -11,23 +12,6 @@ interface WorkerResponse<T = unknown> {
   error?: string;
   catalog?: McpCatalog;
   result?: T;
-}
-
-let creatingWorker: Promise<void> | null = null;
-
-async function ensureWorker(): Promise<void> {
-  if (await chrome.offscreen.hasDocument()) return;
-  creatingWorker ??= Promise.resolve(
-    chrome.offscreen.createDocument({
-      url: 'mcp-worker.html',
-      reasons: ['WORKERS' as chrome.offscreen.Reason],
-      justification:
-        'Maintain browser-safe Streamable HTTP MCP sessions outside the service worker.',
-    }),
-  ).finally(() => {
-    creatingWorker = null;
-  });
-  await creatingWorker;
 }
 
 export class McpWorkerClient {
@@ -56,7 +40,7 @@ export class McpWorkerClient {
   }
 
   async connect(input: { url: string; authorization: string | null }): Promise<void> {
-    await ensureWorker();
+    await ensureMcpWorkerDocument();
     const response = await this.request<McpCatalog>({
       type: 'panelot.mcpWorker.connect',
       serverId: this.serverId,

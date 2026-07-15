@@ -9,10 +9,12 @@
  * separate tinted section. Built on shadcn Collapsible + Badge + lucide.
  */
 
-import { useState, type ReactNode } from 'react';
-import { Check, ChevronRight, CircleAlert, Clock, Loader2, X } from 'lucide-react';
+import { useState } from 'react';
+import { Check, ChevronRight, CircleAlert, Clock, X } from 'lucide-react';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible';
 import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import { Spinner } from './ui/spinner';
 import { cn } from '../lib/utils';
 import { t } from '../i18n';
 import { ActionEvidenceDetails, isActionEvidence } from './ActionEvidenceDetails';
@@ -30,65 +32,56 @@ export interface ToolCardData {
   details?: unknown;
 }
 
-const STATUS_ICON: Record<ToolCardData['status'], ReactNode> = {
-  pending: <Clock className="size-3.5 text-muted-foreground" />,
-  running: <Loader2 className="size-3.5 animate-spin text-info" />,
-  ok: <Check className="size-3.5 text-success" />,
-  fail: <X className="size-3.5 text-destructive" />,
-};
-
-/** Status accent on the card's left edge — scannable without reading icons. */
-const STATUS_EDGE: Record<ToolCardData['status'], string> = {
-  pending: 'border-l-border',
-  running: 'border-l-info/60',
-  ok: 'border-l-success/50',
-  fail: 'border-l-destructive/60',
-};
-
 export function ToolCallCard({ card }: { card: ToolCardData }) {
   const [expanded, setExpanded] = useState(false);
   return (
-    <Collapsible
-      open={expanded}
-      onOpenChange={setExpanded}
-      className={cn(
-        'overflow-hidden rounded-xl border border-border/30 border-l-2 bg-card text-[13px]',
-        STATUS_EDGE[card.status],
-      )}
-    >
-      <CollapsibleTrigger className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-muted">
-        {STATUS_ICON[card.status]}
-        <span className="font-medium text-foreground">{card.label}</span>
-        {card.toolName && card.toolName !== card.label && (
-          <Badge
-            variant="outline"
-            className="h-4 rounded px-1 font-mono text-[10px] font-normal text-faint-foreground"
-          >
-            {card.toolName}
-          </Badge>
-        )}
-        {card.paramsSummary && (
-          <span className="truncate font-mono text-[11px] text-faint-foreground">
-            {card.paramsSummary}
+    <Collapsible open={expanded} onOpenChange={setExpanded} className="text-[13px]">
+      <CollapsibleTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-auto w-full justify-start px-0 py-1.5 text-left text-muted-foreground hover:bg-transparent hover:text-foreground"
+        >
+          {card.status === 'running' ? (
+            <Spinner data-icon="inline-start" />
+          ) : card.status === 'ok' ? (
+            <Check data-icon="inline-start" className="text-success" />
+          ) : card.status === 'fail' ? (
+            <X data-icon="inline-start" className="text-destructive" />
+          ) : (
+            <Clock data-icon="inline-start" />
+          )}
+          <span className="sr-only">{t(`tool.status.${card.status}`)}</span>
+          <span className="font-medium text-foreground">{card.label}</span>
+          {card.toolName && card.toolName !== card.label && (
+            <Badge variant="secondary" className="font-mono font-normal">
+              {card.toolName}
+            </Badge>
+          )}
+          {card.paramsSummary && (
+            <span className="truncate font-mono text-xs text-muted-foreground">
+              {card.paramsSummary}
+            </span>
+          )}
+          <span className="ml-auto flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+            {card.status === 'running' && card.progressText && (
+              <span className="max-w-40 truncate">{card.progressText}</span>
+            )}
+            {card.durationMs !== undefined && card.status === 'ok' && (
+              <span>{(card.durationMs / 1000).toFixed(1)}s</span>
+            )}
+            <ChevronRight
+              data-icon="inline-end"
+              className={cn('opacity-50 transition-transform', expanded && 'rotate-90')}
+            />
           </span>
-        )}
-        <span className="ml-auto flex shrink-0 items-center gap-2 text-[11px] text-faint-foreground">
-          {card.status === 'running' && card.progressText && (
-            <span className="max-w-40 truncate">{card.progressText}</span>
-          )}
-          {card.durationMs !== undefined && card.status === 'ok' && (
-            <span>{(card.durationMs / 1000).toFixed(1)}s</span>
-          )}
-          <ChevronRight
-            className={cn('size-3 opacity-50 transition-transform', expanded && 'rotate-90')}
-          />
-        </span>
+        </Button>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className="space-y-2 border-t border-border-soft px-3 py-2">
+        <div className="ml-5 flex flex-col gap-3 border-l border-border-soft py-2 pl-4">
           {card.params !== undefined && (
             <section>
-              <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-faint-foreground">
+              <div className="mb-1 text-xs font-medium text-muted-foreground">
                 {t('tool.params')}
               </div>
               <pre className="max-h-40 overflow-auto rounded-md bg-muted p-2 font-mono text-[11px] text-muted-foreground">
@@ -100,11 +93,11 @@ export function ToolCallCard({ card }: { card: ToolCardData }) {
             <section>
               <div
                 className={cn(
-                  'mb-1 flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide',
+                  'mb-1 flex items-center gap-1 text-xs font-medium',
                   card.status === 'fail' ? 'text-destructive' : 'text-faint-foreground',
                 )}
               >
-                {card.status === 'fail' && <CircleAlert className="size-3" />}
+                {card.status === 'fail' && <CircleAlert />}
                 {card.status === 'fail' ? t('tool.error') : t('tool.result')}
               </div>
               <pre
@@ -149,7 +142,7 @@ export function ToolCallGroup({
   // the current turn only groups runs of ≥3 (visibility while it happens).
   if (!historical && cards.length < 3) {
     return (
-      <div className="space-y-1">
+      <div className="flex flex-col gap-1">
         {cards.map((c) => (
           <ToolCallCard key={c.itemId} card={c} />
         ))}
@@ -164,39 +157,39 @@ export function ToolCallGroup({
   const totalMs = cards.reduce((sum, c) => sum + (c.durationMs ?? 0), 0);
 
   return (
-    <div className="space-y-1">
-      <button
+    <div className="flex flex-col gap-1">
+      <Button
+        variant="ghost"
+        size="sm"
         type="button"
         onClick={() => setExpanded((e) => !e)}
-        className={cn(
-          'flex w-full items-center gap-2 rounded-xl border border-border/30 px-3 py-2 text-left text-[13px] text-muted-foreground transition-colors hover:bg-muted',
-          historical ? 'bg-transparent' : 'bg-card',
-        )}
+        className="h-auto w-full justify-start px-0 py-1.5 text-muted-foreground hover:bg-transparent hover:text-foreground"
         aria-expanded={expanded}
       >
         <ChevronRight
-          className={cn('size-3 opacity-60 transition-transform', expanded && 'rotate-90')}
+          data-icon="inline-start"
+          className={cn('opacity-60 transition-transform', expanded && 'rotate-90')}
         />
         <span className="flex items-center gap-1.5">
           {t('stream.steps', { n: cards.length })}
           <span className="flex items-center gap-0.5 text-success">
-            <Check className="size-3" />
+            <Check data-icon="inline-start" />
             {okCount}
           </span>
           {failCount > 0 && (
             <span className="flex items-center gap-0.5 text-destructive">
-              <X className="size-3" />
+              <X data-icon="inline-start" />
               {failCount}
             </span>
           )}
-          {running && <Loader2 className="size-3 animate-spin text-info" />}
+          {running && <Spinner className="text-info" />}
           {historical && totalMs > 0 && (
             <span className="text-[11px] text-faint-foreground">
               · {(totalMs / 1000).toFixed(1)}s
             </span>
           )}
         </span>
-      </button>
+      </Button>
       {expanded && cards.map((c) => <ToolCallCard key={c.itemId} card={c} />)}
       {!expanded && running && <ToolCallCard card={tail} />}
     </div>

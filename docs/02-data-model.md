@@ -21,8 +21,8 @@ class PanelotDB extends Dexie {
   threads!: Table<ThreadMeta, string>;
   nodes!: Table<ThreadNode, string>;
   attachments!: Table<Attachment, string>;
-  skills!: Table<SkillRecord, string>;       // 见 08
-  memories!: Table<MemoryRecord, string>;    // memory_write 工具
+  skills!: Table<SkillRecord, string>; // 见 08
+  memories!: Table<MemoryRecord, string>; // memory_write 工具
   runs!: Table<RunRecord, string>;
   commandReceipts!: Table<CommandReceipt, string>;
   approvals!: Table<ApprovalRecord, string>;
@@ -32,15 +32,15 @@ class PanelotDB extends Dexie {
   constructor() {
     super('panelot_v1');
     this.version(1).stores({
-      threads:     'id, updatedAt, folderId, archived, pinned',
-      nodes:       'id, threadId, [threadId+seq], parentId',
+      threads: 'id, updatedAt, folderId, archived, pinned',
+      nodes: 'id, threadId, [threadId+seq], parentId',
       attachments: 'id, threadId, createdAt',
-      skills:      'id, name, enabled, sourceRef',
-      memories:    'id, key, updatedAt',
-      runs:         'id, threadId, [threadId+state], submissionId, updatedAt',
+      skills: 'id, name, enabled, sourceRef',
+      memories: 'id, key, updatedAt',
+      runs: 'id, threadId, [threadId+state], submissionId, updatedAt',
       commandReceipts: 'id, [clientId+submissionId], status, createdAt, expiresAt',
-      approvals:    'id, threadId, runId, [threadId+status], requestedAt',
-      plugins:      'id, name, enabled, updatedAt',
+      approvals: 'id, threadId, runId, [threadId+status], requestedAt',
+      plugins: 'id, name, enabled, updatedAt',
       pluginAssets: 'id, pluginId, [pluginId+path], kind, createdAt',
     });
   }
@@ -55,17 +55,19 @@ UI 会话列表只读这张表，永不扫 nodes：
 
 ```ts
 interface ThreadMeta {
-  id: string;                 // UUID
-  title: string;              // task model 自动生成，可手改
-  createdAt: number; updatedAt: number;
-  leafId: string | null;      // 当前活跃分支的叶子节点 —— 树的游标
-  folderId?: string;          // 文件夹归组
+  id: string; // UUID
+  title: string; // task model 自动生成，可手改
+  createdAt: number;
+  updatedAt: number;
+  leafId: string | null; // 当前活跃分支的叶子节点 —— 树的游标
+  folderId?: string; // 文件夹归组
   tags: string[];
-  pinned: boolean; archived: boolean;
-  preset?: string;            // 默认 ModelPreset id
-  parentThreadId?: string;    // fork 来源（预留子代理）
+  pinned: boolean;
+  archived: boolean;
+  preset?: string; // 默认 ModelPreset id
+  parentThreadId?: string; // fork 来源（预留子代理）
   stats: { turns: number; totalTokens: number; costUsd: number };
-  scopeOrigins: string[];     // 已触达/批准过的 origin；用于敏感 payload 的第三方出域判断与审计（见 06）
+  scopeOrigins: string[]; // 已触达/批准过的 origin；用于敏感 payload 的第三方出域判断与审计（见 06）
 }
 ```
 
@@ -73,25 +75,25 @@ interface ThreadMeta {
 
 ```ts
 interface ThreadNode {
-  id: string;                 // UUID
+  id: string; // UUID
   threadId: string;
-  parentId: string | null;    // 根节点为 null
-  seq: number;                // thread 内单调递增，恢复回放的排序键
+  parentId: string | null; // 根节点为 null
+  seq: number; // thread 内单调递增，恢复回放的排序键
   ts: number;
   type: NodeType;
-  payload: NodePayload;       // 按 type 判别
+  payload: NodePayload; // 按 type 判别
 }
 
 type NodeType =
-  | 'user_message'       // { content: ContentBlock[], attachedContext?: ContextBlock[] }
-  | 'assistant_message'  // { content: ContentBlock[], model: string, connectionId: string,
-                         //   reasoning?: string, usage?: Usage }
-  | 'tool_call'          // { itemId, toolName, params, level: 'L0'|'L1'|'L2'|'mcp'|'builtin' }
-  | 'tool_result'        // { itemId, ok, contentForLlm: ContentBlock[], details?: unknown }
-  | 'approval_decision'  // { approvalId, request: ApprovalRequestPayload, decision, ts }
-  | 'turn_context'       // { turnId, model, approvalPolicy, capabilityScope, activeSkills[] }
-                         //   —— 每轮开头一条，恢复时复原环境
-  | 'system_notice';     // 用户可见但不进 LLM 历史的提示（如"已自动暂停"）
+  | 'user_message' // { content: ContentBlock[], attachedContext?: ContextBlock[] }
+  | 'assistant_message' // { content: ContentBlock[], model: string, connectionId: string,
+  //   reasoning?: string, usage?: Usage }
+  | 'tool_call' // { itemId, toolName, params, level: 'L0'|'L1'|'L2'|'mcp'|'builtin' }
+  | 'tool_result' // { itemId, ok, contentForLlm: ContentBlock[], details?: unknown }
+  | 'approval_decision' // { approvalId, request: ApprovalRequestPayload, decision, ts }
+  | 'turn_context' // { turnId, model, permissionPolicy, activeSkills[] }
+  //   —— 每轮开头一条，恢复时复原环境
+  | 'system_notice'; // 用户可见但不进 LLM 历史的提示（如"已自动暂停"）
 ```
 
 要点：
@@ -104,9 +106,12 @@ type NodeType =
 
 ```ts
 interface Attachment {
-  id: string; threadId: string; createdAt: number;
+  id: string;
+  threadId: string;
+  createdAt: number;
   kind: 'image' | 'file' | 'page_snapshot' | 'screenshot' | 'page_text';
-  mime: string; bytes: Blob;
+  mime: string;
+  bytes: Blob;
   trust?: 'trusted' | 'untrusted';
   provenance?: 'user' | 'page' | 'mcp' | 'tool' | 'import' | 'plugin';
   sourceRef?: string;
@@ -158,7 +163,7 @@ async function buildSessionContext(
 
 `buildSessionContext` 服务 LLM 请求组装，从当前 `leafId` 派生统一消息序列。UI snapshot 和会话导出复用同一棵 `parentId` 树及相同的回溯约束，但分别生成适合 UI/Markdown 的载荷，不共享这一函数的返回类型。
 
-`runTurn` 从持久化的 `ResolvedRunEnvironment` 写入实际 connection/model、approvalPolicy、capabilityScope、activeSkills 与 promptVersion；Run 另行固化模型参数、Preset prompt、工具级别和价格/能力元数据。恢复时以 Run 环境为事实源，不重新解析可能已经变化的设置。
+`runTurn` 在进入 `preparing` 前把规范化输入与 `RunEnvironmentSnapshot` 同事务写入。快照带格式版本和 SHA-256 完整性摘要，固化实际 connection/model/参数、完整 system prompt、Skill 目录与正文、Provider-facing tool schemas、工具执行绑定、审批策略、能力域、浏览器提交上下文和价格/能力元数据。Provider 与 MCP 秘密不进入快照，只记录 credential reference；恢复要求当前非秘密 transport 与引用形状仍完全一致，只允许同一引用的密文值轮换。已开始但没有快照的旧 Run、摘要不匹配、执行绑定漂移或超过结构/体积上限均 fail closed，不重新解析可变设置。
 
 ## 5. 存储配额与清理
 

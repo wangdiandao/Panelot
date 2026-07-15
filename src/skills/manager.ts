@@ -7,7 +7,7 @@ import type { PanelotDB } from '../db/schema';
 import type { SkillRecord } from '../db/types';
 import type { SkillIndexEntry } from '../prompts/assemble';
 import type { AnyAgentTool } from '../agent/tool';
-import { z } from 'zod';
+import { schema } from '../agent/schema';
 import { parseSkill, skillMatchesUrl, type SkillFrontmatter } from './parse';
 
 export class SkillManager {
@@ -153,7 +153,7 @@ export function createLoadSkillTool(
     label: '加载技能',
     description:
       'Load the full instructions of a skill by name. Call before executing any task matching a skill description.',
-    parameters: z.object({ name: z.string() }),
+    parameters: schema.object({ name: schema.string() }),
     level: 'builtin',
     effects: 'read',
     execute: async (_id, params: { name: string }) => {

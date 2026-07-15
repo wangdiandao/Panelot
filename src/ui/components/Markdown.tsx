@@ -13,6 +13,8 @@ import type { ComponentType } from 'react';
 import type { Options as ReactMarkdownOptions } from 'react-markdown';
 import { Check, Copy } from 'lucide-react';
 import { t } from '../i18n';
+import { Button } from './ui/button';
+import { Skeleton } from './ui/skeleton';
 
 type RemarkPlugin = NonNullable<ReactMarkdownOptions['remarkPlugins']>[number];
 type RehypePlugin = NonNullable<ReactMarkdownOptions['rehypePlugins']>[number];
@@ -57,7 +59,9 @@ function CodeHeader({ lang, code }: { lang: string; code: string }) {
   return (
     <div className="sticky top-0 z-10 flex items-center justify-between rounded-t-md bg-muted px-3 py-1 text-[11px] text-muted-foreground">
       <span className="truncate font-mono">{lang}</span>
-      <button
+      <Button
+        variant="ghost"
+        size="sm"
         type="button"
         aria-label={t('actions.copy')}
         onClick={() => {
@@ -66,11 +70,11 @@ function CodeHeader({ lang, code }: { lang: string; code: string }) {
             setTimeout(() => setCopied(false), 2000);
           });
         }}
-        className="flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors hover:bg-foreground/5 hover:text-foreground"
+        className="h-6"
       >
-        {copied ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
+        {copied ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />}
         {copied ? t('actions.copied') : t('actions.copy')}
-      </button>
+      </Button>
     </div>
   );
 }
@@ -127,7 +131,7 @@ function MermaidBlock({ code }: { code: string }) {
     };
   }, [code, id]);
   if (failed) return <ShikiBlock code={code} lang="text" />;
-  return <div ref={ref} className="my-2 flex justify-center" />;
+  return <div ref={ref} className="my-2 max-w-full overflow-x-auto" />;
 }
 
 // ---------------------------------------------------------------------------
@@ -153,12 +157,16 @@ export const Markdown = memo(function Markdown({ content, streaming }: MarkdownP
     ? splitUnclosedFence(content)
     : { closed: content, openTail: null };
   if (!runtime) {
-    return <div className="whitespace-pre-wrap text-[14.5px] leading-[1.7]">{content}</div>;
+    return (
+      <div className="min-w-0 break-words whitespace-pre-wrap [overflow-wrap:anywhere] text-[14.5px] leading-[1.7]">
+        {content}
+      </div>
+    );
   }
   const ReactMarkdown = runtime.ReactMarkdown;
 
   return (
-    <div className="markdown-body text-[14.5px] leading-[1.7] [&>*+*]:mt-3 [&_h1]:mt-4 [&_h1]:text-[18px] [&_h1]:font-semibold [&_h2]:mt-4 [&_h2]:text-[16px] [&_h2]:font-semibold [&_h3]:mt-3 [&_h3]:text-[15px] [&_h3]:font-semibold [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5 [&_li]:my-0.5 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground">
+    <div className="markdown-body min-w-0 max-w-full break-words [overflow-wrap:anywhere] text-[14.5px] leading-[1.7] [&>*+*]:mt-3 [&_h1]:mt-4 [&_h1]:text-[18px] [&_h1]:font-semibold [&_h2]:mt-4 [&_h2]:text-[16px] [&_h2]:font-semibold [&_h3]:mt-3 [&_h3]:text-[15px] [&_h3]:font-semibold [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5 [&_li]:my-0.5 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground">
       <ReactMarkdown
         remarkPlugins={[runtime.remarkGfm, runtime.remarkMath]}
         rehypePlugins={[runtime.rehypeKatex]}
@@ -204,7 +212,7 @@ export const Markdown = memo(function Markdown({ content, streaming }: MarkdownP
       {openTail !== null && (
         <pre className="overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs opacity-90">
           {openTail.replace(/^```\w*\n?/, '')}
-          <span className="inline-block h-3.5 w-2 animate-pulse bg-primary align-text-bottom" />
+          <Skeleton className="inline-block h-3.5 w-2 align-text-bottom" />
         </pre>
       )}
     </div>

@@ -1,11 +1,68 @@
 // @vitest-environment happy-dom
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ActionRunner } from '../../src/tools/action/runner';
 import { executeContentTool } from '../../src/tools/content/executor';
 
 beforeEach(() => {
   document.body.innerHTML = '';
   document.title = 'Fixture';
+  Object.defineProperty(window, 'scrollX', { configurable: true, value: 0 });
+  Object.defineProperty(window, 'scrollY', { configurable: true, value: 0 });
 });
+
+function domRect(left: number, top: number, width: number, height: number): DOMRect {
+  return {
+    left,
+    top,
+    width,
+    height,
+    right: left + width,
+    bottom: top + height,
+    x: left,
+    y: top,
+    toJSON: () => ({}),
+  } as DOMRect;
+}
+
+function setFrameGeometry(
+  frame: HTMLIFrameElement,
+  geometry: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+    offsetWidth: number;
+    offsetHeight: number;
+    clientWidth: number;
+    clientHeight: number;
+    clientLeft: number;
+    clientTop: number;
+    innerWidth: number;
+    innerHeight: number;
+  },
+): void {
+  vi.spyOn(frame, 'getBoundingClientRect').mockReturnValue(
+    domRect(geometry.left, geometry.top, geometry.width, geometry.height),
+  );
+  for (const key of [
+    'offsetWidth',
+    'offsetHeight',
+    'clientWidth',
+    'clientHeight',
+    'clientLeft',
+    'clientTop',
+  ] as const) {
+    Object.defineProperty(frame, key, { configurable: true, value: geometry[key] });
+  }
+  Object.defineProperty(frame.contentWindow!, 'innerWidth', {
+    configurable: true,
+    value: geometry.innerWidth,
+  });
+  Object.defineProperty(frame.contentWindow!, 'innerHeight', {
+    configurable: true,
+    value: geometry.innerHeight,
+  });
+}
 
 async function readPage(): Promise<string> {
   const r = await executeContentTool('read_page', {});
@@ -14,7 +71,7 @@ async function readPage(): Promise<string> {
 
 function refOf(yaml: string, needle: string): string {
   const line = yaml.split('\n').find((l) => l.includes(needle));
-  const m = line?.match(/\[ref=(s\d+_\d+)\]/);
+  const m = line?.match(/\[ref=(s[a-z0-9]+_\d+_\d+)\]/i);
   if (!m) throw new Error(`no ref found for "${needle}" in:\n${yaml}`);
   return m[1]!;
 }
@@ -24,8 +81,8 @@ describe('read_page / snapshot lifecycle', () => {
     document.body.innerHTML = '<button>甲</button>';
     const s1 = await readPage();
     const s2 = await readPage();
-    const id1 = Number(s1.match(/# Page Snapshot \(s(\d+)\)/)![1]);
-    const id2 = Number(s2.match(/# Page Snapshot \(s(\d+)\)/)![1]);
+    const id1 = Number(s1.match(/# Page Snapshot \(s[a-z0-9]+_(\d+)\)/i)![1]);
+    const id2 = Number(s2.match(/# Page Snapshot \(s[a-z0-9]+_(\d+)\)/i)![1]);
     expect(id2).toBe(id1 + 1);
   });
 
@@ -59,7 +116,7 @@ describe('extract (borrowed from browser-use extract + browsercluster GNE)', () 
     // off that specific line (the aggregate <main> line carries no ref).
     const yaml = await readPage();
     const line = yaml.split('\n').find((l) => l.includes('甲区块内容') && /\[ref=/.test(l))!;
-    const scope = line.match(/\[ref=(s\d+_\d+)\]/)![1]!;
+    const scope = line.match(/\[ref=(s[a-z0-9]+_\d+_\d+)\]/i)![1]!;
     const r = await executeContentTool('extract', { scope });
     expect(r.resultText).toContain('甲区块内容');
     expect(r.resultText).not.toContain('乙区块内容');
@@ -102,6 +159,179 @@ describe('stale-ref rejection (docs/05 §1.1 — protocol-level expiry)', () => 
     document.getElementById('b')!.remove();
     await expect(executeContentTool('click', { ref })).rejects.toThrow(/快照已过期/);
   });
+
+  it('rejects legacy refs and refs whose iframe document was replaced', async () => {
+    document.body.innerHTML = '<iframe title="frame"></iframe>';
+    const frame = document.querySelector('iframe')!;
+    frame.contentDocument!.body.innerHTML = '<button>inside</button>';
+    const ref = refOf(await readPage(), 'inside');
+    const replacement = document.implementation.createHTMLDocument('replacement');
+    replacement.body.innerHTML = '<button>inside</button>';
+    Object.defineProperty(frame, 'contentDocument', {
+      configurable: true,
+      get: () => replacement,
+    });
+
+    await expect(executeContentTool('get_rect', { ref })).rejects.toMatchObject({
+      failure: { code: 'stale_ref' },
+    });
+    await expect(executeContentTool('click', { ref: 's1_1' })).rejects.toMatchObject({
+      failure: { code: 'stale_ref' },
+    });
+  });
+
+  it('does not reuse a ref after pushState, rerender, and a fresh snapshot', async () => {
+    document.body.innerHTML = '<button>before</button>';
+    const oldRef = refOf(await readPage(), 'before');
+    history.pushState({}, '', '/rerendered');
+    document.body.innerHTML = '<button>after</button>';
+    await readPage();
+
+    await expect(executeContentTool('click', { ref: oldRef })).rejects.toMatchObject({
+      failure: { code: 'stale_ref' },
+    });
+  });
+
+  it('does not recover an old ref into a replacement iframe document with the same hint', async () => {
+    document.body.innerHTML = '<iframe title="frame"></iframe>';
+    const frame = document.querySelector('iframe')!;
+    frame.contentDocument!.body.innerHTML = '<input aria-label="same target">';
+    const original = frame.contentDocument!.querySelector('input')!;
+    const oldRef = refOf(await readPage(), 'same target');
+    const replacement = document.implementation.createHTMLDocument('replacement');
+    replacement.body.innerHTML = '<input aria-label="same target">';
+    const replacementInput = replacement.querySelector('input')!;
+    const events: string[] = [];
+    for (const input of [original, replacementInput]) {
+      input.addEventListener('click', () => events.push('click'));
+      input.addEventListener('input', () => events.push('input'));
+    }
+    Object.defineProperty(frame, 'contentDocument', {
+      configurable: true,
+      get: () => replacement,
+    });
+    await readPage();
+    const runner = new ActionRunner({
+      execute: (tool, params) => executeContentTool(tool, params),
+    });
+
+    await expect(runner.run('click', { ref: oldRef })).rejects.toMatchObject({
+      failure: { code: 'stale_ref' },
+    });
+    expect(events).toEqual([]);
+  });
+});
+
+describe('same-origin iframe geometry', () => {
+  it('maps border, iframe scroll, top scroll, and axis scale into screenshot coordinates', async () => {
+    document.body.innerHTML = '<iframe title="frame" style="transform:scale(1.25)"></iframe>';
+    const frame = document.querySelector('iframe')!;
+    frame.contentDocument!.body.innerHTML = '<button>inside</button>';
+    const button = frame.contentDocument!.querySelector('button')!;
+    vi.spyOn(button, 'getBoundingClientRect').mockReturnValue(domRect(20, 30, 40, 10));
+    setFrameGeometry(frame, {
+      left: 100,
+      top: 50,
+      width: 275,
+      height: 150,
+      offsetWidth: 220,
+      offsetHeight: 120,
+      clientWidth: 200,
+      clientHeight: 100,
+      clientLeft: 10,
+      clientTop: 10,
+      innerWidth: 200,
+      innerHeight: 100,
+    });
+    Object.defineProperty(window, 'scrollX', { configurable: true, value: 17 });
+    Object.defineProperty(window, 'scrollY', { configurable: true, value: 23 });
+    const ref = refOf(await readPage(), 'inside');
+
+    await expect(
+      executeContentTool('get_rect', { ref, coordinateSpace: 'viewport' }),
+    ).resolves.toMatchObject({ rect: { x: 137.5, y: 100, width: 50, height: 12.5 } });
+    await expect(
+      executeContentTool('get_rect', { ref, coordinateSpace: 'document' }),
+    ).resolves.toMatchObject({ rect: { x: 154.5, y: 123, width: 50, height: 12.5 } });
+
+    const annotation = await executeContentTool('annotate_refs', {});
+    expect(annotation.resultText).toContain(ref);
+    const badge = document
+      .querySelector('panelot-overlay')!
+      .shadowRoot!.querySelector<HTMLElement>('#ref-annotations > div')!;
+    expect(badge.style.left).toBe('137.5px');
+    expect(badge.style.top).toBe('100px');
+  });
+
+  it('maps nested iframe border chains into the top viewport', async () => {
+    document.body.innerHTML = '<iframe title="outer"></iframe>';
+    const outer = document.querySelector('iframe')!;
+    outer.contentDocument!.body.innerHTML = '<iframe title="inner"></iframe>';
+    const inner = outer.contentDocument!.querySelector('iframe')!;
+    inner.contentDocument!.body.innerHTML = '<button>nested</button>';
+    const button = inner.contentDocument!.querySelector('button')!;
+    vi.spyOn(button, 'getBoundingClientRect').mockReturnValue(domRect(10, 10, 20, 10));
+    setFrameGeometry(inner, {
+      left: 30,
+      top: 20,
+      width: 120,
+      height: 70,
+      offsetWidth: 120,
+      offsetHeight: 70,
+      clientWidth: 110,
+      clientHeight: 60,
+      clientLeft: 5,
+      clientTop: 5,
+      innerWidth: 110,
+      innerHeight: 60,
+    });
+    setFrameGeometry(outer, {
+      left: 100,
+      top: 50,
+      width: 220,
+      height: 120,
+      offsetWidth: 220,
+      offsetHeight: 120,
+      clientWidth: 200,
+      clientHeight: 100,
+      clientLeft: 10,
+      clientTop: 10,
+      innerWidth: 200,
+      innerHeight: 100,
+    });
+    const ref = refOf(await readPage(), 'nested');
+
+    await expect(
+      executeContentTool('get_rect', { ref, coordinateSpace: 'viewport' }),
+    ).resolves.toMatchObject({ rect: { x: 155, y: 95, width: 20, height: 10 } });
+  });
+
+  it('fails closed for transforms that are not positive axis-aligned', async () => {
+    document.body.innerHTML = '<iframe title="frame" style="transform:rotate(10deg)"></iframe>';
+    const frame = document.querySelector('iframe')!;
+    frame.contentDocument!.body.innerHTML = '<button>inside</button>';
+    const button = frame.contentDocument!.querySelector('button')!;
+    vi.spyOn(button, 'getBoundingClientRect').mockReturnValue(domRect(10, 10, 20, 10));
+    setFrameGeometry(frame, {
+      left: 100,
+      top: 50,
+      width: 220,
+      height: 120,
+      offsetWidth: 220,
+      offsetHeight: 120,
+      clientWidth: 200,
+      clientHeight: 100,
+      clientLeft: 10,
+      clientTop: 10,
+      innerWidth: 200,
+      innerHeight: 100,
+    });
+    const ref = refOf(await readPage(), 'inside');
+
+    await expect(
+      executeContentTool('get_rect', { ref, coordinateSpace: 'viewport' }),
+    ).rejects.toMatchObject({ failure: { code: 'unsupported_frame' } });
+  });
 });
 
 describe('click / type / select', () => {
@@ -136,6 +366,34 @@ describe('click / type / select', () => {
     expect(document.querySelector('input')!.value).toBe('hello world');
   }, 15_000);
 
+  it('does not mark a same-value type as verified', async () => {
+    document.body.innerHTML = '<input aria-label="搜索" value="already there">';
+    const ref = refOf(await readPage(), '搜索');
+
+    const result = await executeContentTool('type', { ref, text: 'already there' });
+
+    expect(result.resultText).toContain('原本已是目标值');
+    expect(result.evidence).toMatchObject({
+      effectState: 'dispatched',
+      observedEffects: [],
+      outcome: 'uncertain',
+    });
+  }, 15_000);
+
+  it('rejects type when the page rolls the requested value back', async () => {
+    document.body.innerHTML = '<input aria-label="受控输入" value="initial">';
+    const input = document.querySelector('input')!;
+    input.addEventListener('input', () => {
+      input.value = 'page-owned';
+    });
+    const ref = refOf(await readPage(), '受控输入');
+
+    await expect(
+      executeContentTool('type', { ref, text: 'requested', slowly: true }),
+    ).rejects.toThrow(/目标状态未能保持/);
+    expect(input.value).toBe('page-owned');
+  }, 15_000);
+
   it('select matches by value or text and errors with available options', async () => {
     document.body.innerHTML = `
       <select aria-label="城市">
@@ -152,6 +410,44 @@ describe('click / type / select', () => {
       executeContentTool('select_option', { ref: ref2, values: ['广州'] }),
     ).rejects.toThrow(/可用选项.*北京/s);
   }, 20_000);
+
+  it('does not mark a same-selection no-op as verified', async () => {
+    document.body.innerHTML = `
+      <select aria-label="城市">
+        <option value="bj" selected>北京</option>
+        <option value="sh">上海</option>
+      </select>`;
+    const ref = refOf(await readPage(), '城市');
+
+    const result = await executeContentTool('select_option', { ref, values: ['北京'] });
+
+    expect(result.resultText).toContain('原本已选择');
+    expect(result.evidence).toMatchObject({
+      effectState: 'dispatched',
+      observedEffects: [],
+      outcome: 'uncertain',
+    });
+  }, 15_000);
+
+  it('rejects select when a page change handler restores the previous option', async () => {
+    document.body.innerHTML = `
+      <select aria-label="受控城市">
+        <option value="bj" selected>北京</option>
+        <option value="sh">上海</option>
+      </select>`;
+    const select = document.querySelector('select')!;
+    select.value = 'bj';
+    select.addEventListener('change', () => {
+      select.value = 'bj';
+    });
+    const ref = refOf(await readPage(), '受控城市');
+    expect(select.value).toBe('bj');
+
+    await expect(executeContentTool('select_option', { ref, values: ['上海'] })).rejects.toThrow(
+      /目标状态未能保持/,
+    );
+    expect(select.value).toBe('bj');
+  }, 15_000);
 });
 
 describe('wait_for (docs/05 §3 three modes)', () => {
@@ -219,6 +515,55 @@ describe('batch_actions (docs/05 §3 — change interruption)', () => {
       ],
     });
     expect(result.resultText).toContain('中断剩余');
+  }, 20_000);
+
+  it('interrupts after a link that targets a new browsing context', async () => {
+    document.body.innerHTML = `
+      <a href="about:blank" target="_blank">打开详情</a>
+      <button type="button">不应继续</button>`;
+    let continued = false;
+    document.querySelector('button')!.addEventListener('click', () => {
+      continued = true;
+    });
+    const yaml = await readPage();
+    const linkRef = refOf(yaml, '打开详情');
+    const buttonRef = refOf(yaml, '不应继续');
+
+    const result = await executeContentTool('batch_actions', {
+      actions: [
+        { kind: 'click', params: { ref: linkRef } },
+        { kind: 'click', params: { ref: buttonRef } },
+      ],
+    });
+
+    expect(result.resultText).toContain('打开新的浏览上下文，中断剩余 1 个动作');
+    expect(continued).toBe(false);
+  }, 20_000);
+
+  it('interrupts after submitting a form that targets a new browsing context', async () => {
+    document.body.innerHTML = `
+      <form action="about:blank" target="_blank">
+        <input aria-label="搜索" type="search">
+      </form>
+      <button type="button">不应继续</button>`;
+    document.querySelector('form')!.addEventListener('submit', (event) => event.preventDefault());
+    let continued = false;
+    document.querySelector('button')!.addEventListener('click', () => {
+      continued = true;
+    });
+    const yaml = await readPage();
+    const inputRef = refOf(yaml, '搜索');
+    const buttonRef = refOf(yaml, '不应继续');
+
+    const result = await executeContentTool('batch_actions', {
+      actions: [
+        { kind: 'type', params: { ref: inputRef, text: 'Panelot', submit: true } },
+        { kind: 'click', params: { ref: buttonRef } },
+      ],
+    });
+
+    expect(result.resultText).toContain('打开新的浏览上下文，中断剩余 1 个动作');
+    expect(continued).toBe(false);
   }, 20_000);
 });
 

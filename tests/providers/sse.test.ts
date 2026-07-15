@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SseParser } from '../../src/providers/sse';
+import { iterateSse, SseParser } from '../../src/providers/sse';
 
 function feedAll(parser: SseParser, chunks: string[]) {
   const events: { event?: string; data: string }[] = [];
@@ -59,5 +59,42 @@ describe('SseParser (docs/03 §3.1)', () => {
     const chunk = Array.from({ length: 50 }, (_, i) => `data: ${i}\n\n`).join('');
     const { events } = feedAll(new SseParser(), [chunk]);
     expect(events).toHaveLength(50);
+  });
+});
+
+describe('iterateSse stream termination', () => {
+  it('exposes [DONE] as an explicit terminal event', async () => {
+    const body = new Response('data: {"ok":true}\n\ndata: [DONE]\n\n').body!;
+
+    const events = [];
+    for await (const event of iterateSse(body)) events.push(event);
+
+    expect(events).toEqual([
+      { event: undefined, data: '{"ok":true}' },
+      { data: '', terminal: 'done' },
+    ]);
+  });
+
+  it('normalizes a reader rejection as a retryable network failure', async () => {
+    let delivered = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (!delivered) {
+          delivered = true;
+          controller.enqueue(new TextEncoder().encode('data: {"ok":true}\n\n'));
+          return;
+        }
+        controller.error(new Error('connection reset'));
+      },
+    });
+
+    const consume = async () => {
+      const iterator = iterateSse(body);
+      while (!(await iterator.next()).done) {
+        // Drain until the underlying reader rejects.
+      }
+    };
+
+    await expect(consume()).rejects.toMatchObject({ kind: 'network' });
   });
 });

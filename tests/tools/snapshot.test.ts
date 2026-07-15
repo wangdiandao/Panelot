@@ -17,7 +17,8 @@ beforeEach(() => {
   document.title = 'Test Page';
 });
 
-const snap = (html: string, id = 1) => buildSnapshot(setBody(html), { snapshotId: id });
+const snap = (html: string, id = 1) =>
+  buildSnapshot(setBody(html), { snapshotId: id, documentToken: 'doc' });
 
 describe('interactive detection (docs/05 §1.2 — recall first)', () => {
   it('grants refs to semantic controls', () => {
@@ -30,8 +31,8 @@ describe('interactive detection (docs/05 §1.2 — recall first)', () => {
     `);
     // button, link, input, select (+ its option), textarea all get refs.
     expect(result.refMap.size).toBeGreaterThanOrEqual(5);
-    expect(result.yaml).toContain('button "提交" [ref=s1_');
-    expect(result.yaml).toContain('link "链接" [ref=s1_');
+    expect(result.yaml).toContain('button "提交" [ref=sdoc_1_');
+    expect(result.yaml).toContain('link "链接" [ref=sdoc_1_');
     expect(result.yaml).toContain('textbox "邮箱"');
   });
 
@@ -112,8 +113,20 @@ describe('roles, names, ARIA states (docs/05 §1.1)', () => {
 describe('ref versioning (docs/05 §1.1 — expiry at the protocol level)', () => {
   it('embeds the snapshot id in every ref', () => {
     const result = snap(`<button>a</button>`, 7);
-    expect([...result.refMap.keys()][0]).toMatch(/^s7_\d+$/);
-    expect(result.yaml).toContain('[ref=s7_1]');
+    expect([...result.refMap.keys()][0]).toMatch(/^sdoc_7_\d+$/);
+    expect(result.yaml).toContain('[ref=sdoc_7_1]');
+  });
+
+  it('keeps a document nonce stable across snapshots and changes it across documents', () => {
+    const first = buildSnapshot(setBody('<button>a</button>'), { snapshotId: 1 });
+    const second = buildSnapshot(window as unknown as Window, { snapshotId: 2 });
+    const otherDocument = document.implementation.createHTMLDocument('other');
+    otherDocument.body.innerHTML = '<button>b</button>';
+    const otherWindow = { document: otherDocument, location: window.location } as unknown as Window;
+    const third = buildSnapshot(otherWindow, { snapshotId: 1 });
+
+    expect(second.documentToken).toBe(first.documentToken);
+    expect(third.documentToken).not.toBe(first.documentToken);
   });
 });
 

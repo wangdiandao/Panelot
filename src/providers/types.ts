@@ -6,7 +6,7 @@
  * gaps: customHeaders, multiple keys with failover, concurrent model fetch.
  */
 
-import type { ContentBlock, Usage } from '../messaging/protocol';
+import type { ContentBlock, ProviderStopReason, Usage } from '../messaging/protocol';
 import type { UnifiedMessage } from '../db/sessionContext';
 
 // ---------------------------------------------------------------------------
@@ -87,8 +87,7 @@ export interface ModelPreset {
   /** Overrides only — unset fields are never sent (docs/03 §1.4). */
   params?: GenParams;
   enabledToolLevels?: ('L0' | 'L1' | 'L2' | 'mcp')[];
-  defaultApprovalPolicy?: import('../messaging/protocol').ApprovalPolicy;
-  defaultCapabilityScope?: import('../messaging/protocol').CapabilityScope;
+  defaultPermissionPolicy?: import('../messaging/protocol').PermissionPolicy;
   skills?: string[];
   promptVersion?: string;
 }
@@ -138,7 +137,7 @@ export interface FinalResult {
   reasoning?: string;
   toolCalls: FinalToolCall[];
   usage: Usage;
-  stopReason: 'end' | 'tool_use' | 'max_tokens' | 'content_filter';
+  stopReason: ProviderStopReason;
 }
 
 export interface StreamRequest {
@@ -203,6 +202,14 @@ export class ProviderError extends Error {
     super(message);
     this.name = 'ProviderError';
   }
+}
+
+/** Only failures that can plausibly clear without changing the request are user-retryable. */
+export function isProviderErrorRetryable(
+  error: ProviderError | ProviderErrorKind | string,
+): boolean {
+  const kind = typeof error === 'string' ? error : error.kind;
+  return kind === 'network' || kind === 'rate_limit' || kind === 'overloaded';
 }
 
 export interface VerifyResult {

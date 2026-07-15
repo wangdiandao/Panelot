@@ -4,13 +4,13 @@
  * "thread ... not found" — the client resets and creates a fresh thread.
  */
 import 'fake-indexeddb/auto';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PanelotDB } from '../../src/db/schema';
 import { RealEngineCore, type ProviderResolver } from '../../src/engine/core';
 import { EngineHost } from '../../src/engine/host';
 import { createDirectPair, type EngineTransport } from '../../src/messaging/transport';
 import { ENGINE_PROTOCOL, ENGINE_SCHEMA_HASH } from '../../src/messaging/protocol';
-import type { AgentEvent, Op } from '../../src/messaging/protocol';
+import type { AgentEvent, Op, ThreadSnapshot } from '../../src/messaging/protocol';
 import { ToolRegistry } from '../../src/agent/tool';
 import type { GatekeeperCheck } from '../../src/agent/loop';
 import { EngineSession } from '../../src/ui/engineClient';
@@ -31,6 +31,7 @@ function buildSession() {
   const { transport, connection } = createDirectPair();
   host.onConnection(connection);
   const session = new EngineSession(() => transport);
+  session.start();
   return { session, db };
 }
 
@@ -45,6 +46,355 @@ function waitFor(predicate: () => boolean, timeoutMs = 3000): Promise<void> {
     tick();
   });
 }
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe('EngineSession lifecycle', () => {
+  class FakeTransport implements EngineTransport {
+    sent: Op[] = [];
+    close = vi.fn();
+    private eventHandler: (event: AgentEvent) => void = () => {};
+    private disconnectHandler: () => void = () => {};
+    send(op: Op): void {
+      this.sent.push(op);
+    }
+    onEvent(handler: (event: AgentEvent) => void): () => void {
+      this.eventHandler = handler;
+      return () => {};
+    }
+    onDisconnect(handler: () => void): () => void {
+      this.disconnectHandler = handler;
+      return () => {};
+    }
+    emit(event: AgentEvent): void {
+      this.eventHandler(event);
+    }
+    disconnect(): void {
+      this.disconnectHandler();
+    }
+  }
+
+  function snapshot(threadId: string, epoch: number, sequence: number): ThreadSnapshot {
+    const stream = { threadId, epoch, sequence };
+    return {
+      stream,
+      meta: {
+        id: threadId,
+        revision: 0,
+        title: threadId,
+        createdAt: 1,
+        updatedAt: 1,
+        leafId: null,
+        archived: false,
+        pinned: false,
+        stats: { turns: 0, totalTokens: 0, costUsd: 0 },
+      },
+      items: [],
+      activeTurn: null,
+      pendingApprovals: [],
+      queuedInputs: 0,
+      queuedRuns: [],
+      recoverableRuns: [],
+    };
+  }
+
+  it('keeps construction pure and start/stop idempotent across a StrictMode replay', () => {
+    const transports: FakeTransport[] = [];
+    const factory = vi.fn(() => {
+      const transport = new FakeTransport();
+      transports.push(transport);
+      return transport;
+    });
+    const session = new EngineSession(factory);
+
+    expect(factory).not.toHaveBeenCalled();
+    session.start();
+    session.start();
+    expect(factory).toHaveBeenCalledTimes(1);
+
+    session.stop();
+    session.stop();
+    expect(transports[0]!.close).toHaveBeenCalledTimes(1);
+
+    session.start();
+    expect(factory).toHaveBeenCalledTimes(2);
+    const active = transports[1]!;
+    const init = active.sent[0]!;
+    transports[0]!.emit({
+      type: 'initialized',
+      submissionId: 'stale',
+      protocol: ENGINE_PROTOCOL,
+      schemaHash: ENGINE_SCHEMA_HASH,
+    });
+    expect(session.store.getState().connected).toBe(false);
+    active.emit({
+      type: 'initialized',
+      submissionId: init.submissionId,
+      protocol: ENGINE_PROTOCOL,
+      schemaHash: ENGINE_SCHEMA_HASH,
+    });
+    expect(session.store.getState().connected).toBe(true);
+    session.stop();
+  });
+
+  it('rejects a stale cross-thread snapshot and non-increasing stream cursor', () => {
+    const transport = new FakeTransport();
+    const session = new EngineSession(() => transport);
+    session.start();
+    try {
+      session.openThread('thread-a');
+      const subscribeA = transport.sent.find(
+        (op) => op.type === 'thread.subscribe' && op.threadId === 'thread-a',
+      )!;
+      session.openThread('thread-b');
+      const subscribeB = transport.sent.find(
+        (op) => op.type === 'thread.subscribe' && op.threadId === 'thread-b',
+      )!;
+
+      const snapshotA = snapshot('thread-a', 10, 1);
+      transport.emit({
+        type: 'initialized',
+        submissionId: subscribeA.submissionId,
+        protocol: ENGINE_PROTOCOL,
+        schemaHash: ENGINE_SCHEMA_HASH,
+        snapshot: snapshotA,
+        stream: snapshotA.stream,
+      });
+      expect(session.store.getState()).toMatchObject({
+        threadId: 'thread-b',
+        meta: null,
+        loading: true,
+      });
+
+      const snapshotB = snapshot('thread-b', 10, 5);
+      transport.emit({
+        type: 'initialized',
+        submissionId: subscribeB.submissionId,
+        protocol: ENGINE_PROTOCOL,
+        schemaHash: ENGINE_SCHEMA_HASH,
+        snapshot: snapshotB,
+        stream: snapshotB.stream,
+      });
+      expect(session.store.getState().meta?.title).toBe('thread-b');
+
+      transport.emit({
+        type: 'thread.updated',
+        threadId: 'thread-b',
+        revision: 9,
+        patch: { title: 'stale update' },
+        stream: { threadId: 'thread-b', epoch: 10, sequence: 4 },
+      });
+      expect(session.store.getState().meta?.title).toBe('thread-b');
+
+      transport.emit({
+        type: 'thread.updated',
+        threadId: 'thread-b',
+        revision: 1,
+        patch: { title: 'new worker update' },
+        stream: { threadId: 'thread-b', epoch: 11, sequence: 1 },
+      });
+      expect(session.store.getState().meta?.title).toBe('new worker update');
+    } finally {
+      session.stop();
+    }
+  });
+
+  it('retains provider stop semantics from the event and the persisted assistant snapshot', () => {
+    const transport = new FakeTransport();
+    const session = new EngineSession(() => transport);
+    session.start();
+    try {
+      session.openThread('thread-a');
+      const subscribe = transport.sent.find(
+        (op) => op.type === 'thread.subscribe' && op.threadId === 'thread-a',
+      )!;
+      const initial = snapshot('thread-a', 20, 1);
+      transport.emit({
+        type: 'initialized',
+        submissionId: subscribe.submissionId,
+        protocol: ENGINE_PROTOCOL,
+        schemaHash: ENGINE_SCHEMA_HASH,
+        snapshot: initial,
+        stream: initial.stream,
+      });
+      transport.emit({
+        type: 'turn.start',
+        threadId: 'thread-a',
+        turnId: 'turn-a',
+        turnKind: 'user',
+        steerable: true,
+        stream: { threadId: 'thread-a', epoch: 20, sequence: 2 },
+      });
+      transport.emit({
+        type: 'turn.complete',
+        threadId: 'thread-a',
+        turnId: 'turn-a',
+        stopReason: 'max_tokens',
+        stream: { threadId: 'thread-a', epoch: 20, sequence: 3 },
+      });
+      expect(session.store.getState().lastStopReason).toBe('max_tokens');
+
+      const refresh = transport.sent
+        .filter((op) => op.type === 'thread.subscribe' && op.threadId === 'thread-a')
+        .at(-1)!;
+      const persisted = snapshot('thread-a', 20, 4);
+      persisted.items = [
+        {
+          nodeId: 'assistant-a',
+          kind: 'assistant_message',
+          ts: 1,
+          payload: {
+            content: [{ type: 'text', text: 'partial' }],
+            model: 'mock',
+            connectionId: 'connection',
+            providerStopReason: 'max_tokens',
+          },
+        },
+      ];
+      session.store.setState({ lastStopReason: null });
+      transport.emit({
+        type: 'initialized',
+        submissionId: refresh.submissionId,
+        protocol: ENGINE_PROTOCOL,
+        schemaHash: ENGINE_SCHEMA_HASH,
+        snapshot: persisted,
+        stream: persisted.stream,
+      });
+
+      expect(session.store.getState().lastStopReason).toBe('max_tokens');
+    } finally {
+      session.stop();
+    }
+  });
+
+  it('does not connect when session restore completes after stop', async () => {
+    let resolveGet!: (value: Record<string, unknown>) => void;
+    const pendingGet = new Promise<Record<string, unknown>>((resolve) => {
+      resolveGet = resolve;
+    });
+    vi.stubGlobal('chrome', {
+      storage: {
+        session: {
+          get: vi.fn(() => pendingGet),
+          set: vi.fn(async () => {}),
+        },
+      },
+    });
+    const factory = vi.fn(() => new FakeTransport());
+    const session = new EngineSession(factory);
+
+    session.start();
+    session.stop();
+    resolveGet({});
+    await pendingGet;
+    await Promise.resolve();
+
+    expect(factory).not.toHaveBeenCalled();
+  });
+
+  it('cancels a scheduled reconnect when stopped', async () => {
+    vi.useFakeTimers();
+    const transports: FakeTransport[] = [];
+    const session = new EngineSession(() => {
+      const transport = new FakeTransport();
+      transports.push(transport);
+      return transport;
+    });
+    session.start();
+    transports[0]!.disconnect();
+    session.stop();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(transports).toHaveLength(1);
+    vi.useRealTimers();
+  });
+
+  it('blocks reconnect when an older protocol receives the stable fatal envelope', async () => {
+    vi.useFakeTimers();
+    const transports: FakeTransport[] = [];
+    const factory = vi.fn(() => {
+      const transport = new FakeTransport();
+      transports.push(transport);
+      return transport;
+    });
+    const session = new EngineSession(factory);
+    session.start();
+    try {
+      const transport = transports[0]!;
+      transport.emit({
+        type: 'fatal.reload_required',
+        submissionId: transport.sent[0]!.submissionId,
+        protocol: 'panelot/engine-v0',
+        schemaHash: 'future-schema',
+        message: 'Reload required.',
+      });
+      transport.disconnect();
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(session.store.getState()).toMatchObject({
+        connected: false,
+        reloadRequired: true,
+        lastError: { message: 'Reload required.', retryable: false, kind: 'protocol' },
+      });
+      expect(transport.close).toHaveBeenCalledOnce();
+      expect(factory).toHaveBeenCalledOnce();
+    } finally {
+      session.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects a branch selection resolved for a thread that is no longer active', () => {
+    const transport = new FakeTransport();
+    const session = new EngineSession(() => transport);
+    session.start();
+    session.store.setState({ threadId: 'thread-b' });
+    transport.sent.length = 0;
+
+    expect(session.selectBranch('thread-a', 'a-2')).toBe(false);
+    expect(transport.sent).toEqual([]);
+    session.stop();
+  });
+
+  it('surfaces maintenance admission rejection in the session shared by Chat and Side Panel', () => {
+    const transport = new FakeTransport();
+    const session = new EngineSession(() => transport);
+    session.start();
+    try {
+      const initialization = transport.sent[0]!;
+      transport.emit({
+        type: 'initialized',
+        submissionId: initialization.submissionId,
+        protocol: ENGINE_PROTOCOL,
+        schemaHash: ENGINE_SCHEMA_HASH,
+      });
+      session.submit({ text: 'continue' });
+      const creation = transport.sent.find((op) => op.type === 'thread.create')!;
+      transport.emit({
+        type: 'thread.created',
+        submissionId: creation.submissionId,
+        threadId: 'maintenance-thread',
+      });
+      const submission = transport.sent.find((op) => op.type === 'turn.submit')!;
+
+      transport.emit({
+        type: 'command.rejected',
+        submissionId: submission.submissionId,
+        code: 'overloaded',
+        message: 'Data maintenance is in progress. Reload the extension before retrying.',
+      });
+
+      expect(session.store.getState().lastError).toEqual({
+        message: 'Data maintenance is in progress. Reload the extension before retrying.',
+        retryable: true,
+      });
+    } finally {
+      session.stop();
+    }
+  });
+});
 
 describe('EngineSession self-heal on thread_not_found', () => {
   it('openThread(missing id) recovers by falling back to a draft', async () => {
@@ -75,6 +425,22 @@ describe('EngineSession self-heal on thread_not_found', () => {
       // this harness) but the thread row now exists.
       await waitFor(() => session.store.getState().threadId !== null);
       expect(await db.threads.count()).toBe(1);
+    } finally {
+      session.dispose();
+    }
+  });
+
+  it('clears the previous thread permission override when starting a new draft', () => {
+    const { session } = buildSession();
+    try {
+      session.setOverrides({
+        permissionPolicy: 'always',
+        enabledToolLevels: ['L0', 'L1'],
+      });
+      session.startDraft();
+      expect(session.store.getState().pendingOverrides).toEqual({
+        enabledToolLevels: ['L0', 'L1'],
+      });
     } finally {
       session.dispose();
     }
@@ -194,6 +560,7 @@ describe('session outbox', () => {
       transports.push(transport);
       return transport;
     });
+    session.start();
     try {
       const first = transports[0]!;
       const init = first.sent[0]!;

@@ -16,6 +16,7 @@ import type {
   TurnOverrides,
   UserInput,
   RunRecoveryState,
+  SubmissionBrowserContext,
 } from '../messaging/protocol';
 import type { PanelotDB } from '../db/schema';
 import { ThreadTree } from '../db/tree';
@@ -24,11 +25,27 @@ import { runTurn, type GatekeeperCheck, type TurnEnv, type TurnHandle } from '..
 import { ToolRegistry, validateParams } from '../agent/tool';
 import { assembleSystemPrompt, type AssembleOptions } from '../prompts/assemble';
 import type { ProviderAdapter, GenParams } from '../providers/types';
-import type { ApprovalRecord, ResolvedRunEnvironment, RunRecord } from '../db/types';
+import type {
+  ApprovalRecord,
+  PendingToolExecution,
+  ProviderEnvironmentBinding,
+  ResolvedRunEnvironment,
+  RunEnvironmentSnapshot,
+  RunRecord,
+} from '../db/types';
 import { RunRepository } from './runRepository';
 import { ApprovalRepository } from './approvalRepository';
 import { CommandReceiptRepository } from './commandReceipts';
 import { ThreadActorRegistry } from './threadActor';
+import {
+  bindToolRegistry,
+  captureSkillCatalog,
+  captureToolCatalog,
+  createRunEnvironmentSnapshot,
+  RunEnvironmentSnapshotError,
+  verifyRunEnvironmentSnapshot,
+} from './runEnvironmentSnapshot';
+import type { SkillFrontmatter } from '../skills/parse';
 
 const APPROVAL_TIMEOUT_MS = 5 * 60_000; // docs/06 §4
 const ENQUEUE_CAPACITY = 8; // docs/04 §3
@@ -49,8 +66,7 @@ export interface ProviderResolver {
     presetId?: string;
     presetPrompt?: string;
     enabledToolLevels?: ('L0' | 'L1' | 'L2' | 'mcp')[];
-    approvalPolicy?: NonNullable<TurnOverrides['approvalPolicy']>;
-    capabilityScope?: NonNullable<TurnOverrides['capabilityScope']>;
+    permissionPolicy?: NonNullable<TurnOverrides['permissionPolicy']>;
     activeSkills?: string[];
     promptVersion?: string;
   }>;
@@ -58,11 +74,26 @@ export interface ProviderResolver {
   resolveTaskModel?(
     fallbackThreadId: string,
   ): Promise<{ provider: ProviderAdapter; model: string }>;
+  /** Captures only non-secret transport facts plus stable credential references. */
+  captureEnvironmentBinding?(connectionId: string): Promise<ProviderEnvironmentBinding>;
+  /** Rebuilds an adapter from captured transport facts and current referenced secrets. */
+  resolveFromEnvironmentBinding?(binding: ProviderEnvironmentBinding): Promise<ProviderAdapter>;
 }
 
 interface ActiveTurn {
   handle: TurnHandle;
   threadId: string;
+}
+
+interface RecoveryExecution {
+  abort: AbortController;
+  interrupted: boolean;
+}
+
+interface RecoveredApprovalWait {
+  approvalId: string;
+  targetTabId?: number;
+  cancelRequested: boolean;
 }
 
 interface QueuedInput {
@@ -73,6 +104,20 @@ interface QueuedInput {
   runId: string;
 }
 
+export interface EngineCoreOptions {
+  approvalTimeoutMs?: number;
+  recoveryToolTimeoutMs?: number;
+}
+
+interface PendingApprovalWaiter {
+  threadId: string;
+  turnId: string;
+  request: ApprovalRequestPayload;
+  requestedAt: number;
+  settle: (decision: ApprovalDecision) => Promise<ApprovalDecision>;
+  cleanup: () => void;
+}
+
 export class RealEngineCore {
   private tree: ThreadTree;
   private runs: RunRepository;
@@ -81,32 +126,29 @@ export class RealEngineCore {
   private actors = new ThreadActorRegistry();
   private activeTurns = new Map<string, ActiveTurn>(); // threadId → turn
   private queues = new Map<string, QueuedInput[]>(); // threadId → queued inputs
-  private pendingApprovals = new Map<
-    string,
-    {
-      threadId: string;
-      turnId: string;
-      request: ApprovalRequestPayload;
-      requestedAt: number;
-      resolve: (d: ApprovalDecision) => void;
-      timer: ReturnType<typeof setTimeout>;
-    }
-  >();
+  private pendingApprovals = new Map<string, PendingApprovalWaiter>();
+  private recoveredApprovalTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private recoveredApprovalsByThread = new Map<string, RecoveredApprovalWait>();
+  private recoveryExecutions = new Map<string, RecoveryExecution>();
+  private recoveryIdleWaiters = new Set<() => void>();
+  private activityEpoch = new Map<string, number>();
+  private readonly approvalTimeoutMs: number;
+  private readonly recoveryToolTimeoutMs: number;
   /** Broadcast sink, wired by the host. */
   onBroadcast: (ev: AgentEvent) => void = () => {};
   /** Called after an approval decision to apply its side effects (docs/06 §4). */
   onApprovalDecision?: (
+    approvalId: string,
     threadId: string,
     tool: string,
     targetOrigin: string,
     decision: ApprovalDecision,
   ) => Promise<void>;
-  /** Per-turn approval-policy override → gatekeeper thread config (docs/06 §1). */
+  /** Per-turn permission-policy override → gatekeeper thread config (docs/06 §1). */
   onPermissionOverride?: (
     threadId: string,
     config: {
-      approvalPolicy: NonNullable<TurnOverrides['approvalPolicy']>;
-      capabilityScope: NonNullable<TurnOverrides['capabilityScope']>;
+      permissionPolicy: NonNullable<TurnOverrides['permissionPolicy']>;
     },
   ) => void;
   /**
@@ -115,23 +157,40 @@ export class RealEngineCore {
    */
   resolveSlashCommand?: (text: string) => Promise<ContextBlock | null>;
   onBeforeRun?: () => Promise<void>;
+  /** Bind browser tools to the submission identity before constructing the turn registry. */
+  onTurnBrowserContext?: (
+    threadId: string,
+    browserContext: SubmissionBrowserContext | undefined,
+  ) => Promise<void> | void;
+  /** Revalidate the durable target and current safety floor before replaying a prepared tool. */
+  onValidateRecoveredTool?: (
+    threadId: string,
+    pendingTool: PendingToolExecution,
+    environment: RunEnvironmentSnapshot,
+  ) => Promise<void>;
 
   constructor(
     private db: PanelotDB,
     /** Fixed registry, or a factory producing a thread-bound registry per turn. */
-    private tools: ToolRegistry | ((threadId: string) => ToolRegistry),
+    private tools:
+      ToolRegistry | ((threadId: string, snapshot?: RunEnvironmentSnapshot) => ToolRegistry),
     private gatekeeper: GatekeeperCheck,
     private providers: ProviderResolver,
-    private promptOptions: () => Promise<AssembleOptions> = async () => ({}),
+    private promptOptions: (
+      browserContext?: SubmissionBrowserContext,
+    ) => Promise<AssembleOptions> = async () => ({}),
+    options: EngineCoreOptions = {},
   ) {
     this.tree = new ThreadTree(db);
     this.runs = new RunRepository(db);
     this.approvals = new ApprovalRepository(db);
     this.receipts = new CommandReceiptRepository(db);
+    this.approvalTimeoutMs = options.approvalTimeoutMs ?? APPROVAL_TIMEOUT_MS;
+    this.recoveryToolTimeoutMs = options.recoveryToolTimeoutMs ?? 20_000;
   }
 
-  private toolsFor(threadId: string): ToolRegistry {
-    return typeof this.tools === 'function' ? this.tools(threadId) : this.tools;
+  private toolsFor(threadId: string, snapshot?: RunEnvironmentSnapshot): ToolRegistry {
+    return typeof this.tools === 'function' ? this.tools(threadId, snapshot) : this.tools;
   }
 
   threadIdOf(op: Op): string | null {
@@ -144,14 +203,18 @@ export class RealEngineCore {
    * thread-scoped broadcast filter lets it reach every client.
    */
   private broadcastActivity(threadId: string): void {
-    let pendingApprovals = 0;
-    for (const p of this.pendingApprovals.values()) {
-      if (p.threadId === threadId) pendingApprovals++;
-    }
-    this.onBroadcast({
-      type: 'activity.updated',
-      activity: { threadId, running: this.activeTurns.has(threadId), pendingApprovals },
-    });
+    const epoch = (this.activityEpoch.get(threadId) ?? 0) + 1;
+    this.activityEpoch.set(threadId, epoch);
+    void this.approvals
+      .pendingCountForThread(threadId)
+      .then((pendingApprovals) => {
+        if (this.activityEpoch.get(threadId) !== epoch) return;
+        this.onBroadcast({
+          type: 'activity.updated',
+          activity: { threadId, running: this.activeTurns.has(threadId), pendingApprovals },
+        });
+      })
+      .catch(() => undefined);
   }
 
   private async broadcastQueue(threadId: string): Promise<void> {
@@ -191,6 +254,13 @@ export class RealEngineCore {
           revision: receipt.response.revision,
         });
       } else if (receipt.response) {
+        if (op.type === 'thread.create' && receipt.response.threadId) {
+          emit({
+            type: 'thread.created',
+            submissionId: op.submissionId,
+            threadId: receipt.response.threadId,
+          });
+        }
         emit({
           ...receipt.response,
           type: 'command.ack',
@@ -234,7 +304,7 @@ export class RealEngineCore {
         actorThreadId = (await this.approvals.get(op.approvalId))?.threadId ?? null;
       }
       await this.actors.run(actorThreadId ?? `client:${clientId}`, () =>
-        this.dispatchOp(op, capture),
+        this.dispatchOp(op, capture, clientId),
       );
     } catch (error) {
       await this.receipts.reject(clientId, op.submissionId, {
@@ -262,21 +332,30 @@ export class RealEngineCore {
         runId: run?.id,
         revision: run?.revision,
       };
-      await this.receipts.ack(clientId, op.submissionId, response);
+      if (op.type !== 'thread.create') {
+        await this.receipts.ack(clientId, op.submissionId, response);
+      }
       emit({ ...response, submissionId: op.submissionId });
     }
     void this.receipts.prune();
   }
 
-  private async dispatchOp(op: Op, emit: (ev: AgentEvent) => void): Promise<void> {
+  private async dispatchOp(
+    op: Op,
+    emit: (ev: AgentEvent) => void,
+    clientId: string,
+  ): Promise<void> {
     switch (op.type) {
       case 'thread.create': {
-        const thread = await this.tree.createThread({ preset: op.preset, folderId: op.folderId });
+        const thread = await this.receipts.createThreadAndAck(clientId, op.submissionId, {
+          preset: op.preset,
+          folderId: op.folderId,
+        });
         emit({ type: 'thread.created', submissionId: op.submissionId, threadId: thread.id });
         return;
       }
       case 'turn.submit':
-        return this.handleSubmit(op, emit);
+        return this.handleSubmit(op, emit, clientId);
       case 'turn.fork': {
         // Branch-and-run (docs/02 §3.2): reposition leafId to the anchor's
         // parent so the turn's user message appends as a SIBLING branch.
@@ -545,34 +624,17 @@ export class RealEngineCore {
           });
           return;
         }
-        const decided = await this.approvals.decide(op.approvalId, op.decision);
-        const decision = decided.decision ?? op.decision;
         const pending = this.pendingApprovals.get(op.approvalId);
         if (pending) {
-          clearTimeout(pending.timer);
-          this.pendingApprovals.delete(op.approvalId);
-          // Persist the decision's side effects (scopeOrigins growth,
-          // session/site grants) before resolving so the next check sees them.
-          await this.onApprovalDecision?.(
-            pending.threadId,
-            pending.request.tool,
-            pending.request.targetOrigin,
-            decision,
-          );
-          pending.resolve(decision);
-          this.broadcastActivity(pending.threadId);
+          await pending.settle(op.decision);
         } else {
-          await this.onApprovalDecision?.(
-            record.threadId,
-            record.request.tool,
-            record.request.targetOrigin,
-            decision,
-          );
-          const run = await this.runs.get(record.runId);
-          if (run?.state === 'waiting_approval') {
-            await this.continueDecidedApproval(run, decided);
+          await this.approvals.decide(op.approvalId, op.decision);
+          try {
+            await this.continueDecidedApproval(op.approvalId);
+            this.broadcastActivity(record.threadId);
+          } finally {
+            this.finishRecoveredApproval(record.threadId, op.approvalId);
           }
-          this.broadcastActivity(record.threadId);
         }
         return;
       }
@@ -631,10 +693,11 @@ export class RealEngineCore {
   private async handleSubmit(
     op: Extract<Op, { type: 'turn.submit' }>,
     emit: (ev: AgentEvent) => void,
+    clientId: string,
   ): Promise<void> {
     if (this.activeTurns.has(op.threadId)) {
       // Busy → auto-enqueue (UI may also enqueue explicitly).
-      await this.dispatchOp({ ...op, type: 'turn.enqueue' }, emit);
+      await this.dispatchOp({ ...op, type: 'turn.enqueue' }, emit, clientId);
       return;
     }
     const thread = await this.tree.getThread(op.threadId);
@@ -665,110 +728,175 @@ export class RealEngineCore {
     queuedRunId?: string,
     resumeExisting = false,
   ): Promise<void> {
-    // Sticky per-session permission tier from the composer switch: applied
-    // before the turn so every gate check this turn sees it.
-    await this.onBeforeRun?.();
-    // Slash-command activation: attach the matched skill body to the message.
-    if (this.resolveSlashCommand && /^\s*\//.test(input.text)) {
-      try {
-        const block = await this.resolveSlashCommand(input.text);
-        if (block) input = { ...input, attachedContext: [...(input.attachedContext ?? []), block] };
-      } catch {
-        /* unresolved command → send as plain text */
+    const existingRun = queuedRunId ? await this.runs.get(queuedRunId) : undefined;
+    const recoveringStartedRun = resumeExisting || !!existingRun?.environment;
+    if (!recoveringStartedRun) {
+      // Sticky per-session permission tier from the composer switch: applied
+      // before the turn so every gate check this turn sees it.
+      await this.onBeforeRun?.();
+      // Slash-command activation is input normalization and must not repeat on resume.
+      if (this.resolveSlashCommand && /^\s*\//.test(input.text)) {
+        try {
+          const block = await this.resolveSlashCommand(input.text);
+          if (block)
+            input = { ...input, attachedContext: [...(input.attachedContext ?? []), block] };
+        } catch {
+          /* unresolved command → send as plain text */
+        }
       }
     }
-    const run = queuedRunId
-      ? await this.runs.get(queuedRunId)
-      : await this.runs.enqueue({ threadId, input, overrides, ...identity });
+    const run =
+      existingRun ?? (await this.runs.enqueue({ threadId, input, overrides, ...identity }));
     if (!run) throw new Error(`Run not found: ${queuedRunId}`);
 
+    const persistedEnvironment = run.environment;
     let resolved: Awaited<ReturnType<ProviderResolver['resolve']>>;
+    let runEnvironment: RunEnvironmentSnapshot;
+    let systemPrompt: string;
+    let turnTools: ToolRegistry;
     try {
-      const persisted = resumeExisting ? run.environment : undefined;
-      const base = await this.providers.resolve(
-        threadId,
-        persisted
-          ? { connectionId: persisted.connectionId, modelId: persisted.modelId }
-          : overrides?.model,
-      );
-      resolved = persisted
-        ? {
-            ...base,
-            model: persisted.modelId,
-            params: persisted.modelParameters as GenParams,
-            connectionId: persisted.connectionId,
-            presetId: persisted.presetId,
-            presetPrompt: persisted.presetPrompt,
-            enabledToolLevels: persisted.enabledToolLevels,
-            approvalPolicy: persisted.approvalPolicy,
-            capabilityScope: persisted.capabilityScope,
-            activeSkills: persisted.activeSkills,
-            promptVersion: persisted.promptVersion,
-            modelCapabilities: persisted.modelCapabilities,
-            pricing: persisted.pricing,
-          }
-        : base;
+      if (recoveringStartedRun) {
+        runEnvironment = await verifyRunEnvironmentSnapshot(persistedEnvironment, run.input);
+        await this.onBeforeRun?.();
+        const provider = this.providers.resolveFromEnvironmentBinding
+          ? await this.providers.resolveFromEnvironmentBinding(runEnvironment.providerBinding)
+          : (
+              await this.providers.resolve(threadId, {
+                connectionId: runEnvironment.connectionId,
+                modelId: runEnvironment.modelId,
+              })
+            ).provider;
+        resolved = {
+          provider,
+          model: runEnvironment.modelId,
+          params: runEnvironment.modelParameters as GenParams,
+          connectionId: runEnvironment.connectionId,
+          presetId: runEnvironment.presetId,
+          presetPrompt: runEnvironment.presetPrompt,
+          enabledToolLevels: runEnvironment.enabledToolLevels,
+          permissionPolicy: runEnvironment.permissionPolicy,
+          activeSkills: runEnvironment.activeSkills,
+          promptVersion: runEnvironment.promptVersion,
+          modelCapabilities: runEnvironment.modelCapabilities,
+          pricing: runEnvironment.pricing,
+        };
+        systemPrompt = runEnvironment.systemPrompt;
+        turnTools = await bindToolRegistry(this.toolsFor(threadId, runEnvironment), runEnvironment);
+      } else {
+        resolved = await this.providers.resolve(threadId, overrides?.model);
+        const presetSkillIds = [...(resolved.activeSkills ?? [])];
+        const presetSkills = (await this.db.skills.bulkGet(presetSkillIds)).filter(
+          (skill): skill is NonNullable<typeof skill> => !!skill?.enabled,
+        );
+        const attachedSkillIds = (input.attachedContext ?? [])
+          .filter((block) => block.kind === 'skill' && !!block.sourceRef)
+          .map((block) => block.sourceRef!);
+        const activeSkillIds = [
+          ...new Set([...presetSkills.map((skill) => skill.id), ...attachedSkillIds]),
+        ];
+        const browserContext = input.browserContext;
+        const promptOpts = await this.promptOptions(browserContext);
+        systemPrompt = assembleSystemPrompt({
+          ...promptOpts,
+          presetPrompt: resolved.presetPrompt ?? promptOpts.presetPrompt,
+          activeSkills: presetSkills.map((skill) => ({ name: skill.name, body: skill.body })),
+        });
+        const environment: ResolvedRunEnvironment = {
+          connectionId: resolved.connectionId ?? overrides?.model?.connectionId ?? '',
+          modelId: resolved.model,
+          modelParameters: { ...resolved.params },
+          modelCapabilities: resolved.modelCapabilities,
+          pricing: resolved.pricing,
+          presetId: resolved.presetId,
+          presetPrompt: resolved.presetPrompt,
+          enabledToolLevels: [
+            ...(overrides?.enabledToolLevels ??
+              resolved.enabledToolLevels ?? ['L0', 'L1', 'L2', 'mcp']),
+          ],
+          permissionPolicy: overrides?.permissionPolicy ?? resolved.permissionPolicy ?? 'untrusted',
+          activeSkills: activeSkillIds,
+          promptVersion: resolved.promptVersion ?? 'kernel',
+          browserContext,
+        };
+        turnTools = this.toolsFor(threadId);
+        const availableSkillNames = new Set(
+          (promptOpts.skillsIndex ?? []).map((entry) => entry.name),
+        );
+        const skillIndexByName = new Map(
+          (promptOpts.skillsIndex ?? []).map((entry) => [entry.name, entry]),
+        );
+        const indexedSkillRecords = await this.db.skills
+          .filter((skill) => skill.enabled && availableSkillNames.has(skill.name))
+          .toArray();
+        const skillRecords = [
+          ...new Map(
+            [...indexedSkillRecords, ...presetSkills].map((skill) => [skill.id, skill] as const),
+          ).values(),
+        ];
+        const skillCatalog = await captureSkillCatalog(
+          skillRecords.map((skill) => {
+            const indexEntry = skillIndexByName.get(skill.name);
+            const frontmatter = skill.frontmatter as SkillFrontmatter;
+            return {
+              id: skill.id,
+              name: skill.name,
+              body: skill.body,
+              description: indexEntry?.description ?? frontmatter.description ?? '',
+              sites: indexEntry?.sites,
+            };
+          }),
+        );
+        const providerBinding = this.providers.captureEnvironmentBinding
+          ? await this.providers.captureEnvironmentBinding(environment.connectionId)
+          : {
+              kind: 'resolver' as const,
+              connectionId: environment.connectionId,
+              credentials: [],
+            };
+        const toolCatalog = await captureToolCatalog(turnTools, environment.enabledToolLevels);
+        runEnvironment = await createRunEnvironmentSnapshot({
+          environment,
+          normalizedInput: input,
+          providerBinding,
+          systemPrompt,
+          skillCatalog,
+          toolCatalog,
+        });
+      }
     } catch (error) {
       await this.runs.transition(run.id, 'failed', {
         error: {
-          code: 'provider_resolution',
-          message: error instanceof Error ? error.message : String(error),
+          code: error instanceof RunEnvironmentSnapshotError ? error.code : 'provider_resolution',
+          message:
+            error instanceof RunEnvironmentSnapshotError
+              ? error.message
+              : 'The run environment could not be resolved.',
         },
       });
       throw error;
     }
-    const presetSkillIds = [...(resolved.activeSkills ?? [])];
-    const presetSkills = (await this.db.skills.bulkGet(presetSkillIds)).filter(
-      (skill): skill is NonNullable<typeof skill> => !!skill?.enabled,
-    );
-    const attachedSkillIds = (input.attachedContext ?? [])
-      .filter((block) => block.kind === 'skill' && !!block.sourceRef)
-      .map((block) => block.sourceRef!);
-    const activeSkillIds = [
-      ...new Set([...presetSkills.map((skill) => skill.id), ...attachedSkillIds]),
-    ];
-    const promptOpts = await this.promptOptions();
-    const systemPrompt = assembleSystemPrompt({
-      ...promptOpts,
-      presetPrompt: resolved.presetPrompt ?? promptOpts.presetPrompt,
-      activeSkills: presetSkills.map((skill) => ({ name: skill.name, body: skill.body })),
-    });
-    const runEnvironment: ResolvedRunEnvironment = {
-      connectionId: resolved.connectionId ?? overrides?.model?.connectionId ?? '',
-      modelId: resolved.model,
-      modelParameters: { ...resolved.params },
-      modelCapabilities: resolved.modelCapabilities,
-      pricing: resolved.pricing,
-      presetId: resolved.presetId,
-      presetPrompt: resolved.presetPrompt,
-      enabledToolLevels: [
-        ...(overrides?.enabledToolLevels ??
-          resolved.enabledToolLevels ?? ['L0', 'L1', 'L2', 'mcp']),
-      ],
-      approvalPolicy: overrides?.approvalPolicy ?? resolved.approvalPolicy ?? 'untrusted',
-      capabilityScope: overrides?.capabilityScope ?? resolved.capabilityScope ?? 'full',
-      activeSkills: activeSkillIds,
-      promptVersion: resolved.promptVersion ?? 'kernel',
-    };
+    const browserContext = runEnvironment.browserContext;
     this.onPermissionOverride?.(threadId, {
-      approvalPolicy: runEnvironment.approvalPolicy,
-      capabilityScope: runEnvironment.capabilityScope,
+      permissionPolicy: runEnvironment.permissionPolicy,
     });
-    if (!resumeExisting || run.state === 'queued') {
-      await this.runs.prepare(run.id, runEnvironment);
+    if (!recoveringStartedRun) {
+      await this.runs.prepare(run.id, runEnvironment, input, overrides);
     } else if (
+      run.state === 'queued' ||
       run.state === 'interrupted' ||
       run.state === 'paused_budget' ||
       run.state === 'paused_uncertain'
     ) {
       await this.runs.transition(run.id, 'preparing', { environment: runEnvironment });
     }
+    await this.onTurnBrowserContext?.(threadId, browserContext);
 
     const env: TurnEnv = {
       tree: this.tree,
-      tools: this.toolsFor(threadId),
+      tools: turnTools,
       gatekeeper: this.gatekeeper,
-      requestApproval: (turnId, request) => this.requestApproval(threadId, run.id, turnId, request),
+      requestApproval: (turnId, request, pendingTool, signal) =>
+        this.requestApproval(threadId, run.id, turnId, request, pendingTool, signal),
       emit: (ev) => {
         if (ev.type === 'token.usage') {
           // Cost from pricing ($/Mtok), if the resolver supplied it (docs/03 §1.2).
@@ -848,7 +976,7 @@ export class RealEngineCore {
       // Cancel pending approvals belonging to this turn.
       for (const [id, p] of this.pendingApprovals) {
         if (p.turnId === handle.turnId) {
-          clearTimeout(p.timer);
+          p.cleanup();
           this.pendingApprovals.delete(id);
         }
       }
@@ -901,6 +1029,40 @@ export class RealEngineCore {
     );
   }
 
+  private async assertRecoveryEnvironment(
+    run: RunRecord,
+  ): Promise<{ snapshot: RunEnvironmentSnapshot; tools: ToolRegistry }> {
+    const snapshot = await verifyRunEnvironmentSnapshot(run.environment, run.input);
+    if (this.providers.resolveFromEnvironmentBinding) {
+      await this.providers.resolveFromEnvironmentBinding(snapshot.providerBinding);
+    } else {
+      await this.providers.resolve(run.threadId, {
+        connectionId: snapshot.connectionId,
+        modelId: snapshot.modelId,
+      });
+    }
+    const tools = await bindToolRegistry(this.toolsFor(run.threadId, snapshot), snapshot);
+    return { snapshot, tools };
+  }
+
+  private async rejectUnsupportedRecovery(
+    run: RunRecord,
+    error: RunEnvironmentSnapshotError,
+  ): Promise<void> {
+    await this.runs.transition(run.id, 'failed', {
+      pendingTool: undefined,
+      stopReason: error.code,
+      error: { code: error.code, message: error.message },
+    });
+    this.onBroadcast({
+      type: 'error',
+      threadId: run.threadId,
+      code: 'internal',
+      message: error.message,
+      retryable: false,
+    });
+  }
+
   private async recordRecoveredToolResult(
     run: RunRecord,
     result: {
@@ -940,16 +1102,28 @@ export class RealEngineCore {
     });
   }
 
-  private async continueDecidedApproval(run: RunRecord, approval: ApprovalRecord): Promise<void> {
+  private async continueDecidedApproval(approvalId: string): Promise<boolean> {
+    const currentApproval = await this.approvals.get(approvalId);
+    if (!currentApproval || this.activeTurns.has(currentApproval.threadId)) return false;
+    const claimed = await this.approvals.claimDecidedContinuation(approvalId);
+    if (!claimed) return false;
+    const { run, approval } = claimed;
     const decision = approval.decision;
     if (!decision) throw new Error(`Approval ${approval.id} has no decision`);
+    await this.onApprovalDecision?.(
+      approval.id,
+      approval.threadId,
+      approval.request.tool,
+      approval.request.targetOrigin,
+      decision,
+    );
     if (
       decision.kind === 'accept' ||
       decision.kind === 'acceptForSession' ||
       decision.kind === 'acceptForSite'
     ) {
       await this.replayPreparedTool(run);
-      return;
+      return true;
     }
     if (decision.kind === 'cancel') {
       await this.recordRecoveredToolResult(
@@ -963,7 +1137,7 @@ export class RealEngineCore {
         'interrupted',
         { pendingTool: undefined, stopReason: 'approval_cancelled' },
       );
-      return;
+      return true;
     }
     const note = decision.note ? ` Reason: ${decision.note}` : '';
     await this.recordRecoveredToolResult(
@@ -978,6 +1152,7 @@ export class RealEngineCore {
       { pendingTool: undefined },
     );
     await this.resumePersistedRun(run.id);
+    return true;
   }
 
   private async replayPreparedTool(run: RunRecord): Promise<void> {
@@ -988,7 +1163,23 @@ export class RealEngineCore {
       });
       return;
     }
-    const tool = this.toolsFor(run.threadId).get(pending.toolName);
+    let recoveryTools: ToolRegistry;
+    let recoveryEnvironment: RunEnvironmentSnapshot;
+    try {
+      ({ tools: recoveryTools, snapshot: recoveryEnvironment } =
+        await this.assertRecoveryEnvironment(run));
+    } catch (error) {
+      const snapshotError =
+        error instanceof RunEnvironmentSnapshotError
+          ? error
+          : new RunEnvironmentSnapshotError(
+              'environment_snapshot_invalid',
+              'The captured run environment can no longer be restored safely.',
+            );
+      await this.rejectUnsupportedRecovery(run, snapshotError);
+      return;
+    }
+    const tool = recoveryTools.get(pending.toolName);
     const validation = tool ? validateParams(tool, pending.params) : undefined;
     if (!tool || !validation?.ok) {
       const recoveryError = !tool
@@ -1016,21 +1207,190 @@ export class RealEngineCore {
       return;
     }
 
-    if (run.state !== 'executing_tool') {
-      await this.runs.transition(run.id, 'executing_tool', {
-        pendingTool: { ...pending, startedAt: Date.now() },
-      });
-    }
     const abort = new AbortController();
-    try {
-      const result = await tool.execute(pending.itemId, validation.params, abort.signal, (update) =>
-        this.onBroadcast({
-          type: 'item.delta',
-          threadId: run.threadId,
-          itemId: pending.itemId,
-          delta: { toolProgress: update },
-        }),
+    const recoveryExecution: RecoveryExecution = { abort, interrupted: false };
+    this.recoveryExecutions.set(run.threadId, recoveryExecution);
+    const finishRecoveryExecution = () => {
+      if (this.recoveryExecutions.get(run.threadId) === recoveryExecution) {
+        this.recoveryExecutions.delete(run.threadId);
+      }
+      this.notifyRecoveryIdle();
+    };
+    const interruptBeforeDispatch = async () => {
+      finishRecoveryExecution();
+      await this.recordRecoveredToolResult(
+        run,
+        {
+          ok: false,
+          content: [
+            {
+              type: 'text',
+              text: 'The recovered browser action was cancelled after manual input before dispatch.',
+            },
+          ],
+          trust: 'trusted',
+          provenance: 'user',
+        },
+        'interrupted',
+        { pendingTool: undefined, stopReason: 'manual_operation' },
       );
+    };
+    const recoveredApproval = this.recoveredApprovalsByThread.get(run.threadId);
+    if (recoveredApproval?.cancelRequested) {
+      recoveryExecution.interrupted = true;
+      abort.abort(new DOMException('Manual operation cancelled recovery.', 'AbortError'));
+    }
+
+    try {
+      await this.onValidateRecoveredTool?.(run.threadId, pending, recoveryEnvironment);
+    } catch {
+      if (recoveryExecution.interrupted) {
+        await interruptBeforeDispatch();
+        return;
+      }
+      finishRecoveryExecution();
+      await this.recordRecoveredToolResult(
+        run,
+        {
+          ok: false,
+          content: [
+            {
+              type: 'text',
+              text: 'The recovered tool target or authorization is no longer valid.',
+            },
+          ],
+          trust: 'trusted',
+          provenance: 'tool',
+        },
+        'streaming_model',
+        { pendingTool: undefined },
+      );
+      await this.resumePersistedRun(run.id);
+      return;
+    }
+
+    if (recoveryExecution.interrupted) {
+      await interruptBeforeDispatch();
+      return;
+    }
+
+    try {
+      if (run.state !== 'executing_tool') {
+        await this.runs.transition(run.id, 'executing_tool', {
+          pendingTool: { ...pending, startedAt: Date.now() },
+        });
+      }
+    } catch (error) {
+      finishRecoveryExecution();
+      throw error;
+    }
+    let timedOut = false;
+    let dispatched = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const execution = Promise.resolve()
+      .then(() => {
+        if (abort.signal.aborted) throw abort.signal.reason;
+        dispatched = true;
+        return tool.execute(pending.itemId, validation.params, abort.signal, (update) => {
+          if (timedOut) return;
+          this.onBroadcast({
+            type: 'item.delta',
+            threadId: run.threadId,
+            itemId: pending.itemId,
+            delta: { toolProgress: update },
+          });
+        });
+      })
+      .then(
+        (result) => ({ kind: 'result' as const, result }),
+        (error: unknown) => ({ kind: 'error' as const, error }),
+      );
+    const deadline = new Promise<{ kind: 'timeout' }>((resolve) => {
+      timeout = setTimeout(() => {
+        timedOut = true;
+        abort.abort(new DOMException('Recovered tool execution timed out.', 'TimeoutError'));
+        resolve({ kind: 'timeout' });
+      }, this.recoveryToolTimeoutMs);
+    });
+    const outcome = await Promise.race([execution, deadline]);
+    if (timeout !== undefined) clearTimeout(timeout);
+
+    if (recoveryExecution.interrupted) {
+      if (outcome.kind === 'timeout') await execution;
+      finishRecoveryExecution();
+      if (pending.effect === 'write' && dispatched) {
+        const updated = await this.runs.transition(run.id, 'paused_uncertain', {
+          pendingTool: pending,
+          stopReason: 'manual_operation',
+          error: {
+            code: 'manual_operation',
+            message: 'The recovered browser action was interrupted by manual input.',
+          },
+        });
+        this.onBroadcast({
+          type: 'run.recovery_required',
+          threadId: run.threadId,
+          run: this.recoveryState(updated),
+        });
+      } else {
+        await this.recordRecoveredToolResult(
+          run,
+          {
+            ok: false,
+            content: [
+              {
+                type: 'text',
+                text:
+                  pending.effect === 'write'
+                    ? 'The recovered browser action was cancelled after manual input before dispatch.'
+                    : 'The recovered read was interrupted by manual input.',
+              },
+            ],
+            trust: 'trusted',
+            provenance: 'user',
+          },
+          'interrupted',
+          { pendingTool: undefined, stopReason: 'manual_operation' },
+        );
+      }
+      return;
+    }
+
+    if (timedOut || outcome.kind === 'timeout') {
+      const state = pending.effect === 'write' ? 'paused_uncertain' : 'failed';
+      const updated = await this.runs.transition(run.id, state, {
+        pendingTool: state === 'paused_uncertain' ? pending : undefined,
+        stopReason: 'recovery_tool_timeout',
+        error: {
+          code: 'recovery_tool_timeout',
+          message: 'Recovered tool execution exceeded its deadline.',
+        },
+      });
+      if (state === 'paused_uncertain') {
+        this.onBroadcast({
+          type: 'run.recovery_required',
+          threadId: run.threadId,
+          run: this.recoveryState(updated),
+        });
+      } else {
+        this.onBroadcast({
+          type: 'error',
+          threadId: run.threadId,
+          code: 'internal',
+          message: 'A recovered read tool exceeded its deadline and was failed.',
+          retryable: false,
+        });
+      }
+      // Keep the replay caller blocked until an abort-ignoring tool settles;
+      // its eventual result is quarantined from persistence.
+      await execution;
+      finishRecoveryExecution();
+      return;
+    }
+
+    finishRecoveryExecution();
+    if (outcome.kind === 'result') {
+      const result = outcome.result;
       await this.recordRecoveredToolResult(
         run,
         {
@@ -1045,7 +1405,8 @@ export class RealEngineCore {
         'streaming_model',
         { pendingTool: undefined },
       );
-    } catch (error) {
+    } else {
+      const error = outcome.error;
       await this.recordRecoveredToolResult(
         run,
         {
@@ -1064,6 +1425,68 @@ export class RealEngineCore {
       );
     }
     await this.resumePersistedRun(run.id);
+  }
+
+  private scheduleRecoveredApprovalTimeout(run: RunRecord, approval: ApprovalRecord): void {
+    const existing = this.recoveredApprovalTimers.get(approval.id);
+    if (existing !== undefined) clearTimeout(existing);
+    const previousApproval = this.recoveredApprovalsByThread.get(run.threadId);
+    if (previousApproval && previousApproval.approvalId !== approval.id) {
+      const previousTimer = this.recoveredApprovalTimers.get(previousApproval.approvalId);
+      if (previousTimer !== undefined) clearTimeout(previousTimer);
+      this.recoveredApprovalTimers.delete(previousApproval.approvalId);
+    }
+    this.recoveredApprovalsByThread.set(run.threadId, {
+      approvalId: approval.id,
+      targetTabId: run.pendingTool?.target?.tabId,
+      cancelRequested: false,
+    });
+    const deadlineAt = approval.deadlineAt ?? approval.requestedAt + this.approvalTimeoutMs;
+    const timer = setTimeout(
+      () => {
+        this.recoveredApprovalTimers.delete(approval.id);
+        void this.actors
+          .run(run.threadId, async () => {
+            const [currentApproval, currentRun] = await Promise.all([
+              this.approvals.get(approval.id),
+              this.runs.get(run.id),
+            ]);
+            if (currentApproval?.status !== 'pending' || currentRun?.state !== 'waiting_approval') {
+              return;
+            }
+            await this.approvals.decide(approval.id, {
+              kind: 'decline',
+              note: 'approval timed out after recovery',
+            });
+            await this.continueDecidedApproval(approval.id);
+            this.broadcastActivity(run.threadId);
+          })
+          .catch((error) => {
+            this.onBroadcast({
+              type: 'error',
+              threadId: run.threadId,
+              code: 'internal',
+              message: error instanceof Error ? error.message : String(error),
+              retryable: true,
+            });
+          })
+          .finally(() => {
+            this.finishRecoveredApproval(run.threadId, approval.id);
+          });
+      },
+      Math.max(0, deadlineAt - Date.now()),
+    );
+    this.recoveredApprovalTimers.set(approval.id, timer);
+  }
+
+  private finishRecoveredApproval(threadId: string, approvalId: string): void {
+    const timer = this.recoveredApprovalTimers.get(approvalId);
+    if (timer !== undefined) clearTimeout(timer);
+    this.recoveredApprovalTimers.delete(approvalId);
+    if (this.recoveredApprovalsByThread.get(threadId)?.approvalId === approvalId) {
+      this.recoveredApprovalsByThread.delete(threadId);
+    }
+    this.notifyRecoveryIdle();
   }
 
   private recoveryState(run: RunRecord): RunRecoveryState {
@@ -1095,32 +1518,92 @@ export class RealEngineCore {
   async recover(): Promise<void> {
     await this.receipts.recoverIncomplete();
     const recovered = await this.runs.recoverOpenRuns();
-    const continuedApprovals = new Set<string>();
+    const restoredApprovals = new Set<string>();
+    const rejectedRecoveries = new Set<string>();
     for (const run of recovered) {
+      if (run.environment || run.recoveryAction !== 'resume_run') {
+        try {
+          await this.assertRecoveryEnvironment(run);
+        } catch (error) {
+          const snapshotError =
+            error instanceof RunEnvironmentSnapshotError
+              ? error
+              : new RunEnvironmentSnapshotError(
+                  'environment_snapshot_invalid',
+                  'The captured run environment can no longer be restored safely.',
+                );
+          await this.rejectUnsupportedRecovery(run, snapshotError);
+          rejectedRecoveries.add(run.id);
+          continue;
+        }
+      }
       if (run.recoveryAction === 'replay_tool') {
         await this.actors.run(run.threadId, () => this.replayPreparedTool(run));
       } else if (run.recoveryAction === 'restore_approval') {
         const approval = await this.approvals.latestForRun(run.id);
+        if (!approval) {
+          await this.runs.transition(run.id, 'failed', {
+            pendingTool: undefined,
+            stopReason: 'recovery_missing_approval',
+            error: {
+              code: 'recovery_missing_approval',
+              message: 'The waiting run has no durable approval record.',
+            },
+          });
+          restoredApprovals.add(run.id);
+          this.onBroadcast({
+            type: 'error',
+            threadId: run.threadId,
+            code: 'internal',
+            message: 'A waiting approval could not be restored because its record is missing.',
+            retryable: false,
+          });
+          continue;
+        }
         if (approval?.status === 'decided' && approval.decision) {
-          await this.onApprovalDecision?.(
-            approval.threadId,
-            approval.request.tool,
-            approval.request.targetOrigin,
-            approval.decision,
-          );
-          await this.actors.run(run.threadId, () => this.continueDecidedApproval(run, approval));
-          continuedApprovals.add(run.id);
+          await this.actors.run(run.threadId, () => this.continueDecidedApproval(approval.id));
+          restoredApprovals.add(run.id);
+        } else if (
+          (approval.deadlineAt ?? approval.requestedAt + this.approvalTimeoutMs) <= Date.now()
+        ) {
+          await this.actors.run(run.threadId, async () => {
+            const current = await this.approvals.get(approval.id);
+            if (current?.status === 'pending') {
+              await this.approvals.decide(approval.id, {
+                kind: 'decline',
+                note: 'approval timed out while the background worker was unavailable',
+              });
+            }
+            await this.continueDecidedApproval(approval.id);
+          });
+          restoredApprovals.add(run.id);
+        } else {
+          this.scheduleRecoveredApprovalTimeout(run, approval);
+          this.onBroadcast({
+            type: 'approval.request',
+            threadId: approval.threadId,
+            turnId: approval.turnId,
+            approvalId: approval.id,
+            request: approval.request,
+          });
+          this.broadcastActivity(run.threadId);
+          restoredApprovals.add(run.id);
         }
       }
     }
     const resumableThreads = new Set(
       recovered
-        .filter((run) => run.state === 'queued' && run.recoveryAction === 'resume_run')
+        .filter(
+          (run) =>
+            run.state === 'queued' &&
+            run.recoveryAction === 'resume_run' &&
+            !rejectedRecoveries.has(run.id),
+        )
         .map((run) => run.threadId),
     );
     for (const threadId of resumableThreads) await this.drainQueue(threadId);
     for (const run of recovered) {
-      if (run.recoveryAction === 'restore_approval' && !continuedApprovals.has(run.id)) {
+      if (run.recoveryAction === 'restore_approval' && !restoredApprovals.has(run.id)) {
         this.broadcastActivity(run.threadId);
       }
       if (run.recoveryAction === 'request_resolution' || run.recoveryAction === 'request_resume') {
@@ -1140,8 +1623,33 @@ export class RealEngineCore {
   /** Interrupt whatever turn is running on the thread (auto-pause path). */
   async pauseThread(threadId: string, reason: string): Promise<void> {
     const active = this.activeTurns.get(threadId);
-    if (!active) return;
-    active.handle.interrupt();
+    const recovery = this.recoveryExecutions.get(threadId);
+    const recoveredApproval = this.recoveredApprovalsByThread.get(threadId);
+    if (!active && !recovery && !recoveredApproval) return;
+    active?.handle.interrupt();
+    if (recoveredApproval) recoveredApproval.cancelRequested = true;
+    if (recovery) {
+      recovery.interrupted = true;
+      recovery.abort.abort(
+        new DOMException('Manual operation interrupted recovery.', 'AbortError'),
+      );
+    }
+    if (recoveredApproval) {
+      await this.actors.run(threadId, async () => {
+        if (this.recoveredApprovalsByThread.get(threadId) !== recoveredApproval) return;
+        try {
+          const approval = await this.approvals.get(recoveredApproval.approvalId);
+          const run = approval ? await this.runs.get(approval.runId) : undefined;
+          if (approval?.status === 'pending' && run?.state === 'waiting_approval') {
+            await this.approvals.decide(recoveredApproval.approvalId, { kind: 'cancel' });
+            await this.continueDecidedApproval(recoveredApproval.approvalId);
+            this.broadcastActivity(threadId);
+          }
+        } finally {
+          this.finishRecoveredApproval(threadId, recoveredApproval.approvalId);
+        }
+      });
+    }
     await this.tree.appendNode(threadId, {
       type: 'system_notice',
       payload: { text: reason, noticeKind: 'paused' },
@@ -1150,7 +1658,36 @@ export class RealEngineCore {
 
   /** Threads with a running turn (for routing manual-pause by tab). */
   activeThreadIds(): string[] {
-    return [...this.activeTurns.keys()];
+    return [
+      ...new Set([
+        ...this.activeTurns.keys(),
+        ...this.recoveryExecutions.keys(),
+        ...this.recoveredApprovalsByThread.keys(),
+      ]),
+    ];
+  }
+
+  recoveredApprovalTargetsTab(threadId: string, tabId: number): boolean {
+    return this.recoveredApprovalsByThread.get(threadId)?.targetTabId === tabId;
+  }
+
+  async waitForAdmissionIdle(): Promise<void> {
+    while (
+      this.activeTurns.size > 0 ||
+      this.recoveryExecutions.size > 0 ||
+      this.recoveredApprovalsByThread.size > 0
+    ) {
+      await Promise.allSettled([...this.activeTurns.values()].map((active) => active.handle.done));
+      if (this.recoveryExecutions.size > 0 || this.recoveredApprovalsByThread.size > 0) {
+        await new Promise<void>((resolve) => this.recoveryIdleWaiters.add(resolve));
+      }
+    }
+  }
+
+  private notifyRecoveryIdle(): void {
+    if (this.recoveryExecutions.size > 0 || this.recoveredApprovalsByThread.size > 0) return;
+    for (const resolve of this.recoveryIdleWaiters) resolve();
+    this.recoveryIdleWaiters.clear();
   }
 
   // -------------------------------------------------------------------------
@@ -1229,41 +1766,80 @@ export class RealEngineCore {
     runId: string,
     turnId: string,
     request: ApprovalRequestPayload,
+    pendingTool: PendingToolExecution,
+    signal: AbortSignal,
   ): Promise<ApprovalDecision> {
     const approvalId = crypto.randomUUID();
-    const record = await this.approvals.create({
+    const deadlineAt = Date.now() + this.approvalTimeoutMs;
+    const { approval: record } = await this.approvals.createPendingWork({
       id: approvalId,
       threadId,
       runId,
       turnId,
       request,
+      pendingTool,
+      deadlineAt,
     });
     return new Promise<ApprovalDecision>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        // Timeout → decline (docs/06 §4).
-        const decision: ApprovalDecision = {
-          kind: 'decline',
-          note: 'approval timed out after 5 minutes',
-        };
-        void this.approvals
-          .decide(approvalId, decision)
-          .then((record) => resolve(record.decision ?? decision))
-          .catch(reject)
-          .finally(() => {
-            this.pendingApprovals.delete(approvalId);
-            this.broadcastActivity(threadId);
-          });
-      }, APPROVAL_TIMEOUT_MS);
-      this.pendingApprovals.set(approvalId, {
+      let settlement: Promise<ApprovalDecision> | undefined;
+      const onAbort = () => {
+        void waiter.settle({ kind: 'cancel' }).catch(() => undefined);
+      };
+      const cleanup = () => {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', onAbort);
+      };
+      const waiter: PendingApprovalWaiter = {
         threadId,
         turnId,
         request,
         requestedAt: record.requestedAt,
-        resolve,
-        timer,
-      });
+        cleanup,
+        settle: (proposedDecision) => {
+          if (settlement) return settlement;
+          cleanup();
+          settlement = (async () => {
+            const decided = await this.approvals.decide(approvalId, proposedDecision);
+            const decision = decided.decision ?? proposedDecision;
+            await this.onApprovalDecision?.(
+              approvalId,
+              threadId,
+              request.tool,
+              request.targetOrigin,
+              decision,
+            );
+            resolve(decision);
+            return decision;
+          })()
+            .catch((error) => {
+              reject(error);
+              throw error;
+            })
+            .finally(() => {
+              if (this.pendingApprovals.get(approvalId) === waiter) {
+                this.pendingApprovals.delete(approvalId);
+              }
+              this.broadcastActivity(threadId);
+            });
+          return settlement;
+        },
+      };
+      const timer = setTimeout(
+        () => {
+          // Timeout → decline (docs/06 §4).
+          const decision: ApprovalDecision = {
+            kind: 'decline',
+            note: 'approval timed out after 5 minutes',
+          };
+          void waiter.settle(decision).catch(() => undefined);
+        },
+        Math.max(0, deadlineAt - Date.now()),
+      );
+      signal.addEventListener('abort', onAbort, { once: true });
+      this.pendingApprovals.set(approvalId, waiter);
       this.onBroadcast({ type: 'approval.request', threadId, turnId, approvalId, request });
       this.broadcastActivity(threadId);
+      if (signal.aborted) onAbort();
     });
   }
 

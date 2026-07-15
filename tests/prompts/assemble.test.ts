@@ -17,8 +17,7 @@ describe('assembleSystemPrompt (docs/10 §1 layering)', () => {
       environment: {
         date: '2026-07-03',
         language: 'zh-CN',
-        approvalPolicy: 'untrusted',
-        capabilityScope: 'cross-origin',
+        permissionPolicy: 'untrusted',
       },
     });
 

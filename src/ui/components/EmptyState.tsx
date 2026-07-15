@@ -13,6 +13,15 @@
  */
 
 import { t } from '../i18n';
+import { Button } from './ui/button';
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from './ui/empty';
 
 export interface Suggestion {
   title: string;
@@ -70,31 +79,31 @@ export function EmptyState({ variant, onPick, pageUrl }: Props) {
   ).slice(0, MAX_SUGGESTIONS);
 
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-4 px-4 py-6">
-      <div className="flex flex-col items-center gap-2 text-center">
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/15 text-[22px] text-primary">
-          ✦
-        </div>
-        <div className="text-[22px] font-medium leading-tight">
-          {t(greetingKey(new Date().getHours()))}
-        </div>
-        <div className="max-w-xs text-[13px] leading-relaxed text-faint-foreground">
-          {t('empty.hint')}
-        </div>
-      </div>
-      <div className="w-full max-w-md">
+    <Empty className="h-full min-w-0 px-4 py-6">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">✦</EmptyMedia>
+        <EmptyTitle>{t(greetingKey(new Date().getHours()))}</EmptyTitle>
+        <EmptyDescription>{t('empty.hint')}</EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent className="w-full max-w-md">
         {suggestions.map((s, i) => (
-          <button
+          <Button
             key={`${s.title}-${i}`}
-            type="button"
+            variant="ghost"
             onClick={() => onPick(s.text)}
-            className="block w-full rounded-xl px-3 py-2 text-left transition-colors hover:bg-muted"
+            className="h-auto min-w-0 w-full flex-col items-start justify-start gap-0.5 rounded-xl px-3 py-2 text-left whitespace-normal"
           >
-            <div className="truncate text-[13px] font-medium">{s.title}</div>
-            {s.hint && <div className="truncate text-[12px] text-faint-foreground">{s.hint}</div>}
-          </button>
+            <div className="max-w-full break-words text-[13px] font-medium [overflow-wrap:anywhere]">
+              {s.title}
+            </div>
+            {s.hint && (
+              <div className="max-w-full break-words text-[12px] text-faint-foreground [overflow-wrap:anywhere]">
+                {s.hint}
+              </div>
+            )}
+          </Button>
         ))}
-      </div>
-    </div>
+      </EmptyContent>
+    </Empty>
   );
 }

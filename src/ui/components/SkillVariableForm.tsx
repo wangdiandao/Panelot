@@ -16,7 +16,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from './ui/dialog';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from './ui/select';
 import type { SkillCommand } from './composerTriggers';
 
 interface Props {
@@ -58,9 +65,9 @@ export function SkillVariableForm({ command, onClose, onSubmit }: Props) {
           <DialogTitle className="font-mono text-[15px]">{command.command}</DialogTitle>
           <DialogDescription>{command.description}</DialogDescription>
         </DialogHeader>
-        <div className="space-y-3">
+        <div className="flex flex-col gap-3">
           {(command.variables ?? []).map((v) => (
-            <div key={v.key} className="space-y-1.5">
+            <div key={v.key} className="flex flex-col gap-1.5">
               <Label htmlFor={`var-${v.key}`} className="text-[12px] text-muted-foreground">
                 {v.label}
                 {v.required && <span className="text-destructive"> *</span>}
@@ -74,11 +81,13 @@ export function SkillVariableForm({ command, onClose, onSubmit }: Props) {
                     <SelectValue placeholder="选择…" />
                   </SelectTrigger>
                   <SelectContent>
-                    {v.options.map((o) => (
-                      <SelectItem key={o} value={o}>
-                        {o}
-                      </SelectItem>
-                    ))}
+                    <SelectGroup>
+                      {v.options.map((o) => (
+                        <SelectItem key={o} value={o}>
+                          {o}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
                   </SelectContent>
                 </Select>
               ) : (

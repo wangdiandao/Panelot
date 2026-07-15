@@ -1,8 +1,8 @@
 /**
  * The agent loop (docs/04 §2) — Pi Agent's minimal kernel wrapped in Codex's
  * safety shell. The loop itself stays small: iterate until the model stops
- * calling tools. Steps are a soft reminder (25 calls → notice), token budget
- * is the only hard gate. All complexity lives outside (Gatekeeper, UI).
+ * calling tools. Optional token budgets and repeated failures are explicit
+ * terminal conditions; tool-call count is not. Complexity stays outside it.
  */
 
 import type { ThreadTree } from '../db/tree';
@@ -24,16 +24,14 @@ import type {
   Usage,
 } from '../messaging/protocol';
 import type { ProviderAdapter, GenParams, ToolSchema } from '../providers/types';
-import { ProviderError } from '../providers/types';
+import { isProviderErrorRetryable, ProviderError } from '../providers/types';
 import { ActionError } from '../tools/action/errors';
 import { validateParams, type ToolRegistry } from './tool';
 import {
   CONSECUTIVE_FAILURE_REMIND,
   CONSECUTIVE_FAILURE_STOP,
+  FAILURE_FINALIZATION_NOTICE,
   FAILURE_REMINDER,
-  HARD_STEP_LIMIT,
-  HARD_STEP_NOTICE,
-  STEP_REMINDER,
   STUCK_REMINDER,
 } from '../prompts/kernel';
 
@@ -62,6 +60,8 @@ export interface GatekeeperCheck {
 export type ApprovalRequester = (
   turnId: string,
   request: ApprovalRequestPayload,
+  pendingTool: PendingToolExecution,
+  signal: AbortSignal,
 ) => Promise<ApprovalDecision>;
 
 export interface TurnEnv {
@@ -126,7 +126,10 @@ export interface TurnHandle {
   done: Promise<StopReason>;
 }
 
-const SOFT_STEP_LIMIT = 25;
+interface ForcedFinalization {
+  stopReason: 'error';
+  prompt: string;
+}
 
 // ---------------------------------------------------------------------------
 
@@ -232,8 +235,21 @@ export function runTurn(
   };
 
   async function execute(): Promise<StopReason> {
-    let stopReason: StopReason = 'done';
+    let stopReason: StopReason = 'error';
     let steerMaterializationFailed = false;
+    let forcedFinalization: ForcedFinalization | undefined;
+    const scheduleForcedFinalization = async (
+      finalization: ForcedFinalization,
+      noticeText: string,
+    ): Promise<void> => {
+      if (forcedFinalization) return;
+      await env.tree.appendNode(threadId, {
+        type: 'system_notice',
+        payload: { text: noticeText, noticeKind: 'paused' },
+      });
+      acceptingSteer = false;
+      forcedFinalization = finalization;
+    };
     try {
       if (!options.resumeExisting) {
         const userNodeId = crypto.randomUUID();
@@ -246,10 +262,10 @@ export function runTurn(
                 connectionId: env.runEnvironment?.connectionId ?? '',
                 modelId: env.model,
               },
-              approvalPolicy: env.runEnvironment?.approvalPolicy ?? 'untrusted',
-              capabilityScope: env.runEnvironment?.capabilityScope ?? 'full',
+              permissionPolicy: env.runEnvironment?.permissionPolicy ?? 'untrusted',
               activeSkills: env.runEnvironment?.activeSkills ?? [],
               promptVersion: env.runEnvironment?.promptVersion,
+              browserContext: env.runEnvironment?.browserContext,
             },
           },
           {
@@ -279,8 +295,6 @@ export function runTurn(
       }
       env.emit({ type: 'turn.start', threadId, turnId, turnKind, steerable: acceptingSteer });
 
-      let toolCallCount = 0;
-      let stepReminderPending = false;
       let failureReminderPending = false;
       let stuckReminderPending = false;
       let consecutiveFailures = 0; // circuit breaker (browser-use max_failures)
@@ -322,10 +336,6 @@ export function runTurn(
         const thread = await env.tree.getThread(threadId);
         const ctx = await buildSessionContext(env.tree, threadId, thread!.leafId!);
         const messages = [...ctx.messages];
-        if (stepReminderPending) {
-          messages.push({ role: 'user', content: [{ type: 'text', text: STEP_REMINDER }] });
-          stepReminderPending = false;
-        }
         if (failureReminderPending) {
           messages.push({ role: 'user', content: [{ type: 'text', text: FAILURE_REMINDER }] });
           failureReminderPending = false;
@@ -333,6 +343,12 @@ export function runTurn(
         if (stuckReminderPending) {
           messages.push({ role: 'user', content: [{ type: 'text', text: STUCK_REMINDER }] });
           stuckReminderPending = false;
+        }
+        if (forcedFinalization) {
+          messages.push({
+            role: 'user',
+            content: [{ type: 'text', text: forcedFinalization.prompt }],
+          });
         }
         if (abort.signal.aborted) {
           stopReason = 'interrupted';
@@ -350,7 +366,9 @@ export function runTurn(
           meta: {},
         });
 
-        const toolSchemas: ToolSchema[] = env.tools.schemas(env.enabledToolLevels);
+        const toolSchemas: ToolSchema[] = forcedFinalization
+          ? []
+          : env.tools.schemas(env.enabledToolLevels);
         const stream = env.provider.stream({
           messages,
           system: env.systemPrompt,
@@ -378,6 +396,21 @@ export function runTurn(
           throw e;
         }
 
+        const providerStopReason = final.stopReason;
+        if (
+          !forcedFinalization &&
+          providerStopReason === 'tool_use' &&
+          final.toolCalls.length === 0
+        ) {
+          env.emit({ type: 'item.complete', threadId, itemId, result: { ok: false } });
+          throw new ProviderError(
+            'protocol',
+            'Provider ended with tool_use but returned no tool calls',
+            undefined,
+            { reason: 'response_format' },
+          );
+        }
+
         const assistantNode: AppendNodeInput = {
           type: 'assistant_message',
           payload: {
@@ -386,6 +419,7 @@ export function runTurn(
             connectionId: env.runEnvironment?.connectionId ?? '',
             reasoning: final.reasoning,
             usage: final.usage,
+            providerStopReason,
           },
         };
         const nextStepCursor = ++stepCursor;
@@ -402,7 +436,20 @@ export function runTurn(
         turnTokens += final.usage.input + final.usage.output;
         env.emit({ type: 'token.usage', threadId, turnId, usage: final.usage });
 
+        if (forcedFinalization) {
+          stopReason = forcedFinalization.stopReason;
+          break;
+        }
+
         if (final.toolCalls.length === 0) {
+          if (providerStopReason === 'tool_use') {
+            throw new ProviderError(
+              'protocol',
+              'Provider tool calls disappeared before execution',
+              undefined,
+              { reason: 'response_format' },
+            );
+          }
           acceptingSteer = false;
           await Promise.allSettled(
             [...pendingAdmissions.values()].map((admission) => admission.persistence),
@@ -411,6 +458,7 @@ export function runTurn(
             acceptingSteer = turnKind === 'user';
             continue;
           }
+          stopReason = providerStopReason;
           break;
         }
 
@@ -426,48 +474,18 @@ export function runTurn(
             stopReason = 'interrupted';
             break loop;
           }
-          // Evaluated lazily at the next tool call (not the instant the Nth
-          // failure lands): the 3-failure reminder is queued and consumed at
-          // the next LLM round FIRST, so the model always gets one chance to
-          // change course before this hard-stops the turn. Don't add a stop
-          // check between queuing the reminder and the next LLM call.
+          // A multi-call response may cross the threshold before its remaining
+          // calls run. Stop that batch here; single-call rounds are finalized
+          // immediately after the batch below.
           if (consecutiveFailures >= CONSECUTIVE_FAILURE_STOP) {
-            await env.tree.appendNode(threadId, {
-              type: 'system_notice',
-              payload: {
-                text: `连续 ${CONSECUTIVE_FAILURE_STOP} 次工具调用失败，任务已停止。请检查页面状态或换一种方式继续。`,
-                noticeKind: 'paused',
-              },
-            });
-            stopReason = 'error';
-            break loop;
+            await scheduleForcedFinalization(
+              { stopReason: 'error', prompt: FAILURE_FINALIZATION_NOTICE },
+              `连续 ${CONSECUTIVE_FAILURE_STOP} 次工具调用失败，已停止继续操作并生成结果说明。`,
+            );
+            continue loop;
           }
 
           const callItemId = call.id;
-          toolCallCount++;
-
-          // Hard step ceiling (page-agent max_steps). Emit a notice then break
-          // so the model can write a wrap-up message in the NEXT LLM call, which
-          // fires without tools and exits cleanly.
-          if (toolCallCount > HARD_STEP_LIMIT) {
-            await env.tree.appendNode(threadId, {
-              type: 'system_notice',
-              payload: { text: HARD_STEP_NOTICE, noticeKind: 'paused' },
-            });
-            stopReason = 'budget_pause';
-            break loop;
-          }
-
-          if (toolCallCount === SOFT_STEP_LIMIT) {
-            stepReminderPending = true;
-            await env.tree.appendNode(threadId, {
-              type: 'system_notice',
-              payload: {
-                text: `已执行 ${SOFT_STEP_LIMIT} 步工具调用`,
-                noticeKind: 'step_reminder',
-              },
-            });
-          }
 
           const tool = env.tools.get(call.name);
 
@@ -563,8 +581,12 @@ export function runTurn(
             continue;
           }
           if (verdictResult.verdict === 'ask') {
-            await env.setRunState?.('waiting_approval', { pendingTool: preparedTool });
-            const decision = await env.requestApproval(turnId, verdictResult.request);
+            const decision = await env.requestApproval(
+              turnId,
+              verdictResult.request,
+              preparedTool,
+              abort.signal,
+            );
             if (decision.kind === 'decline' || decision.kind === 'cancel') {
               const note =
                 decision.kind === 'decline' && decision.note ? ` User said: ${decision.note}` : '';
@@ -579,6 +601,12 @@ export function runTurn(
               }
               continue;
             }
+          }
+
+          if (abort.signal.aborted) {
+            stopReason = 'interrupted';
+            await fail('interrupted', false, 'streaming_model');
+            break loop;
           }
 
           try {
@@ -660,6 +688,16 @@ export function runTurn(
               const escalationTarget = await escalationTool.resolveTarget?.(
                 escalationValidation.params as never,
               );
+              const escalationPreparedTool: PendingToolExecution = {
+                itemId: callItemId,
+                toolName: escalationTool.name,
+                params: escalationValidation.params,
+                target: escalationTarget,
+                effect: escalationTool.effects,
+                recovery:
+                  escalationTool.recovery ??
+                  (escalationTool.effects === 'read' ? 'retry-safe' : 'never-retry'),
+              };
               const escalationVerdict = await env.gatekeeper.check(
                 {
                   toolName: escalationTool.name,
@@ -674,7 +712,12 @@ export function runTurn(
                 continue;
               }
               if (escalationVerdict.verdict === 'ask') {
-                const decision = await env.requestApproval(turnId, escalationVerdict.request);
+                const decision = await env.requestApproval(
+                  turnId,
+                  escalationVerdict.request,
+                  escalationPreparedTool,
+                  abort.signal,
+                );
                 if (decision.kind === 'decline' || decision.kind === 'cancel') {
                   await fail('The user declined the trusted-input escalation.', false);
                   if (decision.kind === 'cancel') {
@@ -684,7 +727,15 @@ export function runTurn(
                   continue;
                 }
               }
+              if (abort.signal.aborted) {
+                stopReason = 'interrupted';
+                await fail('interrupted', false, 'streaming_model');
+                break loop;
+              }
               try {
+                await env.setRunState?.('executing_tool', {
+                  pendingTool: { ...escalationPreparedTool, startedAt: Date.now() },
+                });
                 const escalated = await escalationTool.execute(
                   callItemId,
                   escalationValidation.params as never,
@@ -697,7 +748,7 @@ export function runTurn(
                   escalatedFrom: call.name,
                   escalatedTo: escalationTool.name,
                 };
-                await env.tree.appendNode(threadId, {
+                const resultNode: AppendNodeInput = {
                   type: 'tool_result',
                   payload: {
                     itemId: callItemId,
@@ -708,8 +759,15 @@ export function runTurn(
                     provenance: escalationTool.resultProvenance ?? 'page',
                     origin: escalationTarget?.origin,
                   },
-                });
-                await env.setRunState?.('streaming_model', { pendingTool: undefined });
+                };
+                if (env.appendNodesAndSetRunState) {
+                  await env.appendNodesAndSetRunState([resultNode], 'streaming_model', {
+                    pendingTool: undefined,
+                  });
+                } else {
+                  await env.tree.appendNode(threadId, resultNode);
+                  await env.setRunState?.('streaming_model', { pendingTool: undefined });
+                }
                 env.emit({
                   type: 'item.complete',
                   threadId,
@@ -729,15 +787,22 @@ export function runTurn(
             await fail(`Tool failed: ${e instanceof Error ? e.message : String(e)}`);
           }
         }
+        if (consecutiveFailures >= CONSECUTIVE_FAILURE_STOP) {
+          await scheduleForcedFinalization(
+            { stopReason: 'error', prompt: FAILURE_FINALIZATION_NOTICE },
+            `连续 ${CONSECUTIVE_FAILURE_STOP} 次工具调用失败，已停止继续操作并生成结果说明。`,
+          );
+        }
       }
     } catch (e) {
-      stopReason = 'error';
+      stopReason = forcedFinalization?.stopReason ?? 'error';
       env.emit({
         type: 'error',
         threadId,
         code: e instanceof ProviderError ? 'provider_error' : 'internal',
         message: e instanceof Error ? e.message : String(e),
-        retryable: e instanceof ProviderError || steerMaterializationFailed,
+        retryable:
+          (e instanceof ProviderError && isProviderErrorRetryable(e)) || steerMaterializationFailed,
         ...(e instanceof ProviderError ? { errorKind: e.kind, providerDetails: e.details } : {}),
       });
     }
@@ -745,7 +810,7 @@ export function runTurn(
     // appendNode is awaited, so reaching this line IS the ack (docs/04 §2).
     if (steerMaterializationFailed) stopReason = 'interrupted';
     let terminalState: RunState =
-      stopReason === 'done'
+      stopReason === 'end' || stopReason === 'max_tokens' || stopReason === 'content_filter'
         ? 'completed'
         : stopReason === 'interrupted'
           ? 'interrupted'

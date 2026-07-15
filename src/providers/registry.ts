@@ -5,6 +5,7 @@
 
 import { AnthropicAdapter } from './anthropic';
 import { OpenAiAdapter } from './openai';
+import { normalizeEndpointUrl } from '../security/endpointUrl';
 import type { Connection, ModelEntry, ProviderAdapter, QuirkFlags } from './types';
 
 // ---------------------------------------------------------------------------
@@ -15,16 +16,11 @@ export function normalizeBaseUrl(
   raw: string,
   kind: Connection['kind'],
 ): { url: string; hint?: string } {
-  let url = raw.trim();
-  if (url === '') return { url };
-
-  // Default to https (http allowed for localhost).
-  if (!/^https?:\/\//i.test(url)) {
-    const isLocal = /^(localhost|127\.0\.0\.1|\[::1\])([:/]|$)/.test(url);
-    url = (isLocal ? 'http://' : 'https://') + url;
-  }
-  // Strip trailing slashes.
-  url = url.replace(/\/+$/, '');
+  const url = normalizeEndpointUrl(raw, {
+    label: 'Provider 端点 URL',
+    allowImplicitScheme: true,
+    stripTrailingSlashes: true,
+  });
 
   // openai kind usually needs /v1 — hint, don't force (Azure-style paths exist).
   let hint: string | undefined;
@@ -136,9 +132,16 @@ export function inferCapabilities(modelId: string): ModelEntry['capabilities'] {
 // ---------------------------------------------------------------------------
 
 export function createAdapter(connection: Connection): ProviderAdapter {
+  const validated = {
+    ...connection,
+    baseUrl: normalizeEndpointUrl(connection.baseUrl, {
+      label: 'Provider 端点 URL',
+      stripTrailingSlashes: true,
+    }),
+  };
   return connection.kind === 'anthropic'
-    ? new AnthropicAdapter(connection)
-    : new OpenAiAdapter(connection);
+    ? new AnthropicAdapter(validated)
+    : new OpenAiAdapter(validated);
 }
 
 export interface ModelFetchResult {

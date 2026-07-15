@@ -3,11 +3,15 @@
  * → mock provider → Dexie. No browser required (docs/04 §7).
  */
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { PanelotDB } from '../../src/db/schema';
 import { ThreadTree } from '../../src/db/tree';
-import { RealEngineCore, type ProviderResolver } from '../../src/engine/core';
+import {
+  RealEngineCore,
+  type EngineCoreOptions,
+  type ProviderResolver,
+} from '../../src/engine/core';
 import { RunRepository } from '../../src/engine/runRepository';
 import { ApprovalRepository } from '../../src/engine/approvalRepository';
 import { EngineHost } from '../../src/engine/host';
@@ -24,6 +28,13 @@ import {
   type StreamEvent,
   type StreamRequest,
 } from '../../src/providers/types';
+import { OpenAiAdapter } from '../../src/providers/openai';
+import { actionError } from '../../src/tools/action/errors';
+import {
+  captureToolCatalog,
+  createRunEnvironmentSnapshot,
+} from '../../src/engine/runEnvironmentSnapshot';
+import type { ResolvedRunEnvironment } from '../../src/db/types';
 
 // ---------------------------------------------------------------------------
 
@@ -200,6 +211,7 @@ function buildEngine(
   dbInstance?: PanelotDB,
   resolverOverride?: ProviderResolver,
   gatekeeperOverride?: GatekeeperCheck,
+  options: EngineCoreOptions = {},
 ) {
   db = dbInstance ?? new PanelotDB(`int-test-${Date.now()}-${n++}`);
   provider = provider ?? new MockProvider();
@@ -212,6 +224,8 @@ function buildEngine(
     tools,
     gatekeeperOverride ?? allowAll,
     resolverOverride ?? resolver,
+    undefined,
+    options,
   );
   const host = new EngineHost(core);
   core.onBroadcast = (ev) => host.broadcast(ev);
@@ -238,6 +252,31 @@ async function waitForEvent(events: AgentEvent[], type: AgentEvent['type']): Pro
   }
 }
 
+async function testRunEnvironment(
+  input: { text: string },
+  registry: ToolRegistry,
+  patch: Partial<ResolvedRunEnvironment> = {},
+) {
+  const environment: ResolvedRunEnvironment = {
+    connectionId: 'connection',
+    modelId: 'mock',
+    modelParameters: {},
+    enabledToolLevels: ['L0', 'L1', 'L2', 'mcp'],
+    permissionPolicy: 'untrusted',
+    activeSkills: [],
+    promptVersion: 'kernel',
+    ...patch,
+  };
+  return createRunEnvironmentSnapshot({
+    environment,
+    normalizedInput: input,
+    providerBinding: { kind: 'resolver', connectionId: environment.connectionId, credentials: [] },
+    systemPrompt: 'test system prompt',
+    skillCatalog: [],
+    toolCatalog: await captureToolCatalog(registry, environment.enabledToolLevels),
+  });
+}
+
 async function initThread(client: TestClient): Promise<string> {
   client.post({ type: 'initialize', protocolVersion: 1 });
   await client.waitFor('initialized');
@@ -256,6 +295,52 @@ async function initThread(client: TestClient): Promise<string> {
     check();
   });
   return created.threadId;
+}
+
+async function seedPreparedToolRun(
+  targetDb: PanelotDB,
+  registry: ToolRegistry,
+  toolName: string,
+  effect: 'read' | 'write',
+  recovery: 'retry-safe' | 'inspect-first' | 'never-retry',
+) {
+  const tree = new ThreadTree(targetDb);
+  const thread = await tree.createThread({ title: 'recovery deadline' });
+  await tree.appendNode(thread.id, {
+    type: 'turn_context',
+    payload: {
+      turnId: `turn-${toolName}`,
+      model: { connectionId: 'connection', modelId: 'mock' },
+      permissionPolicy: 'untrusted',
+      activeSkills: [],
+    },
+  });
+  await tree.appendNode(thread.id, {
+    type: 'user_message',
+    payload: { content: [{ type: 'text', text: 'recover the tool' }] },
+  });
+  await tree.appendNode(thread.id, {
+    type: 'tool_call',
+    payload: { itemId: `call-${toolName}`, toolName, params: {}, level: 'builtin' },
+  });
+  const runs = new RunRepository(targetDb);
+  const run = await runs.enqueue({
+    threadId: thread.id,
+    clientId: 'recovery-client',
+    submissionId: `recover-${toolName}`,
+    input: { text: 'recover the tool' },
+  });
+  await runs.prepare(run.id, await testRunEnvironment(run.input, registry));
+  await runs.transition(run.id, 'executing_tool', {
+    pendingTool: {
+      itemId: `call-${toolName}`,
+      toolName,
+      params: {},
+      effect,
+      recovery,
+    },
+  });
+  return { run, thread };
 }
 
 // ---------------------------------------------------------------------------
@@ -322,6 +407,60 @@ describe('engine integration (Op → events → DB)', () => {
     expect(snapshot!.activeTurn).toBeNull();
   });
 
+  it('preserves a real adapter stop reason through the run, event, and snapshot', async () => {
+    const adapter = new OpenAiAdapter({
+      id: 'openai-connection',
+      name: 'OpenAI test',
+      kind: 'openai',
+      baseUrl: 'https://api.test.com/v1',
+      apiKeys: ['sk-test'],
+      enabled: true,
+    });
+    const resolver: ProviderResolver = {
+      resolve: async () => ({
+        provider: adapter,
+        model: 'test-model',
+        params: {},
+        connectionId: 'openai-connection',
+      }),
+    };
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(
+        new Response(
+          [
+            'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n',
+            'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\n',
+            'data: [DONE]\n\n',
+          ].join(''),
+          { status: 200, headers: { 'content-type': 'text/event-stream' } },
+        ),
+      );
+
+    try {
+      const { core, host } = buildEngine(undefined, resolver);
+      const client = connect(host);
+      const threadId = await initThread(client);
+
+      client.post({ type: 'turn.submit', threadId, input: { text: 'continue' } });
+      const complete = await client.waitFor('turn.complete');
+
+      expect(complete.stopReason).toBe('max_tokens');
+      expect(await db.runs.where('threadId').equals(threadId).first()).toMatchObject({
+        state: 'completed',
+        stopReason: 'max_tokens',
+      });
+      const snapshot = await core.getSnapshot(threadId);
+      const assistant = snapshot!.items.find((item) => item.kind === 'assistant_message');
+      expect(assistant?.payload).toMatchObject({
+        content: [{ type: 'text', text: 'partial' }],
+        providerStopReason: 'max_tokens',
+      });
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it('persists the resolved run environment and terminal state', async () => {
     const resolver: ProviderResolver = {
       resolve: async () => ({
@@ -332,8 +471,7 @@ describe('engine integration (Op → events → DB)', () => {
         presetId: 'preset-a',
         presetPrompt: 'Be precise.',
         enabledToolLevels: ['L0'],
-        approvalPolicy: 'always',
-        capabilityScope: 'read-only',
+        permissionPolicy: 'always',
         activeSkills: ['skill-a'],
         promptVersion: 'kernel-a',
       }),
@@ -371,16 +509,14 @@ describe('engine integration (Op → events → DB)', () => {
         presetId: 'preset-a',
         presetPrompt: 'Be precise.',
         enabledToolLevels: ['L0'],
-        approvalPolicy: 'always',
-        capabilityScope: 'read-only',
+        permissionPolicy: 'always',
         activeSkills: ['skill-a'],
         promptVersion: 'kernel-a',
       },
     });
     expect(run?.revision).toBeGreaterThan(0);
     expect(permissionConfigs).toContainEqual({
-      approvalPolicy: 'always',
-      capabilityScope: 'read-only',
+      permissionPolicy: 'always',
     });
   });
 
@@ -505,11 +641,15 @@ describe('engine integration (Op → events → DB)', () => {
       request: { tool: 'poke', targetOrigin: 'https://example.test' },
     });
 
-    client.post({
+    const lateSubmission = client.post({
       type: 'approval.response',
       approvalId: request.approvalId,
       decision: { kind: 'accept' },
     });
+    await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
+        event.type === 'command.ack' && event.submissionId === lateSubmission,
+    );
     await client.waitFor('turn.complete');
     expect(await db.approvals.get(request.approvalId)).toMatchObject({
       status: 'decided',
@@ -1676,6 +1816,21 @@ describe('engine integration (Op → events → DB)', () => {
 
   it('continues an accepted approval that was committed before a service worker restart', async () => {
     const sharedDb = new PanelotDB(`approval-recovery-${Date.now()}`);
+    const { core } = buildEngine(sharedDb);
+    let executionCount = 0;
+    tools.register({
+      name: 'approved_write',
+      label: 'Approved write',
+      description: 'Write after approval.',
+      parameters: z.object({}),
+      level: 'L1',
+      effects: 'write',
+      recovery: 'never-retry',
+      execute: async () => {
+        executionCount++;
+        return { content: [{ type: 'text', text: 'approved result' }] };
+      },
+    });
     const tree = new ThreadTree(sharedDb);
     const thread = await tree.createThread({ title: 'approval recovery' });
     await tree.appendNode(thread.id, {
@@ -1683,8 +1838,7 @@ describe('engine integration (Op → events → DB)', () => {
       payload: {
         turnId: 'turn-approved',
         model: { connectionId: 'connection', modelId: 'mock' },
-        approvalPolicy: 'untrusted',
-        capabilityScope: 'full',
+        permissionPolicy: 'untrusted',
         activeSkills: [],
       },
     });
@@ -1703,16 +1857,7 @@ describe('engine integration (Op → events → DB)', () => {
       submissionId: 'approval-before-kill',
       input: { text: 'approve once' },
     });
-    await runs.prepare(run.id, {
-      connectionId: 'connection',
-      modelId: 'mock',
-      modelParameters: {},
-      enabledToolLevels: ['L0', 'L1', 'L2', 'mcp'],
-      approvalPolicy: 'untrusted',
-      capabilityScope: 'full',
-      activeSkills: [],
-      promptVersion: 'kernel',
-    });
+    await runs.prepare(run.id, await testRunEnvironment(run.input, tools));
     await runs.transition(run.id, 'waiting_approval', {
       pendingTool: {
         itemId: 'approved-call',
@@ -1738,21 +1883,6 @@ describe('engine integration (Op → events → DB)', () => {
     });
     await approvals.decide('approved-decision', { kind: 'accept' });
 
-    const { core } = buildEngine(sharedDb);
-    let executionCount = 0;
-    tools.register({
-      name: 'approved_write',
-      label: 'Approved write',
-      description: 'Write after approval.',
-      parameters: z.object({}),
-      level: 'L1',
-      effects: 'write',
-      recovery: 'never-retry',
-      execute: async () => {
-        executionCount++;
-        return { content: [{ type: 'text', text: 'approved result' }] };
-      },
-    });
     const events: AgentEvent[] = [];
     core.onBroadcast = (event) => events.push(event);
     provider.queue({ streamText: ['continued'] });
@@ -1766,6 +1896,21 @@ describe('engine integration (Op → events → DB)', () => {
 
   it('replays a prepared read after restart without duplicating the user node', async () => {
     const sharedDb = new PanelotDB(`safe-tool-recovery-${Date.now()}`);
+    const { core } = buildEngine(sharedDb);
+    let executionCount = 0;
+    tools.register({
+      name: 'safe_read',
+      label: 'Safe read',
+      description: 'Read safely.',
+      parameters: z.object({}),
+      level: 'builtin',
+      effects: 'read',
+      recovery: 'inspect-first',
+      execute: async () => {
+        executionCount++;
+        return { content: [{ type: 'text', text: 'safe result' }] };
+      },
+    });
     const tree = new ThreadTree(sharedDb);
     const thread = await tree.createThread({ title: 'safe recovery' });
     await tree.appendNode(thread.id, {
@@ -1773,8 +1918,7 @@ describe('engine integration (Op → events → DB)', () => {
       payload: {
         turnId: 'turn-safe',
         model: { connectionId: 'connection', modelId: 'mock' },
-        approvalPolicy: 'untrusted',
-        capabilityScope: 'full',
+        permissionPolicy: 'untrusted',
         activeSkills: [],
       },
     });
@@ -1793,16 +1937,7 @@ describe('engine integration (Op → events → DB)', () => {
       submissionId: 'safe-before-kill',
       input: { text: 'inspect once' },
     });
-    await runs.prepare(run.id, {
-      connectionId: 'connection',
-      modelId: 'mock',
-      modelParameters: {},
-      enabledToolLevels: ['L0', 'L1', 'L2', 'mcp'],
-      approvalPolicy: 'untrusted',
-      capabilityScope: 'full',
-      activeSkills: [],
-      promptVersion: 'kernel',
-    });
+    await runs.prepare(run.id, await testRunEnvironment(run.input, tools));
     await runs.transition(run.id, 'executing_tool', {
       pendingTool: {
         itemId: 'safe-call',
@@ -1813,21 +1948,6 @@ describe('engine integration (Op → events → DB)', () => {
       },
     });
 
-    const { core } = buildEngine(sharedDb);
-    let executionCount = 0;
-    tools.register({
-      name: 'safe_read',
-      label: 'Safe read',
-      description: 'Read safely.',
-      parameters: z.object({}),
-      level: 'builtin',
-      effects: 'read',
-      recovery: 'inspect-first',
-      execute: async () => {
-        executionCount++;
-        return { content: [{ type: 'text', text: 'safe result' }] };
-      },
-    });
     const events: AgentEvent[] = [];
     core.onBroadcast = (event) => events.push(event);
     provider.queue({ streamText: ['continued'] });
@@ -1841,8 +1961,465 @@ describe('engine integration (Op → events → DB)', () => {
     expect((await sharedDb.runs.get(run.id))?.state).toBe('completed');
   });
 
+  it('fails a recovered tool before dispatch when its durable target is no longer valid', async () => {
+    const sharedDb = new PanelotDB(`recovery-target-${Date.now()}`);
+    const { core } = buildEngine(sharedDb);
+    let executionCount = 0;
+    tools.register({
+      name: 'targeted_read',
+      label: 'Targeted read',
+      description: 'Reads one durable browser target.',
+      parameters: z.object({}),
+      level: 'L1',
+      effects: 'read',
+      recovery: 'inspect-first',
+      execute: async () => {
+        executionCount++;
+        return { content: [{ type: 'text', text: 'must not execute' }] };
+      },
+    });
+    const { run } = await seedPreparedToolRun(
+      sharedDb,
+      tools,
+      'targeted_read',
+      'read',
+      'inspect-first',
+    );
+    await sharedDb.runs.update(run.id, {
+      pendingTool: {
+        itemId: 'call-targeted_read',
+        toolName: 'targeted_read',
+        params: {},
+        target: { tabId: 7, origin: 'https://example.test' },
+        effect: 'read',
+        recovery: 'inspect-first',
+      },
+    });
+    const validateRecoveredTool = vi.fn(async () => {
+      throw new Error('tab removed');
+    });
+    core.onValidateRecoveredTool = validateRecoveredTool;
+    const events: AgentEvent[] = [];
+    core.onBroadcast = (event) => events.push(event);
+    provider.queue({ streamText: ['continued safely'] });
+
+    await core.recover();
+    await waitForEvent(events, 'turn.complete');
+
+    expect(executionCount).toBe(0);
+    expect(validateRecoveredTool).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        toolName: 'targeted_read',
+        target: { tabId: 7, origin: 'https://example.test' },
+      }),
+      expect.objectContaining({ snapshotVersion: 1 }),
+    );
+    const nodes = await sharedDb.nodes.where('threadId').equals(run.threadId).toArray();
+    expect(nodes).toContainEqual(
+      expect.objectContaining({
+        type: 'tool_result',
+        payload: expect.objectContaining({
+          itemId: 'call-targeted_read',
+          ok: false,
+          contentForLlm: [
+            {
+              type: 'text',
+              text: 'The recovered tool target or authorization is no longer valid.',
+            },
+          ],
+        }),
+      }),
+    );
+  });
+
+  it('exposes recovered execution to manual pause and quarantines an interrupted write', async () => {
+    const sharedDb = new PanelotDB(`recovery-manual-pause-${Date.now()}`);
+    const { core } = buildEngine(sharedDb);
+    let started!: () => void;
+    const executionStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    tools.register({
+      name: 'manual_recovery_write',
+      label: 'Manual recovery write',
+      description: 'Waits for a manual interruption.',
+      parameters: z.object({}),
+      level: 'L1',
+      effects: 'write',
+      recovery: 'retry-safe',
+      execute: async (_id, _params, signal) => {
+        started();
+        await new Promise<void>((_resolve, reject) => {
+          const onAbort = () => reject(signal.reason);
+          signal.addEventListener('abort', onAbort, { once: true });
+          if (signal.aborted) onAbort();
+        });
+        return { content: [{ type: 'text', text: 'must not complete' }] };
+      },
+    });
+    const { run, thread } = await seedPreparedToolRun(
+      sharedDb,
+      tools,
+      'manual_recovery_write',
+      'write',
+      'retry-safe',
+    );
+
+    const recovery = core.recover();
+    await executionStarted;
+    expect(core.activeThreadIds()).toContain(thread.id);
+    await core.pauseThread(thread.id, 'Manual input detected.');
+    await recovery;
+
+    expect(core.activeThreadIds()).not.toContain(thread.id);
+    expect(await sharedDb.runs.get(run.id)).toMatchObject({
+      state: 'paused_uncertain',
+      stopReason: 'manual_operation',
+      pendingTool: { toolName: 'manual_recovery_write' },
+    });
+    const nodes = await sharedDb.nodes.where('threadId').equals(thread.id).toArray();
+    expect(nodes).toContainEqual(
+      expect.objectContaining({
+        type: 'system_notice',
+        payload: expect.objectContaining({ text: 'Manual input detected.', noticeKind: 'paused' }),
+      }),
+    );
+  });
+
+  it('cancels a recovered waiting approval when manual input conflicts with its tab', async () => {
+    const sharedDb = new PanelotDB(`recovery-approval-manual-${Date.now()}`);
+    const { core } = buildEngine(sharedDb);
+    let executionCount = 0;
+    tools.register({
+      name: 'manual_approval_write',
+      label: 'Manual approval write',
+      description: 'Must not execute after a recovered approval conflicts with manual input.',
+      parameters: z.object({}),
+      level: 'L1',
+      effects: 'write',
+      recovery: 'never-retry',
+      execute: async () => {
+        executionCount++;
+        return { content: [{ type: 'text', text: 'unexpected execution' }] };
+      },
+    });
+    const { run, thread } = await seedPreparedToolRun(
+      sharedDb,
+      tools,
+      'manual_approval_write',
+      'write',
+      'never-retry',
+    );
+    const runs = new RunRepository(sharedDb);
+    const prepared = await runs.get(run.id);
+    await runs.transition(run.id, 'waiting_approval', {
+      pendingTool: {
+        ...prepared!.pendingTool!,
+        target: { tabId: 42, origin: 'https://example.test' },
+      },
+    });
+    const approvals = new ApprovalRepository(sharedDb);
+    const approval = await approvals.create({
+      id: 'manual-recovered-approval',
+      threadId: thread.id,
+      runId: run.id,
+      turnId: run.turnId,
+      request: {
+        tool: 'manual_approval_write',
+        label: 'Manual approval write',
+        params: {},
+        targetOrigin: 'https://example.test',
+        flags: [],
+      },
+    });
+    const events: AgentEvent[] = [];
+    core.onBroadcast = (event) => events.push(event);
+
+    await core.recover();
+    expect(core.activeThreadIds()).toContain(thread.id);
+    expect(core.recoveredApprovalTargetsTab(thread.id, 42)).toBe(true);
+    expect(core.recoveredApprovalTargetsTab(thread.id, 43)).toBe(false);
+    let idle = false;
+    const admissionIdle = core.waitForAdmissionIdle().then(() => {
+      idle = true;
+    });
+    await Promise.resolve();
+    expect(idle).toBe(false);
+
+    await core.pauseThread(thread.id, 'Manual input detected.');
+    await admissionIdle;
+
+    expect(executionCount).toBe(0);
+    expect(core.activeThreadIds()).not.toContain(thread.id);
+    expect(await approvals.get(approval.id)).toMatchObject({
+      status: 'decided',
+      decision: { kind: 'cancel' },
+    });
+    expect(await runs.get(run.id)).toMatchObject({
+      state: 'interrupted',
+      pendingTool: undefined,
+      stopReason: 'approval_cancelled',
+    });
+    expect(events.some((event) => event.type === 'turn.complete')).toBe(false);
+    const leafId = (await sharedDb.threads.get(thread.id))?.leafId;
+    if (!leafId) throw new Error('Recovered approval thread has no leaf node.');
+    const path = await new ThreadTree(sharedDb).getPath(thread.id, leafId);
+    expect(path).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'approval_decision',
+          payload: expect.objectContaining({ decision: { kind: 'cancel' } }),
+        }),
+        expect.objectContaining({
+          type: 'tool_result',
+          payload: expect.objectContaining({ itemId: 'call-manual_approval_write', ok: false }),
+        }),
+        expect.objectContaining({
+          type: 'system_notice',
+          payload: expect.objectContaining({ text: 'Manual input detected.' }),
+        }),
+      ]),
+    );
+  });
+
+  it('prevents dispatch when manual input races an accepted recovered approval', async () => {
+    const sharedDb = new PanelotDB(`recovery-approval-race-${Date.now()}`);
+    const { core } = buildEngine(sharedDb);
+    let executionCount = 0;
+    tools.register({
+      name: 'racing_approval_write',
+      label: 'Racing approval write',
+      description: 'Must not dispatch across a recovered approval conflict.',
+      parameters: z.object({}),
+      level: 'L1',
+      effects: 'write',
+      recovery: 'never-retry',
+      execute: async () => {
+        executionCount++;
+        return { content: [{ type: 'text', text: 'unexpected execution' }] };
+      },
+    });
+    const { run, thread } = await seedPreparedToolRun(
+      sharedDb,
+      tools,
+      'racing_approval_write',
+      'write',
+      'never-retry',
+    );
+    const runs = new RunRepository(sharedDb);
+    const prepared = await runs.get(run.id);
+    await runs.transition(run.id, 'waiting_approval', {
+      pendingTool: {
+        ...prepared!.pendingTool!,
+        target: { tabId: 77, origin: 'https://example.test' },
+      },
+    });
+    const approvals = new ApprovalRepository(sharedDb);
+    await approvals.create({
+      id: 'racing-recovered-approval',
+      threadId: thread.id,
+      runId: run.id,
+      turnId: run.turnId,
+      request: {
+        tool: 'racing_approval_write',
+        label: 'Racing approval write',
+        params: {},
+        targetOrigin: 'https://example.test',
+        flags: [],
+      },
+    });
+    let approvalHookEntered!: () => void;
+    let releaseApprovalHook!: () => void;
+    const approvalHookStarted = new Promise<void>((resolve) => {
+      approvalHookEntered = resolve;
+    });
+    const approvalHookGate = new Promise<void>((resolve) => {
+      releaseApprovalHook = resolve;
+    });
+    core.onApprovalDecision = async () => {
+      approvalHookEntered();
+      await approvalHookGate;
+    };
+    const events: AgentEvent[] = [];
+    core.onBroadcast = (event) => events.push(event);
+    await core.recover();
+
+    const response = core.handleOp(
+      {
+        type: 'approval.response',
+        submissionId: 'accept-racing-approval',
+        approvalId: 'racing-recovered-approval',
+        decision: { kind: 'accept' },
+      },
+      (event) => events.push(event),
+    );
+    await approvalHookStarted;
+    expect(core.recoveredApprovalTargetsTab(thread.id, 77)).toBe(true);
+    const pause = core.pauseThread(thread.id, 'Manual input detected.');
+    releaseApprovalHook();
+    await Promise.all([response, pause]);
+
+    expect(executionCount).toBe(0);
+    expect(await approvals.get('racing-recovered-approval')).toMatchObject({
+      status: 'decided',
+      decision: { kind: 'accept' },
+    });
+    expect(await runs.get(run.id)).toMatchObject({
+      state: 'interrupted',
+      pendingTool: undefined,
+      stopReason: 'manual_operation',
+    });
+    expect(core.activeThreadIds()).not.toContain(thread.id);
+    expect(events.some((event) => event.type === 'turn.complete')).toBe(false);
+    const toolResults = await sharedDb.nodes
+      .where('threadId')
+      .equals(thread.id)
+      .filter((node) => node.type === 'tool_result')
+      .toArray();
+    expect(toolResults).toContainEqual(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          itemId: 'call-racing_approval_write',
+          ok: false,
+        }),
+      }),
+    );
+  });
+
+  it('aborts a recovered read at its deadline and persists a failed run', async () => {
+    const sharedDb = new PanelotDB(`recovery-abort-${Date.now()}`);
+    const { core } = buildEngine(sharedDb, undefined, undefined, {
+      recoveryToolTimeoutMs: 10,
+    });
+    let sawAbort = false;
+    tools.register({
+      name: 'abortable_read',
+      label: 'Abortable read',
+      description: 'Waits for the recovery deadline.',
+      parameters: z.object({}),
+      level: 'builtin',
+      effects: 'read',
+      recovery: 'inspect-first',
+      execute: (_id, _params, signal) =>
+        new Promise((_resolve, reject) => {
+          const onAbort = () => {
+            sawAbort = true;
+            reject(new DOMException('aborted', 'AbortError'));
+          };
+          signal.addEventListener('abort', onAbort, { once: true });
+          if (signal.aborted) onAbort();
+        }),
+    });
+    const { run, thread } = await seedPreparedToolRun(
+      sharedDb,
+      tools,
+      'abortable_read',
+      'read',
+      'inspect-first',
+    );
+    const events: AgentEvent[] = [];
+    core.onBroadcast = (event) => events.push(event);
+
+    await core.recover();
+
+    expect(sawAbort).toBe(true);
+    expect(await sharedDb.runs.get(run.id)).toMatchObject({
+      state: 'failed',
+      pendingTool: undefined,
+      stopReason: 'recovery_tool_timeout',
+      error: { code: 'recovery_tool_timeout' },
+    });
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: 'error', threadId: thread.id, retryable: false }),
+    );
+  });
+
+  it('keeps recovery closed until an abort-ignoring write settles and quarantines its result', async () => {
+    const sharedDb = new PanelotDB(`recovery-ignore-abort-${Date.now()}`);
+    const { core } = buildEngine(sharedDb, undefined, undefined, {
+      recoveryToolTimeoutMs: 10,
+    });
+    let started!: () => void;
+    const executionStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let release!: () => void;
+    const executionGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let sawAbort = false;
+    tools.register({
+      name: 'stubborn_write',
+      label: 'Stubborn write',
+      description: 'Ignores abort until its external operation settles.',
+      parameters: z.object({}),
+      level: 'L1',
+      effects: 'write',
+      recovery: 'retry-safe',
+      execute: async (_id, _params, signal, onUpdate) => {
+        started();
+        signal.addEventListener('abort', () => {
+          sawAbort = true;
+        });
+        await executionGate;
+        onUpdate?.({ progressText: 'late progress' });
+        return { content: [{ type: 'text', text: 'late result' }] };
+      },
+    });
+    const { run, thread } = await seedPreparedToolRun(
+      sharedDb,
+      tools,
+      'stubborn_write',
+      'write',
+      'retry-safe',
+    );
+    const events: AgentEvent[] = [];
+    core.onBroadcast = (event) => events.push(event);
+    let recoverySettled = false;
+
+    const recovery = core.recover().then(() => {
+      recoverySettled = true;
+    });
+    await executionStarted;
+    await waitForEvent(events, 'run.recovery_required');
+
+    expect(sawAbort).toBe(true);
+    expect(recoverySettled).toBe(false);
+    expect(await sharedDb.runs.get(run.id)).toMatchObject({
+      state: 'paused_uncertain',
+      stopReason: 'recovery_tool_timeout',
+      error: { code: 'recovery_tool_timeout' },
+      pendingTool: { toolName: 'stubborn_write' },
+    });
+
+    release();
+    await recovery;
+
+    expect(recoverySettled).toBe(true);
+    expect((await sharedDb.runs.get(run.id))?.state).toBe('paused_uncertain');
+    const nodes = await sharedDb.nodes.where('threadId').equals(thread.id).toArray();
+    expect(nodes.filter((node) => node.type === 'tool_result')).toHaveLength(0);
+    expect(events.filter((event) => event.type === 'item.delta')).toHaveLength(0);
+  });
+
   it('pauses an uncertain write until the user explicitly chooses retry', async () => {
     const sharedDb = new PanelotDB(`uncertain-tool-recovery-${Date.now()}`);
+    const { core } = buildEngine(sharedDb);
+    let executionCount = 0;
+    tools.register({
+      name: 'unsafe_write',
+      label: 'Unsafe write',
+      description: 'Write once.',
+      parameters: z.object({}),
+      level: 'L1',
+      effects: 'write',
+      recovery: 'never-retry',
+      execute: async () => {
+        executionCount++;
+        return { content: [{ type: 'text', text: 'written' }] };
+      },
+    });
     const tree = new ThreadTree(sharedDb);
     const thread = await tree.createThread({ title: 'uncertain recovery' });
     await tree.appendNode(thread.id, {
@@ -1850,8 +2427,7 @@ describe('engine integration (Op → events → DB)', () => {
       payload: {
         turnId: 'turn-unsafe',
         model: { connectionId: 'connection', modelId: 'mock' },
-        approvalPolicy: 'untrusted',
-        capabilityScope: 'full',
+        permissionPolicy: 'untrusted',
         activeSkills: [],
       },
     });
@@ -1870,16 +2446,7 @@ describe('engine integration (Op → events → DB)', () => {
       submissionId: 'unsafe-before-kill',
       input: { text: 'submit once' },
     });
-    await runs.prepare(run.id, {
-      connectionId: 'connection',
-      modelId: 'mock',
-      modelParameters: {},
-      enabledToolLevels: ['L0', 'L1', 'L2', 'mcp'],
-      approvalPolicy: 'untrusted',
-      capabilityScope: 'full',
-      activeSkills: [],
-      promptVersion: 'kernel',
-    });
+    await runs.prepare(run.id, await testRunEnvironment(run.input, tools));
     await runs.transition(run.id, 'executing_tool', {
       pendingTool: {
         itemId: 'unsafe-call',
@@ -1890,21 +2457,6 @@ describe('engine integration (Op → events → DB)', () => {
       },
     });
 
-    const { core } = buildEngine(sharedDb);
-    let executionCount = 0;
-    tools.register({
-      name: 'unsafe_write',
-      label: 'Unsafe write',
-      description: 'Write once.',
-      parameters: z.object({}),
-      level: 'L1',
-      effects: 'write',
-      recovery: 'never-retry',
-      execute: async () => {
-        executionCount++;
-        return { content: [{ type: 'text', text: 'written' }] };
-      },
-    });
     const events: AgentEvent[] = [];
     core.onBroadcast = (event) => events.push(event);
 
@@ -2073,5 +2625,543 @@ describe('engine integration (Op → events → DB)', () => {
       check();
     });
     expect(provider.requests[1]!.tools.map((t) => t.name)).toContain('l2_probe');
+  });
+
+  it('interrupt settles a pending approval and ignores a late acceptance', async () => {
+    const askGate: GatekeeperCheck = {
+      check: async (call) => ({
+        verdict: 'ask',
+        request: {
+          tool: call.toolName,
+          label: call.toolName,
+          params: call.params,
+          targetOrigin: 'https://example.test',
+          flags: [],
+        },
+      }),
+    };
+    const { core, host } = buildEngine(undefined, undefined, askGate);
+    let executions = 0;
+    tools.register({
+      name: 'approval_write',
+      label: 'Approval write',
+      description: 'write after approval',
+      parameters: z.object({}),
+      level: 'L1',
+      effects: 'write',
+      execute: async () => {
+        executions++;
+        return { content: [{ type: 'text', text: 'written' }] };
+      },
+    });
+    const client = connect(host);
+    const threadId = await initThread(client);
+    provider.queue({ toolCalls: [{ id: 'approval-call', name: 'approval_write', params: {} }] });
+    const turnSubmission = client.post({
+      type: 'turn.submit',
+      threadId,
+      input: { text: 'write once' },
+    });
+    const request = await client.waitFor('approval.request');
+
+    client.post({ type: 'turn.interrupt', threadId });
+    const complete = await client.waitFor('turn.complete');
+    expect(complete.stopReason).toBe('interrupted');
+    expect((await core.getSnapshot(threadId))?.pendingApprovals).toEqual([]);
+    expect((await db.runs.where('submissionId').equals(turnSubmission).first())?.state).toBe(
+      'interrupted',
+    );
+
+    const lateSubmission = client.post({
+      type: 'approval.response',
+      approvalId: request.approvalId,
+      decision: { kind: 'accept' },
+    });
+    await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
+        event.type === 'command.ack' && event.submissionId === lateSubmission,
+    );
+
+    expect(executions).toBe(0);
+    expect(await db.approvals.get(request.approvalId)).toMatchObject({
+      status: 'decided',
+      decision: { kind: 'cancel' },
+    });
+  });
+
+  it('keeps a timed-out approval declined when a response arrives later', async () => {
+    const askGate: GatekeeperCheck = {
+      check: async (call) => ({
+        verdict: 'ask',
+        request: {
+          tool: call.toolName,
+          label: call.toolName,
+          params: call.params,
+          targetOrigin: 'https://example.test',
+          flags: [],
+        },
+      }),
+    };
+    const { host } = buildEngine(undefined, undefined, askGate, { approvalTimeoutMs: 20 });
+    let executions = 0;
+    tools.register({
+      name: 'timeout_write',
+      label: 'Timeout write',
+      description: 'must not run after timeout',
+      parameters: z.object({}),
+      level: 'L1',
+      effects: 'write',
+      execute: async () => {
+        executions++;
+        return { content: [{ type: 'text', text: 'written' }] };
+      },
+    });
+    const client = connect(host);
+    const threadId = await initThread(client);
+    provider.queue(
+      { toolCalls: [{ id: 'timeout-call', name: 'timeout_write', params: {} }] },
+      { streamText: ['continued without the action'] },
+    );
+    client.post({ type: 'turn.submit', threadId, input: { text: 'wait for approval' } });
+    const request = await client.waitFor('approval.request');
+    await client.waitFor('turn.complete');
+
+    const timeoutResponse = client.post({
+      type: 'approval.response',
+      approvalId: request.approvalId,
+      decision: { kind: 'accept' },
+    });
+    await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
+        event.type === 'command.ack' && event.submissionId === timeoutResponse,
+    );
+
+    expect(executions).toBe(0);
+    expect(await db.approvals.get(request.approvalId)).toMatchObject({
+      decision: { kind: 'decline' },
+    });
+  });
+
+  it.each(['streaming_model', 'completed'] as const)(
+    'does not replay a decided approval from a stale recovery snapshot after the first continuation is %s',
+    async (firstContinuationState) => {
+      const sharedDb = new PanelotDB(
+        `approval-recovery-race-${firstContinuationState}-${Date.now()}`,
+      );
+      const { core } = buildEngine(sharedDb);
+      let executions = 0;
+      tools.register({
+        name: 'write_once',
+        label: 'Write once',
+        description: 'must execute at most once',
+        parameters: z.object({}),
+        level: 'L1',
+        effects: 'write',
+        recovery: 'never-retry',
+        execute: async () => {
+          executions++;
+          return { content: [{ type: 'text', text: 'written once' }] };
+        },
+      });
+      const tree = new ThreadTree(sharedDb);
+      const thread = await tree.createThread({ title: 'approval recovery race' });
+      await tree.appendNode(thread.id, {
+        type: 'user_message',
+        payload: { content: [{ type: 'text', text: 'write once' }] },
+      });
+      await tree.appendNode(thread.id, {
+        type: 'tool_call',
+        payload: {
+          itemId: 'write-once-call',
+          toolName: 'write_once',
+          params: {},
+          level: 'L1',
+        },
+      });
+      const runs = new RunRepository(sharedDb);
+      const run = await runs.enqueue({
+        threadId: thread.id,
+        clientId: 'recovery-client',
+        submissionId: 'write-once-submission',
+        input: { text: 'write once' },
+      });
+      await runs.prepare(
+        run.id,
+        await testRunEnvironment(run.input, tools, { promptVersion: 'test' }),
+      );
+      const approvals = new ApprovalRepository(sharedDb);
+      const { approval } = await approvals.createPendingWork({
+        id: 'write-once-approval',
+        threadId: thread.id,
+        runId: run.id,
+        turnId: run.turnId,
+        request: {
+          tool: 'write_once',
+          label: 'Write once',
+          params: {},
+          targetOrigin: 'https://example.test',
+          flags: [],
+        },
+        pendingTool: {
+          itemId: 'write-once-call',
+          toolName: 'write_once',
+          params: {},
+          effect: 'write',
+          recovery: 'never-retry',
+        },
+        deadlineAt: Date.now() + 300_000,
+      });
+
+      let streamStarted!: () => void;
+      const enteredStream = new Promise<void>((resolve) => {
+        streamStarted = resolve;
+      });
+      let finishStream: (() => void) | undefined;
+      const streamRelease =
+        firstContinuationState === 'streaming_model'
+          ? new Promise<void>((resolve) => {
+              finishStream = resolve;
+            })
+          : undefined;
+      provider.queue({
+        streamText: ['continued'],
+        onStreamStart: streamStarted,
+        release: streamRelease,
+      });
+
+      let recoveryRead!: () => void;
+      const recoveryHasSnapshot = new Promise<void>((resolve) => {
+        recoveryRead = resolve;
+      });
+      let releaseRecovery!: () => void;
+      const recoveryGate = new Promise<void>((resolve) => {
+        releaseRecovery = resolve;
+      });
+      const coreRuns = (core as unknown as { runs: RunRepository }).runs;
+      const recoverOpenRuns = coreRuns.recoverOpenRuns.bind(coreRuns);
+      coreRuns.recoverOpenRuns = async () => {
+        const recovered = await recoverOpenRuns();
+        recoveryRead();
+        await recoveryGate;
+        return recovered;
+      };
+      const events: AgentEvent[] = [];
+      core.onBroadcast = (event) => events.push(event);
+
+      const recovery = core.recover();
+      await recoveryHasSnapshot;
+      await core.handleOp(
+        {
+          type: 'approval.response',
+          submissionId: 'approve-once',
+          approvalId: approval.id,
+          decision: { kind: 'accept' },
+        },
+        (event) => events.push(event),
+      );
+      await enteredStream;
+
+      if (firstContinuationState === 'completed') {
+        await waitForEvent(events, 'turn.complete');
+      } else {
+        expect((await sharedDb.runs.get(run.id))?.state).toBe('streaming_model');
+      }
+
+      releaseRecovery();
+      await recovery;
+      expect(executions).toBe(1);
+
+      finishStream?.();
+      await waitForEvent(events, 'turn.complete');
+      expect((await sharedDb.runs.get(run.id))?.state).toBe('completed');
+      expect(executions).toBe(1);
+    },
+  );
+
+  it('restores the escalated tool as the pending approval continuation', async () => {
+    const sharedDb = new PanelotDB(`escalation-recovery-${Date.now()}`);
+    const escalationGate: GatekeeperCheck = {
+      check: async (call) =>
+        call.toolName === 'type_trusted'
+          ? {
+              verdict: 'ask',
+              request: {
+                tool: call.toolName,
+                label: 'Trusted type',
+                params: call.params,
+                targetOrigin: 'https://example.test',
+                flags: ['escalation_l2'],
+              },
+            }
+          : { verdict: 'allow' },
+    };
+    const { core: core1, host: host1 } = buildEngine(sharedDb, undefined, escalationGate);
+    const parameters = z.object({ element: z.string(), ref: z.string(), text: z.string() });
+    tools.register({
+      name: 'type',
+      label: 'Type',
+      description: 'regular type',
+      parameters,
+      level: 'L1',
+      effects: 'write',
+      execute: async () => {
+        throw actionError('l1_not_effective', 'trusted input required', 'verify', true, {
+          escalationTool: 'type_trusted',
+        });
+      },
+    });
+    tools.register({
+      name: 'type_trusted',
+      label: 'Trusted type',
+      description: 'trusted type',
+      parameters,
+      level: 'L2',
+      effects: 'write',
+      execute: async () => ({ content: [{ type: 'text', text: 'old worker' }] }),
+    });
+    const client1 = connect(host1);
+    const threadId = await initThread(client1);
+    provider.queue({
+      toolCalls: [
+        {
+          id: 'trusted-call',
+          name: 'type',
+          params: { element: 'Name', ref: 'r1', text: 'Panelot' },
+        },
+      ],
+    });
+    client1.post({ type: 'turn.submit', threadId, input: { text: 'fill the name' } });
+    const originalRequest = await client1.waitFor('approval.request');
+    const waitingRun = await sharedDb.runs.where('threadId').equals(threadId).first();
+    expect(waitingRun).toMatchObject({
+      state: 'waiting_approval',
+      pendingTool: {
+        itemId: 'trusted-call',
+        toolName: 'type_trusted',
+        params: { element: 'Name', ref: 'r1', text: 'Panelot' },
+      },
+    });
+
+    const abandoned = core1 as unknown as {
+      pendingApprovals: Map<string, { cleanup: () => void }>;
+    };
+    for (const waiter of abandoned.pendingApprovals.values()) waiter.cleanup();
+    abandoned.pendingApprovals.clear();
+
+    provider = new MockProvider();
+    const { core: core2, host: host2 } = buildEngine(sharedDb, undefined, escalationGate);
+    let recoveredExecutions = 0;
+    tools.register({
+      name: 'type',
+      label: 'Type',
+      description: 'regular type',
+      parameters,
+      level: 'L1',
+      effects: 'write',
+      execute: async () => ({ content: [{ type: 'text', text: 'unused after recovery' }] }),
+    });
+    tools.register({
+      name: 'type_trusted',
+      label: 'Trusted type',
+      description: 'trusted type',
+      parameters,
+      level: 'L2',
+      effects: 'write',
+      execute: async () => {
+        recoveredExecutions++;
+        return { content: [{ type: 'text', text: 'trusted input complete' }] };
+      },
+    });
+    const client2 = connect(host2);
+    client2.post({
+      type: 'initialize',
+      protocolVersion: 1,
+      subscribe: { threadId },
+    });
+    await client2.waitFor('initialized');
+    provider.queue({ streamText: ['continued after restart'] });
+    await core2.recover();
+    const restoredRequest = await client2.waitFor('approval.request');
+    expect(restoredRequest.approvalId).toBe(originalRequest.approvalId);
+    await client2.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'activity.updated' }> =>
+        event.type === 'activity.updated' &&
+        event.activity.threadId === threadId &&
+        event.activity.pendingApprovals === 1,
+    );
+
+    client2.post({
+      type: 'approval.response',
+      approvalId: restoredRequest.approvalId,
+      decision: { kind: 'accept' },
+    });
+    await client2.waitFor('turn.complete');
+
+    expect(recoveredExecutions).toBe(1);
+    expect((await sharedDb.runs.get(waitingRun!.id))?.state).toBe('completed');
+  });
+
+  it('uses the persisted approval deadline after a worker restart', async () => {
+    const sharedDb = new PanelotDB(`approval-deadline-${Date.now()}`);
+    const askGate: GatekeeperCheck = {
+      check: async (call) => ({
+        verdict: 'ask',
+        request: {
+          tool: call.toolName,
+          label: call.toolName,
+          params: call.params,
+          targetOrigin: 'https://example.test',
+          flags: [],
+        },
+      }),
+    };
+    const { core: core1, host: host1 } = buildEngine(sharedDb, undefined, askGate, {
+      approvalTimeoutMs: 250,
+    });
+    tools.register({
+      name: 'deadline_write',
+      label: 'Deadline write',
+      description: 'must not run after the persisted deadline',
+      parameters: z.object({}),
+      level: 'L1',
+      effects: 'write',
+      execute: async () => ({ content: [{ type: 'text', text: 'old worker' }] }),
+    });
+    const client1 = connect(host1);
+    const threadId = await initThread(client1);
+    provider.queue({ toolCalls: [{ id: 'deadline-call', name: 'deadline_write', params: {} }] });
+    client1.post({ type: 'turn.submit', threadId, input: { text: 'wait across restart' } });
+    const request = await client1.waitFor('approval.request');
+    const persisted = await sharedDb.approvals.get(request.approvalId);
+    expect(persisted?.deadlineAt).toBeGreaterThan(Date.now());
+
+    const abandoned = core1 as unknown as {
+      pendingApprovals: Map<string, { cleanup: () => void }>;
+    };
+    for (const waiter of abandoned.pendingApprovals.values()) waiter.cleanup();
+    abandoned.pendingApprovals.clear();
+
+    provider = new MockProvider();
+    const { core: core2, host: host2 } = buildEngine(sharedDb, undefined, askGate, {
+      approvalTimeoutMs: 5_000,
+    });
+    let executions = 0;
+    tools.register({
+      name: 'deadline_write',
+      label: 'Deadline write',
+      description: 'must not run after the persisted deadline',
+      parameters: z.object({}),
+      level: 'L1',
+      effects: 'write',
+      execute: async () => {
+        executions++;
+        return { content: [{ type: 'text', text: 'unexpected' }] };
+      },
+    });
+    const client2 = connect(host2);
+    client2.post({
+      type: 'initialize',
+      protocolVersion: 1,
+      subscribe: { threadId },
+    });
+    await client2.waitFor('initialized');
+    provider.queue({ streamText: ['continued after timeout'] });
+    await core2.recover();
+    await client2.waitFor('approval.request');
+    await client2.waitFor('turn.complete');
+
+    expect(executions).toBe(0);
+    expect(await sharedDb.approvals.get(request.approvalId)).toMatchObject({
+      status: 'decided',
+      decision: { kind: 'decline' },
+    });
+  });
+
+  it('fails a waiting run explicitly when its approval record is missing', async () => {
+    const sharedDb = new PanelotDB(`missing-approval-${Date.now()}`);
+    const { core } = buildEngine(sharedDb);
+    const thread = await new ThreadTree(sharedDb).createThread({ title: 'missing approval' });
+    const runs = new RunRepository(sharedDb);
+    const run = await runs.enqueue({
+      threadId: thread.id,
+      clientId: 'recovery-client',
+      submissionId: 'missing-approval-run',
+      input: { text: 'write' },
+    });
+    await runs.prepare(run.id, await testRunEnvironment(run.input, tools));
+    await runs.transition(run.id, 'waiting_approval', {
+      pendingTool: {
+        itemId: 'missing-call',
+        toolName: 'missing_write',
+        params: {},
+        effect: 'write',
+        recovery: 'never-retry',
+      },
+    });
+    const events: AgentEvent[] = [];
+    core.onBroadcast = (event) => events.push(event);
+
+    await core.recover();
+
+    expect(await sharedDb.runs.get(run.id)).toMatchObject({
+      state: 'failed',
+      stopReason: 'recovery_missing_approval',
+      error: { code: 'recovery_missing_approval' },
+    });
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: 'error', threadId: thread.id, retryable: false }),
+    );
+  });
+
+  it('fails closed when a started legacy run has no environment snapshot', async () => {
+    const sharedDb = new PanelotDB(`legacy-environment-${Date.now()}`);
+    const thread = await new ThreadTree(sharedDb).createThread({ title: 'legacy environment' });
+    const runs = new RunRepository(sharedDb);
+    const run = await runs.enqueue({
+      threadId: thread.id,
+      clientId: 'legacy-client',
+      submissionId: 'legacy-run',
+      input: { text: 'resume legacy' },
+    });
+    await runs.prepare(run.id, {
+      connectionId: 'connection',
+      modelId: 'mock',
+      modelParameters: {},
+      enabledToolLevels: ['L0', 'L1', 'L2', 'mcp'],
+      permissionPolicy: 'untrusted',
+      activeSkills: [],
+      promptVersion: 'legacy',
+    });
+    await runs.transition(run.id, 'interrupted');
+    const { core } = buildEngine(sharedDb);
+
+    await core.recover();
+
+    expect(await sharedDb.runs.get(run.id)).toMatchObject({
+      state: 'failed',
+      stopReason: 'environment_snapshot_unsupported',
+      error: { code: 'environment_snapshot_unsupported' },
+    });
+  });
+
+  it('replays thread.created for a duplicate thread creation submission', async () => {
+    const { host } = buildEngine();
+    const client = connect(host);
+    client.post({ type: 'initialize', protocolVersion: 1 });
+    await client.waitFor('initialized');
+    const submissionId = 'stable-thread-create';
+    client.post({ type: 'thread.create', submissionId, preset: 'preset-a' });
+    const created = await client.waitFor('thread.created');
+    await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
+        event.type === 'command.ack' && event.submissionId === submissionId,
+    );
+    client.events.length = 0;
+
+    client.post({ type: 'thread.create', submissionId, preset: 'preset-a' });
+    const replayed = await client.waitFor('thread.created');
+
+    expect(replayed.threadId).toBe(created.threadId);
+    expect(await db.threads.count()).toBe(1);
   });
 });

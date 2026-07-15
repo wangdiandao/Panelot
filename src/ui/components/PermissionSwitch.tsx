@@ -1,46 +1,28 @@
 /**
- * PermissionSwitch (docs/06 §1, owner decision 2026-07-05): the composer's
- * autonomy selector — permission TIER, not tool list.
- *
- * Four options:
- *  - always   (全程询问)  every step asks, reads included
- *  - untrusted (操作询问) reads free, writes ask (default)
- *  - auto     (无需审批)  writes auto-approved; safety floor intact
- *  - plan     (计划模式)  pseudo-tier: agent plans first, user confirms before execution
- *
- * 'plan' is a UI-only mode — not an ApprovalPolicy value. When selected,
- * planMode=true is communicated via onSelectPlan(); the underlying
- * approvalPolicy stays at 'untrusted' during planning.
+ * The composer's autonomy selector. Each option maps directly to an approval policy.
  */
 
-import { Check, ChevronDown, ClipboardList, Eye, ShieldCheck, Zap } from 'lucide-react';
+import { Check, ChevronDown, Eye, ShieldCheck, Zap } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
+import { Button } from './ui/button';
 import { cn } from '../lib/utils';
 import { t } from '../i18n';
-import type { ApprovalPolicy } from '../../messaging/protocol';
+import type { PermissionPolicy } from '../../messaging/protocol';
 
-/** Composer-facing tiers (includes the UI-only 'plan' pseudo-tier). */
-export type PermissionTier = Extract<ApprovalPolicy, 'always' | 'untrusted' | 'auto'> | 'plan';
+export type PermissionTier = PermissionPolicy;
 
 const TIERS: {
   id: PermissionTier;
   labelKey: string;
   hintKey: string;
   Icon: typeof Eye;
-  isPlan?: boolean;
 }[] = [
-  {
-    id: 'plan',
-    labelKey: 'perm.plan',
-    hintKey: 'perm.planHint',
-    Icon: ClipboardList,
-    isPlan: true,
-  },
   { id: 'always', labelKey: 'perm.always', hintKey: 'perm.alwaysHint', Icon: Eye },
   { id: 'untrusted', labelKey: 'perm.balanced', hintKey: 'perm.balancedHint', Icon: ShieldCheck },
   { id: 'auto', labelKey: 'perm.auto', hintKey: 'perm.autoHint', Icon: Zap },
@@ -48,55 +30,42 @@ const TIERS: {
 
 interface Props {
   /** Current policy (undefined = follow default, shown as 'untrusted'). */
-  value: ApprovalPolicy | undefined;
-  /** Whether plan mode is currently active. */
-  planMode?: boolean;
+  value: PermissionPolicy | undefined;
   onSelect: (tier: PermissionTier) => void;
 }
 
-export function PermissionSwitch({ value, planMode, onSelect }: Props) {
-  const active = planMode
-    ? TIERS[0]!
-    : (TIERS.find((m) => m.id === value && !m.isPlan) ?? TIERS[2]!);
+export function PermissionSwitch({ value, onSelect }: Props) {
+  const active = TIERS.find((tier) => tier.id === value) ?? TIERS[1]!;
   const { Icon } = active;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button
-          type="button"
+        <Button
+          variant="outline"
+          size="sm"
           aria-label={t('perm.switch')}
-          className={cn(
-            'flex h-6 shrink-0 items-center gap-1 rounded-full border px-2 text-[11px] transition-colors',
-            active.isPlan
-              ? 'border-info/40 bg-info/10 text-info'
-              : active.id === 'auto'
-                ? 'border-warning/40 bg-warning/10 text-warning'
-                : 'border-primary/30 bg-primary/10 text-primary',
-          )}
+          className="h-6 shrink-0 rounded-full"
         >
-          <Icon className="size-3" />
+          <Icon data-icon="inline-start" />
           {t(active.labelKey)}
-          <ChevronDown className="size-3 opacity-60" />
-        </button>
+          <ChevronDown data-icon="inline-end" />
+        </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" side="top" className="w-64">
-        {TIERS.map((m) => (
-          <DropdownMenuItem key={m.id} onClick={() => onSelect(m.id)}>
-            <Check
-              className={cn(
-                'size-4',
-                (m.isPlan ? planMode : m.id === active.id && !planMode)
-                  ? 'opacity-100'
-                  : 'opacity-0',
-              )}
-            />
-            <m.Icon className="size-4 text-muted-foreground" />
-            <div className="flex min-w-0 flex-col">
-              <span>{t(m.labelKey)}</span>
-              <span className="text-[11px] text-faint-foreground">{t(m.hintKey)}</span>
-            </div>
-          </DropdownMenuItem>
-        ))}
+        <DropdownMenuGroup>
+          {TIERS.map((tier) => (
+            <DropdownMenuItem key={tier.id} onClick={() => onSelect(tier.id)}>
+              <Check
+                className={cn('size-4', tier.id === active.id ? 'opacity-100' : 'opacity-0')}
+              />
+              <tier.Icon />
+              <div className="flex min-w-0 flex-col">
+                <span>{t(tier.labelKey)}</span>
+                <span className="text-[11px] text-faint-foreground">{t(tier.hintKey)}</span>
+              </div>
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuGroup>
       </DropdownMenuContent>
     </DropdownMenu>
   );

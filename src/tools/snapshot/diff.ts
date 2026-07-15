@@ -6,7 +6,7 @@ export interface SnapshotDiff {
 const HEADER_LINES = 4;
 
 function normalize(line: string): string {
-  return line.replace(/\[ref=s\d+_\d+\]/g, '[ref]');
+  return line.replace(/\[ref=s[a-z0-9]+_\d+_\d+\]/gi, '[ref]');
 }
 
 export function diffSnapshotYaml(previous: string | undefined, next: string): SnapshotDiff {
@@ -17,8 +17,8 @@ export function diffSnapshotYaml(previous: string | undefined, next: string): Sn
   const after = new Set(nextLines.map(normalize));
   const added = nextLines.filter((line) => !before.has(normalize(line)));
   const removed = previousLines.filter((line) => !after.has(normalize(line))).map(normalize);
-  const refs = nextLines.filter((line) => /\[ref=s\d+_\d+\]/.test(line));
-  const generation = /^# Page Snapshot \((s\d+)\)/.exec(next)?.[1] ?? 'unknown';
+  const refs = nextLines.filter((line) => /\[ref=s[a-z0-9]+_\d+_\d+\]/i.test(line));
+  const generation = /^# Page Snapshot \((s[a-z0-9]+_\d+)\)/i.exec(next)?.[1] ?? 'unknown';
   const sections = [`# Page Changes (${generation})`];
   if (added.length) sections.push(`Added/changed:\n${added.join('\n')}`);
   if (removed.length) sections.push(`Removed:\n${removed.join('\n')}`);

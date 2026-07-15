@@ -18,10 +18,16 @@
 
 import { useRef, useState, type RefObject } from 'react';
 import { ArrowUp, FileText, Paperclip, Plus, Sparkles, Square, Upload, X } from 'lucide-react';
+import { toast } from 'sonner';
+import { Badge } from './ui/badge';
 import { Button } from './ui/button';
+import { Input } from './ui/input';
+import { InputGroup, InputGroupAddon, InputGroupTextarea } from './ui/input-group';
+import { Separator } from './ui/separator';
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSub,
@@ -31,8 +37,12 @@ import {
 } from './ui/dropdown-menu';
 import { cn } from '../lib/utils';
 import { t } from '../i18n';
-import type { ContextBlock } from '../../messaging/protocol';
-import { attachTab as attachTabFromMenu, listAttachableTabs } from '../pageContext';
+import type { ContextBlock, SubmissionBrowserContext } from '../../messaging/protocol';
+import {
+  attachTab as attachTabFromMenu,
+  captureSubmissionBrowserContext,
+  listAttachableTabs,
+} from '../pageContext';
 import {
   TriggerMenu,
   detectTrigger,
@@ -49,7 +59,7 @@ import {
 import { SkillVariableForm } from './SkillVariableForm';
 import { ModelSelector, type ModelChoice } from './ModelSelector';
 import { PermissionSwitch, type PermissionTier } from './PermissionSwitch';
-import type { ApprovalPolicy } from '../../messaging/protocol';
+import type { PermissionPolicy } from '../../messaging/protocol';
 
 interface Props {
   running: boolean;
@@ -57,11 +67,22 @@ interface Props {
   disabled?: boolean;
   disabledHint?: string;
   contextChips: ContextBlock[];
+  /** Thread selected when the user starts a submission; null denotes a draft. */
+  submissionThreadId: string | null;
   onRemoveChip: (index: number) => void;
   onAttachContext?: (block: ContextBlock) => void;
   onAttachFile?: (file: File) => Promise<ContextBlock | null>;
-  onSend: (text: string) => void;
-  onEnqueue: (text: string) => void;
+  attachmentUnavailableReason?: string;
+  onSend: (
+    text: string,
+    expectedThreadId: string | null,
+    browserContext: SubmissionBrowserContext,
+  ) => boolean | Promise<boolean>;
+  onEnqueue: (
+    text: string,
+    expectedThreadId: string | null,
+    browserContext: SubmissionBrowserContext,
+  ) => boolean | Promise<boolean>;
   onStop: () => void;
   /** Optional external ref so parents can restore focus (e.g. post-approval). */
   textareaRef?: RefObject<HTMLTextAreaElement | null>;
@@ -76,9 +97,7 @@ interface Props {
   modelOverride?: { connectionId: string; modelId: string } | null;
   onSelectModel?: (choice: ModelChoice | null) => void;
   /** Permission tier (undefined = global default). */
-  approvalPolicy?: ApprovalPolicy | undefined;
-  /** Whether plan mode is currently active (controls the switch indicator). */
-  planMode?: boolean;
+  permissionPolicy?: PermissionPolicy | undefined;
   onSelectPolicy?: (tier: PermissionTier) => void;
   /** Extra slash commands supplied by the host page (e.g. /clear). */
   builtinCommands?: BuiltinCommand[];
@@ -90,9 +109,11 @@ export function PromptInput({
   disabled,
   disabledHint,
   contextChips,
+  submissionThreadId,
   onRemoveChip,
   onAttachContext,
   onAttachFile,
+  attachmentUnavailableReason,
   onSend,
   onEnqueue,
   onStop,
@@ -103,8 +124,7 @@ export function PromptInput({
   onRecallLast,
   modelOverride,
   onSelectModel,
-  approvalPolicy,
-  planMode,
+  permissionPolicy,
   onSelectPolicy,
   builtinCommands = [],
 }: Props) {
@@ -118,11 +138,13 @@ export function PromptInput({
   const [steerHint, setSteerHint] = useState<string | null>(null);
   const [trigger, setTrigger] = useState<TriggerState | null>(null);
   const [variableForm, setVariableForm] = useState<SkillCommand | null>(null);
+  const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [focused, setFocused] = useState(false);
   const innerRef = useRef<HTMLTextAreaElement>(null);
   const taRef = textareaRef ?? innerRef;
   const menuRef = useRef<TriggerMenuHandle>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const submissionTail = useRef<Promise<void>>(Promise.resolve());
 
   const refreshTrigger = (value: string, caret: number) => {
     setTrigger(detectTrigger(value, caret));
@@ -155,19 +177,51 @@ export function PromptInput({
   const submit = (explicit: 'send' | 'enqueue') => {
     const trimmed = text.trim();
     if (!trimmed && contextChips.length === 0) return;
+    const browserContext = captureSubmissionBrowserContext([...contextChips]);
     setText('');
     setTrigger(null);
-    void evaluateVariables(trimmed).then((resolved) => {
-      if (explicit === 'enqueue') {
-        onEnqueue(resolved);
-      } else {
-        onSend(resolved);
-        if (running) {
-          setSteerHint(steerable ? t('input.steered') : t('input.queuedInstead'));
+    const submission = {
+      explicit,
+      trimmed,
+      expectedThreadId: submissionThreadId,
+      onEnqueue,
+      onSend,
+      running,
+      steerable,
+    };
+    const dispatch = async () => {
+      try {
+        const capturedBrowserContext = await browserContext;
+        const resolved = await evaluateVariables(submission.trimmed, capturedBrowserContext);
+        const accepted =
+          submission.explicit === 'enqueue'
+            ? await submission.onEnqueue(
+                resolved,
+                submission.expectedThreadId,
+                capturedBrowserContext,
+              )
+            : await submission.onSend(
+                resolved,
+                submission.expectedThreadId,
+                capturedBrowserContext,
+              );
+        if (!accepted) {
+          setSteerHint(t('input.threadChangedBeforeSend'));
           setTimeout(() => setSteerHint(null), 3000);
+          return;
         }
+        if (submission.explicit === 'send') {
+          if (submission.running) {
+            setSteerHint(submission.steerable ? t('input.steered') : t('input.queuedInstead'));
+            setTimeout(() => setSteerHint(null), 3000);
+          }
+        }
+      } catch {
+        setSteerHint(t('input.variableExpansionFailed'));
+        setTimeout(() => setSteerHint(null), 3000);
       }
-    });
+    };
+    submissionTail.current = submissionTail.current.then(dispatch, dispatch);
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -265,15 +319,16 @@ export function PromptInput({
     <div className="px-4 pb-4 pt-1">
       {steerHint && <div className="mb-1.5 px-1 text-[11px] text-info">{steerHint}</div>}
 
-      <div
+      <InputGroup
+        data-disabled={disabled || undefined}
         className={cn(
-          'relative flex flex-col rounded-3xl border bg-muted px-2 py-1.5 shadow-soft transition-colors',
+          'h-auto flex-col rounded-3xl bg-muted px-2 py-1.5 shadow-soft',
           disabled && 'opacity-70',
           // Steerable running turn: dashed indigo border — a shape-channel
           // mode signal (Enter now steers instead of sending).
           running && steerable
             ? 'border-dashed border-primary/60'
-            : 'border-border focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-primary/20',
+            : 'focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-primary/20',
         )}
       >
         <TriggerMenu
@@ -286,27 +341,25 @@ export function PromptInput({
         {contextChips.length > 0 && (
           <div className="flex flex-wrap gap-1 px-2 pb-1.5 pt-1">
             {contextChips.map((chip, i) => (
-              <span
-                key={i}
-                className="flex items-center gap-1 rounded-full bg-accent px-2 py-0.5 text-[11px]"
-              >
-                <Paperclip className="size-3" /> {chip.label}
+              <Badge key={i} variant="secondary" className="max-w-full pr-0.5">
+                <Paperclip />
+                <span className="truncate">{chip.label}</span>
                 {chip.approxTokens !== undefined && (
                   <span className="text-faint-foreground">~{chip.approxTokens}tok</span>
                 )}
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
                   onClick={() => onRemoveChip(i)}
-                  className="text-faint-foreground hover:text-destructive"
                   aria-label={t('input.remove', { label: chip.label })}
                 >
-                  <X className="size-3" />
-                </button>
-              </span>
+                  <X />
+                </Button>
+              </Badge>
             ))}
           </div>
         )}
-        <textarea
+        <InputGroupTextarea
           ref={taRef}
           value={text}
           onChange={(e) => {
@@ -341,92 +394,124 @@ export function PromptInput({
               ? { maskImage: 'linear-gradient(to bottom, black 55%, transparent 95%)' }
               : undefined
           }
-          className="max-h-[45vh] min-h-[36px] w-full resize-none bg-transparent px-2.5 py-1.5 text-[14.5px] leading-[1.5] outline-none placeholder:text-faint-foreground disabled:cursor-not-allowed"
+          className="max-h-[45vh] min-h-9 py-2"
         />
         {/* Toolbar: [+ attach] | divider | pill strip … [primary circle] */}
-        <div className="flex items-center gap-1 px-1 pt-0.5">
+        <InputGroupAddon align="block-end" className="gap-1 px-1 pb-0 pt-0.5">
           {onAttachContext && (
             <>
-              <DropdownMenu onOpenChange={(open) => open && loadMenu()}>
+              <DropdownMenu
+                open={attachMenuOpen}
+                onOpenChange={(open) => {
+                  setAttachMenuOpen(open);
+                  if (open) loadMenu();
+                }}
+              >
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="size-8 shrink-0 rounded-full text-muted-foreground"
+                    className="shrink-0 rounded-full"
                     aria-label={t('input.attach')}
                     disabled={disabled}
                   >
-                    <Plus className="size-4" />
+                    <Plus />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" side="top" className="w-48">
-                  {onAttachFile && (
-                    <DropdownMenuItem onSelect={() => fileRef.current?.click()}>
-                      <Upload data-icon="inline-start" /> Upload file
-                    </DropdownMenuItem>
-                  )}
-                  <DropdownMenuSub>
-                    <DropdownMenuSubTrigger>
-                      <FileText className="mr-2 size-4 text-muted-foreground" />{' '}
-                      {t('input.attachPage')}
-                    </DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent className="max-h-64 w-64 overflow-y-auto">
-                      {menuTabs === null ? (
-                        <DropdownMenuLabel className="text-[12px] font-normal text-faint-foreground">
-                          {t('model.loading')}
-                        </DropdownMenuLabel>
-                      ) : menuTabs.length === 0 ? (
-                        <DropdownMenuLabel className="text-[12px] font-normal text-faint-foreground">
-                          {t('input.noTabs')}
-                        </DropdownMenuLabel>
-                      ) : (
-                        menuTabs.map((tab) => (
-                          <DropdownMenuItem
-                            key={tab.id}
-                            onClick={() => void attachTab(tab.id, tab.url)}
-                          >
-                            <div className="flex min-w-0 flex-col">
-                              <span className="truncate text-[12px]">{tab.title}</span>
-                              <span className="truncate text-[11px] text-faint-foreground">
-                                {new URL(tab.url).hostname}
-                              </span>
-                            </div>
-                          </DropdownMenuItem>
-                        ))
+                {attachMenuOpen && (
+                  <DropdownMenuContent align="start" side="top" className="w-48">
+                    <DropdownMenuGroup>
+                      {onAttachFile && (
+                        <DropdownMenuItem
+                          onSelect={() => {
+                            if (attachmentUnavailableReason) {
+                              toast.info(attachmentUnavailableReason);
+                              return;
+                            }
+                            fileRef.current?.click();
+                          }}
+                        >
+                          <Upload data-icon="inline-start" /> {t('input.uploadFile')}
+                        </DropdownMenuItem>
                       )}
-                    </DropdownMenuSubContent>
-                  </DropdownMenuSub>
-                  <DropdownMenuSub>
-                    <DropdownMenuSubTrigger>
-                      <Sparkles className="mr-2 size-4 text-muted-foreground" /> Skills
-                    </DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent className="max-h-64 w-56 overflow-y-auto">
-                      {menuSkills === null ? (
-                        <DropdownMenuLabel className="text-[12px] font-normal text-faint-foreground">
-                          {t('model.loading')}
-                        </DropdownMenuLabel>
-                      ) : menuSkills.length === 0 ? (
-                        <DropdownMenuLabel className="text-[12px] font-normal text-faint-foreground">
-                          {t('input.noSkills')}
-                        </DropdownMenuLabel>
-                      ) : (
-                        menuSkills.map((cmd) => (
-                          <DropdownMenuItem key={cmd.skillName} onClick={() => pickSkill(cmd)}>
-                            <div className="flex min-w-0 flex-col">
-                              <span className="truncate font-mono text-[12px]">{cmd.command}</span>
-                              <span className="truncate text-[11px] text-faint-foreground">
-                                {cmd.description}
-                              </span>
-                            </div>
-                          </DropdownMenuItem>
-                        ))
-                      )}
-                    </DropdownMenuSubContent>
-                  </DropdownMenuSub>
-                </DropdownMenuContent>
+                      <DropdownMenuSub>
+                        <DropdownMenuSubTrigger>
+                          <FileText /> {t('input.attachPage')}
+                        </DropdownMenuSubTrigger>
+                        <DropdownMenuSubContent className="max-h-64 w-64 overflow-y-auto">
+                          <DropdownMenuGroup>
+                            {menuTabs === null ? (
+                              <DropdownMenuLabel className="text-[12px] font-normal text-faint-foreground">
+                                {t('model.loading')}
+                              </DropdownMenuLabel>
+                            ) : menuTabs.length === 0 ? (
+                              <DropdownMenuLabel className="text-[12px] font-normal text-faint-foreground">
+                                {t('input.noTabs')}
+                              </DropdownMenuLabel>
+                            ) : (
+                              menuTabs.map((tab) => (
+                                <DropdownMenuItem
+                                  key={tab.id}
+                                  onSelect={() => {
+                                    setAttachMenuOpen(false);
+                                    void attachTab(tab.id, tab.url);
+                                  }}
+                                >
+                                  <div className="flex min-w-0 flex-col">
+                                    <span className="truncate text-[12px]">{tab.title}</span>
+                                    <span className="truncate text-[11px] text-faint-foreground">
+                                      {new URL(tab.url).hostname}
+                                    </span>
+                                  </div>
+                                </DropdownMenuItem>
+                              ))
+                            )}
+                          </DropdownMenuGroup>
+                        </DropdownMenuSubContent>
+                      </DropdownMenuSub>
+                      <DropdownMenuSub>
+                        <DropdownMenuSubTrigger>
+                          <Sparkles /> {t('input.skills')}
+                        </DropdownMenuSubTrigger>
+                        <DropdownMenuSubContent className="max-h-64 w-56 overflow-y-auto">
+                          <DropdownMenuGroup>
+                            {menuSkills === null ? (
+                              <DropdownMenuLabel className="text-[12px] font-normal text-faint-foreground">
+                                {t('model.loading')}
+                              </DropdownMenuLabel>
+                            ) : menuSkills.length === 0 ? (
+                              <DropdownMenuLabel className="text-[12px] font-normal text-faint-foreground">
+                                {t('input.noSkills')}
+                              </DropdownMenuLabel>
+                            ) : (
+                              menuSkills.map((cmd) => (
+                                <DropdownMenuItem
+                                  key={cmd.skillName}
+                                  onSelect={() => {
+                                    setAttachMenuOpen(false);
+                                    pickSkill(cmd);
+                                  }}
+                                >
+                                  <div className="flex min-w-0 flex-col">
+                                    <span className="truncate font-mono text-[12px]">
+                                      {cmd.command}
+                                    </span>
+                                    <span className="truncate text-[11px] text-faint-foreground">
+                                      {cmd.description}
+                                    </span>
+                                  </div>
+                                </DropdownMenuItem>
+                              ))
+                            )}
+                          </DropdownMenuGroup>
+                        </DropdownMenuSubContent>
+                      </DropdownMenuSub>
+                    </DropdownMenuGroup>
+                  </DropdownMenuContent>
+                )}
               </DropdownMenu>
               {onAttachFile && (
-                <input
+                <Input
                   ref={fileRef}
                   type="file"
                   className="sr-only"
@@ -439,16 +524,12 @@ export function PromptInput({
                   }}
                 />
               )}
-              <div className="mx-0.5 h-4 w-px shrink-0 bg-border" />
+              <Separator orientation="vertical" className="mx-0.5 h-4" />
             </>
           )}
           <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none]">
             {onSelectPolicy && (
-              <PermissionSwitch
-                value={approvalPolicy}
-                planMode={planMode}
-                onSelect={onSelectPolicy}
-              />
+              <PermissionSwitch value={permissionPolicy} onSelect={onSelectPolicy} />
             )}
             {onSelectModel && (
               <ModelSelector
@@ -463,10 +544,10 @@ export function PromptInput({
               size="icon"
               aria-label={t('input.stop')}
               title={`${t('input.stop')} (Esc)`}
-              className="size-8 shrink-0 rounded-full bg-foreground text-background transition-transform hover:scale-105 hover:bg-foreground"
+              className="shrink-0 rounded-full"
               onClick={onStop}
             >
-              <Square className="size-2.5 fill-current" />
+              <Square />
             </Button>
           ) : (
             <Button
@@ -474,14 +555,14 @@ export function PromptInput({
               aria-label={t('input.send')}
               title={`${t('input.send')} (Enter)`}
               disabled={disabled || (!text.trim() && contextChips.length === 0)}
-              className="size-8 shrink-0 rounded-full disabled:bg-accent disabled:text-faint-foreground disabled:opacity-100"
+              className="shrink-0 rounded-full"
               onClick={() => submit('send')}
             >
-              <ArrowUp className="size-4" />
+              <ArrowUp />
             </Button>
           )}
-        </div>
-      </div>
+        </InputGroupAddon>
+      </InputGroup>
       <div className="mt-1.5 px-2 text-center text-[11px] text-faint-foreground">
         {running ? t('input.hintRunning') : t('input.hintIdle')}
       </div>
@@ -489,7 +570,11 @@ export function PromptInput({
       <SkillVariableForm
         command={variableForm}
         onClose={() => setVariableForm(null)}
-        onSubmit={(composed) => onSend(composed)}
+        onSubmit={(composed) => {
+          void captureSubmissionBrowserContext([...contextChips]).then((browserContext) =>
+            onSend(composed, submissionThreadId, browserContext),
+          );
+        }}
       />
     </div>
   );

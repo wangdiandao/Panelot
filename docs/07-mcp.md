@@ -16,24 +16,29 @@ McpManager (background)
  └─ Registry 桥接 —— tools → AgentTool；prompts → `/server:prompt`；resources → `@`
 ```
 
-offscreen document 只承载网络会话，没有可见 UI 或页面访问能力；把 SDK 从 background bundle 分离是为满足 MV3 Service Worker 生命周期与包体预算。
+offscreen document 承载网络会话和数据导入 canonical 校验，没有可见 UI 或页面访问能力。数据导入通道使用固定 Port 名、扩展 ID 与精确 worker URL 鉴权，并由 background 对输入与校验结果分别复算 digest；把 SDK 和重型导入校验器从 background bundle 分离是为满足 MV3 Service Worker 生命周期与包体预算。
 
 ## 2. 服务器配置
 
 ```ts
 // chrome.storage.local: 'mcp_servers'
 interface McpServerConfig {
-  id: string; name: string;
-  url: string;                               // https://mcp.example.com/mcp
+  id: string;
+  name: string;
+  url: string; // https://mcp.example.com/mcp
   auth:
     | { kind: 'none' }
     | { kind: 'bearer'; token: string }
-    | { kind: 'oauth'; clientId?: string;    // 缺省走动态客户端注册（DCR）
+    | {
+        kind: 'oauth';
+        clientId?: string; // 缺省走动态客户端注册（DCR）
         scopes?: string[];
-        tokens?: { access: string; refresh?: string; expiresAt: number } };  // access 存 storage.session
+        binding?: { resource: string; issuer: string }; // clientId/token 的安全绑定
+        tokens?: { access: string; refresh?: string; expiresAt: number };
+      }; // access 存 storage.session
   enabled: boolean;
-  disabledTools: string[];                    // 逐工具启停
-  connectOnStartup: boolean;                  // false 时首次使用再懒连接
+  disabledTools: string[]; // 逐工具启停
+  connectOnStartup: boolean; // false 时首次使用再懒连接
 }
 ```
 
@@ -42,6 +47,8 @@ interface McpServerConfig {
 后台启动只连接 `enabled && connectOnStartup` 的服务器；其它 enabled 服务器在首次列能力或调用时懒连接。storage 变化会 reconcile 已连接会话。
 
 ## 3. OAuth 2.1 时序
+
+实现以 MCP Authorization `2025-06-18` 为兼容底线，并采用 `2025-11-25` 已明确的 discovery、OIDC fallback、scope challenge 与 PKCE 能力校验规则。当前固定使用仓库已安装的 `@modelcontextprotocol/sdk` `1.29.0`，复用其 `WWW-Authenticate` 解析；PRM 与授权服务器 discovery 按 SDK 的端点顺序最小实现于后台，因为直接引入 SDK auth discovery 会使 MV3 `background.js` 超过仓库 350 KiB 预算。该最小实现不包含 SDK 的 CORS 去除请求头重试，但保留 `redirect: 'error'`，并额外执行同源 PRM、resource、issuer、远程 HTTPS 与 `S256` 校验。当前没有可公开托管的 Client ID Metadata Document，因此仍使用预配置 client ID 或 DCR，不声明 CIMD 支持。
 
 ```mermaid
 sequenceDiagram
@@ -52,7 +59,9 @@ sequenceDiagram
 
   UI->>SW: 添加服务器（kind: oauth）
   SW->>RS: 初始请求 → 401 + WWW-Authenticate（resource metadata URL）
-  SW->>AS: GET /.well-known/oauth-authorization-server（发现端点）
+  SW->>RS: GET resource_metadata 或标准 PRM well-known
+  RS-->>SW: resource + authorization_servers + scopes
+  SW->>AS: RFC 8414 / OIDC well-known（发现端点并校验 issuer、S256）
   opt 无预配置 clientId
     SW->>AS: POST /register（动态客户端注册，redirect_uri = chrome.identity 回调 URL）
   end
@@ -64,17 +73,22 @@ sequenceDiagram
 ```
 
 - redirect_uri 固定为 `https://<extension-id>.chromiumapp.org/mcp-oauth`；
-- OAuth access token 仅存 `chrome.storage.session`；refresh token 和 Bearer token 在 local 中使用本机 AES-GCM 封装。401 时先尝试 refresh/重新授权，失败把 manager 状态标记为“需要重新授权”；
+- 401 中的 `resource_metadata` 优先于 well-known 探测，但只接受与 MCP URL 同源的远程 HTTPS URL（显式 loopback 开发地址可用 HTTP）；缺少该参数时按 path-aware PRM、root PRM 顺序回退；
+- PRM 的 `resource` 必须与 canonical MCP resource 匹配，`authorization_servers` 必须非空。首次发现多个授权服务器时不猜测选择并返回明确错误；已有 resource + issuer 绑定仍在列表中时可继续选择原 issuer；
+- issuer 含 path 时依次尝试 RFC 8414 path insertion、OIDC path insertion、OIDC path append；无 path 时依次尝试 RFC 8414 与 OIDC。返回 metadata 的 `issuer` 必须与所选 issuer 完全一致，并明确声明 `code_challenge_methods_supported: ['S256', ...]`；
+- challenge 的 `scope` 是本次授权的权威输入；运行中收到 `403 insufficient_scope` 时执行 step-up authorization；没有 challenge scope 时才使用 PRM 或服务器配置的 scopes；
+- client ID、access token 与 refresh token 都绑定到 canonical resource + issuer。PRM 改变 issuer 或服务器 URL 改变 resource 后，旧 client ID/token 不会发送给新授权服务器；access token 的 session key 与 refresh token 的 AES-GCM purpose 也按该绑定隔离；
+- OAuth access token 仅存 `chrome.storage.session`；refresh token 和 Bearer token 在 local 中使用本机 AES-GCM 封装。401 时先尝试 refresh/重新授权，失败把 manager 状态标记为明确的 discovery/授权错误；
 - 当前 OAuth 从设置页“授权”按钮触发 `launchWebAuthFlow({interactive:true})`。无 UI 的后台任务无法完成交互式重授权，manager 只会进入 error 状态；尚无任务暂停通知或系统通知链路。
 
 ## 4. 能力消费映射
 
-| MCP 能力 | 当前状态 | 说明 |
-|---|---|---|
-| Tools | 已接入 `AgentTool`，name = `mcp__{serverId}__{tool}` | `annotations.readOnlyHint` → effects:'read'，未声明一律 'write'；原始 inputSchema 通过 `AgentTool.jsonSchema` 原样送达 Provider，运行时保留宽松解析并由 server 最终校验 |
-| Prompts | 已接入 `/server:prompt` 与参数表单 | manager 调用 `prompts/get`，返回内容作为不可信 ContextBlock 附加到用户消息 |
-| Resources | 已接入 `@` 搜索与读取 | `resources/list` 形成候选；选择后 `readResource`，内容随机定界且标记 MCP provenance |
-| notifications/tools/list_changed | 已监听 | offscreen Client 刷新 catalog 并通知 background 重建工具注册表 |
+| MCP 能力                         | 当前状态                                             | 说明                                                                                                                                                                                                                                                                                         |
+| -------------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tools                            | 已接入 `AgentTool`，name = `mcp__{serverId}__{tool}` | 当前没有服务器可信配置，所有远程工具均以 effects:'write' / never-retry 注册并进入写工具审批策略；`annotations.readOnlyHint` 等服务器自报 annotation 只作展示，不能降低审批或重试风险。原始 inputSchema 通过 `AgentTool.jsonSchema` 原样送达 Provider，运行时保留宽松解析并由 server 最终校验 |
+| Prompts                          | 已接入 `/server:prompt` 与参数表单                   | manager 调用 `prompts/get`，返回内容作为不可信 ContextBlock 附加到用户消息                                                                                                                                                                                                                   |
+| Resources                        | 已接入 `@` 搜索与读取                                | `resources/list` 形成候选；选择后 `readResource`，内容随机定界且标记 MCP provenance                                                                                                                                                                                                          |
+| notifications/tools/list_changed | 已监听                                               | offscreen Client 刷新 catalog 并通知 background 重建工具注册表                                                                                                                                                                                                                               |
 
 工具调用超时 60s；结果按 05 §7 同样的体积规范截断。
 

@@ -38,8 +38,7 @@ function ctx(overrides?: Partial<GatekeeperContext>): GatekeeperContext {
   return {
     threadId: 't1',
     targetOrigin: 'https://shop.example.com',
-    approvalPolicy: 'untrusted',
-    capabilityScope: 'full',
+    permissionPolicy: 'untrusted',
     scopeOrigins: ['https://shop.example.com'],
     rules: [],
     sensitivePatterns: DEFAULT_SENSITIVE_PATTERNS,
@@ -155,8 +154,8 @@ describe('sensitive origins & payloads', () => {
 
 // ---------------------------------------------------------------------------
 // Blacklist-only model (owner decision 2026-07-04): reads are NEVER gated;
-// writes go through blacklist → read-only gate → sensitive payload → rules →
-// policy. No origin whitelist, no cross-scope forced ask.
+// writes go through blacklist → sensitive payload → rules → policy.
+// No origin whitelist, no cross-scope forced ask.
 // ---------------------------------------------------------------------------
 
 describe('step 0: reads are never intercepted', () => {
@@ -180,22 +179,17 @@ describe('step 0: reads are never intercepted', () => {
     );
     expect(v.verdict).toBe('allow');
   });
-
-  it('allows reads even under read-only capability', () => {
-    expect(checkGate(readCall(), ctx({ capabilityScope: 'read-only' })).verdict).toBe('allow');
-  });
 });
 
 describe('step 1: sensitive blacklist is an unoverridable DENY for writes', () => {
-  it('denies writes even with an explicit allow rule and never policy', () => {
+  it('denies writes even with an explicit allow rule and auto policy', () => {
     const v = checkGate(
       writeCall(),
       ctx({
         targetOrigin: 'https://www.chase.com',
         scopeOrigins: ['https://www.chase.com'],
         rules: [rule({ tool: '*', origin: '*', verdict: 'allow' })],
-        capabilityScope: 'full',
-        approvalPolicy: 'never',
+        permissionPolicy: 'auto',
       }),
     );
     expect(v.verdict).toBe('deny');
@@ -203,37 +197,7 @@ describe('step 1: sensitive blacklist is an unoverridable DENY for writes', () =
   });
 });
 
-describe('step 2: read-only capability denies all writes', () => {
-  it('denies writes regardless of policy and rules', () => {
-    for (const policy of ['untrusted', 'on-request', 'never', 'granular'] as const) {
-      const v = checkGate(
-        writeCall(),
-        ctx({
-          capabilityScope: 'read-only',
-          approvalPolicy: policy,
-          rules: [rule({ verdict: 'allow' })],
-        }),
-      );
-      expect(v.verdict).toBe('deny');
-    }
-  });
-
-  it('legacy whitelist scopes behave like full (write asks, not denied)', () => {
-    for (const scope of ['same-origin-write', 'cross-origin', 'full'] as const) {
-      const v = checkGate(
-        writeCall(),
-        ctx({
-          capabilityScope: scope,
-          targetOrigin: 'https://other.com',
-          scopeOrigins: ['https://shop.example.com'],
-        }),
-      );
-      expect(v.verdict).toBe('ask');
-    }
-  });
-});
-
-describe('step 3: sensitive payload forces ASK with flag', () => {
+describe('step 2: sensitive payload forces ASK with flag', () => {
   it('credential-shaped write params trigger the warning flag', () => {
     const v = checkGate(
       writeCall('type', { element: '密码框', ref: 's1_2', password: 'hunter2' }),
@@ -256,17 +220,16 @@ describe('step 3: sensitive payload forces ASK with flag', () => {
     expect((v as { request: { flags: string[] } }).request.flags).toContain('sensitive_payload');
   });
 
-  it('never + sensitive payload = deny (never is not auto-approve)', () => {
+  it('keeps an explicit deny rule stronger than the sensitive-payload prompt', () => {
     const v = checkGate(
-      writeCall('type', { element: '密码框', ref: 's1_2', password: 'hunter2' }),
-      ctx({ approvalPolicy: 'never' }),
+      writeCall('type', { ref: 's1_2', password: 'hunter2' }),
+      ctx({ rules: [rule({ tool: 'type', verdict: 'deny' })] }),
     );
     expect(v.verdict).toBe('deny');
-    expect((v as { reason: string }).reason).toMatch(/never/);
   });
 });
 
-describe('step 4-5: session grants and rule table', () => {
+describe('step 3-4: session grants and rule table', () => {
   it('allow rule lets a write through silently', () => {
     const v = checkGate(
       writeCall(),
@@ -311,12 +274,11 @@ describe('step 4-5: session grants and rule table', () => {
   });
 
   it('ask rule forces confirmation even where the policy default would allow', () => {
-    // on-request would normally allow after a session grant; the ask rule
-    // overrides both the grant and any allow rule.
+    // The ask rule overrides both a session grant and any allow rule.
     const v = checkGate(
       writeCall(),
       ctx({
-        approvalPolicy: 'on-request',
+        permissionPolicy: 'auto',
         sessionGrants: new Set(['click https://shop.example.com']),
         rules: [
           rule({ tool: 'click', origin: 'https://shop.example.com', verdict: 'ask' }),
@@ -327,25 +289,13 @@ describe('step 4-5: session grants and rule table', () => {
     expect(v.verdict).toBe('ask');
   });
 
-  it('ask rule under never policy degrades to deny (never ≠ auto-approve)', () => {
-    const v = checkGate(
-      writeCall(),
-      ctx({
-        approvalPolicy: 'never',
-        rules: [rule({ tool: 'click', origin: '*', verdict: 'ask' })],
-      }),
-    );
-    expect(v.verdict).toBe('deny');
-    expect((v as { reason: string }).reason).toMatch(/never/);
-  });
-
   it('category ask rule gates every tool in the category', () => {
     const rules = [rule({ tool: 'category:fill', origin: '*', verdict: 'ask' })];
     for (const tool of ['type', 'select_option', 'press_key', 'batch_actions']) {
       const v = checkGate(
         writeCall(tool, { element: 'x', ref: 's1_1' }),
         ctx({
-          approvalPolicy: 'on-request',
+          permissionPolicy: 'auto',
           sessionGrants: new Set([`${tool} https://shop.example.com`]),
           rules,
         }),
@@ -362,7 +312,7 @@ describe('destination-origin attribution (navigate/tab_open/download)', () => {
       ctx({
         targetOrigin: 'https://shop.example.com',
         rules: [rule({ verdict: 'allow' })],
-        approvalPolicy: 'never',
+        permissionPolicy: 'auto',
       }),
     );
     expect(v.verdict).toBe('deny');
@@ -435,7 +385,7 @@ describe('destination-origin attribution (navigate/tab_open/download)', () => {
         params: { url: 'https://www.chase.com./transfer' },
         effects: 'write',
       },
-      ctx({ rules: [rule({ verdict: 'allow' })], approvalPolicy: 'never' }),
+      ctx({ rules: [rule({ verdict: 'allow' })], permissionPolicy: 'auto' }),
     );
     expect(v.verdict).toBe('deny');
   });
@@ -455,23 +405,17 @@ describe('destination-origin attribution (navigate/tab_open/download)', () => {
   });
 });
 
-describe('step 6: policy defaults', () => {
+describe('step 5: policy defaults', () => {
   it.each([
     ['always', 'read', 'ask'],
     ['always', 'write', 'ask'],
     ['untrusted', 'read', 'allow'],
     ['untrusted', 'write', 'ask'],
-    ['on-request', 'read', 'allow'],
-    ['on-request', 'write', 'ask'],
-    ['never', 'read', 'allow'],
-    ['never', 'write', 'deny'],
-    ['granular', 'read', 'allow'],
-    ['granular', 'write', 'ask'],
     ['auto', 'read', 'allow'],
     ['auto', 'write', 'allow'],
   ] as const)('%s × %s → %s', (policy, effects, expected) => {
     const call = effects === 'read' ? readCall() : writeCall();
-    const v = checkGate(call, ctx({ approvalPolicy: policy }));
+    const v = checkGate(call, ctx({ permissionPolicy: policy }));
     expect(v.verdict).toBe(expected);
   });
 
@@ -488,22 +432,36 @@ describe('step 6: policy defaults', () => {
 describe('always tier: reads are gated as ASK (never DENY)', () => {
   it('a session grant silences repeat read asks', () => {
     const grants = new Set(['read_page https://shop.example.com']);
-    const v = checkGate(readCall(), ctx({ approvalPolicy: 'always', sessionGrants: grants }));
+    const v = checkGate(readCall(), ctx({ permissionPolicy: 'always', sessionGrants: grants }));
     expect(v.verdict).toBe('allow');
   });
 
   it('reads on blacklisted origins still ASK, not DENY (reads are never blocked)', () => {
     const v = checkGate(
       readCall(),
-      ctx({ approvalPolicy: 'always', targetOrigin: 'https://www.icbc.com.cn' }),
+      ctx({ permissionPolicy: 'always', targetOrigin: 'https://www.icbc.com.cn' }),
     );
     expect(v.verdict).toBe('ask');
   });
 
-  it('ALWAYS_ALLOW plumbing tools (todo_write) skip even the always tier', () => {
+  it('L2 reads preserve escalation and snapshot preview details in the approval', () => {
     const v = checkGate(
-      { toolName: 'todo_write', params: {}, effects: 'write' },
-      ctx({ approvalPolicy: 'always' }),
+      { toolName: 'screenshot', params: {}, effects: 'read', level: 'L2' },
+      ctx({ permissionPolicy: 'always', previewLine: 'button "Confirm"' }),
+    );
+    expect(v.verdict).toBe('ask');
+    expect(v).toMatchObject({
+      request: {
+        flags: ['escalation_l2'],
+        preview: { snapshotLine: 'button "Confirm"' },
+      },
+    });
+  });
+
+  it('ALWAYS_ALLOW plumbing tools (load_skill) skip even the always tier', () => {
+    const v = checkGate(
+      { toolName: 'load_skill', params: {}, effects: 'write' },
+      ctx({ permissionPolicy: 'always' }),
     );
     expect(v.verdict).toBe('allow');
   });
@@ -513,7 +471,7 @@ describe('auto tier: the safety floor survives auto-approval', () => {
   it('sensitive-origin blacklist still DENIES writes', () => {
     const v = checkGate(
       writeCall(),
-      ctx({ approvalPolicy: 'auto', targetOrigin: 'https://www.icbc.com.cn' }),
+      ctx({ permissionPolicy: 'auto', targetOrigin: 'https://www.icbc.com.cn' }),
     );
     expect(v.verdict).toBe('deny');
   });
@@ -521,7 +479,7 @@ describe('auto tier: the safety floor survives auto-approval', () => {
   it('sensitive payload still forces ASK', () => {
     const v = checkGate(
       writeCall('type', { ref: 's1_1', text: '4111 1111 1111 1111' }),
-      ctx({ approvalPolicy: 'auto' }),
+      ctx({ permissionPolicy: 'auto' }),
     );
     expect(v.verdict).toBe('ask');
     expect((v as { request: { flags: string[] } }).request.flags).toContain('sensitive_payload');
@@ -530,19 +488,14 @@ describe('auto tier: the safety floor survives auto-approval', () => {
   it('rule-table deny and ask still hold', () => {
     const deny = checkGate(
       writeCall(),
-      ctx({ approvalPolicy: 'auto', rules: [rule({ tool: 'click', verdict: 'deny' })] }),
+      ctx({ permissionPolicy: 'auto', rules: [rule({ tool: 'click', verdict: 'deny' })] }),
     );
     expect(deny.verdict).toBe('deny');
     const ask = checkGate(
       writeCall(),
-      ctx({ approvalPolicy: 'auto', rules: [rule({ tool: 'click', verdict: 'ask' })] }),
+      ctx({ permissionPolicy: 'auto', rules: [rule({ tool: 'click', verdict: 'ask' })] }),
     );
     expect(ask.verdict).toBe('ask');
-  });
-
-  it('read-only capability still denies writes under auto', () => {
-    const v = checkGate(writeCall(), ctx({ approvalPolicy: 'auto', capabilityScope: 'read-only' }));
-    expect(v.verdict).toBe('deny');
   });
 });
 
@@ -558,8 +511,7 @@ describe('injection attack samples — hard gates hold when the model is deceive
       { toolName: 'click', params: { element: '转账确认', ref: 's1_1' }, effects: 'write' },
       ctx({
         targetOrigin: 'https://www.icbc.com.cn',
-        capabilityScope: 'full',
-        approvalPolicy: 'never',
+        permissionPolicy: 'auto',
         rules: [rule({ verdict: 'allow' })],
       }),
     );
@@ -602,14 +554,6 @@ describe('injection attack samples — hard gates hold when the model is deceive
           rule({ tool: 'run_javascript', origin: '*', verdict: 'deny', source: 'user_setting' }),
         ],
       }),
-    );
-    expect(v.verdict).toBe('deny');
-  });
-
-  it('样本5: read-only 会话中注入诱导写操作 → 能力域硬拒', () => {
-    const v = checkGate(
-      writeCall('click', { element: '删除按钮', ref: 's3_1' }),
-      ctx({ capabilityScope: 'read-only', rules: [rule({ verdict: 'allow' })] }),
     );
     expect(v.verdict).toBe('deny');
   });

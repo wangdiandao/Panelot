@@ -40,6 +40,14 @@ describe('parseMcpJson (docs/07 §2 — Claude Code / Cursor import)', () => {
   it('rejects invalid JSON', () => {
     expect(() => parseMcpJson('{not json')).toThrow(/JSON/);
   });
+
+  it.each([
+    'http://mcp.example.com/mcp',
+    'https://user:pass@mcp.example.com/mcp',
+    'https://mcp.example.com/mcp#fragment',
+  ])('rejects an unsafe remote MCP URL: %s', (url) => {
+    expect(() => parseMcpJson(JSON.stringify({ unsafe: { url } }))).toThrow();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -75,7 +83,7 @@ function emptyCapabilityResult(method: string, id: number | string) {
 describe('McpClient', () => {
   it('performs the initialize handshake then lists capabilities', async () => {
     const calls: string[] = [];
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
       const body = JSON.parse((init as RequestInit).body as string);
       calls.push(body.method);
       if (body.method === 'initialize')
@@ -110,16 +118,28 @@ describe('McpClient', () => {
     expect(calls).toContain('notifications/initialized');
     expect(client.tools).toHaveLength(1);
     expect(client.tools[0]!.annotations?.readOnlyHint).toBe(true);
+    expect(fetchSpy.mock.calls.length).toBeGreaterThan(0);
+    for (const [, init] of fetchSpy.mock.calls) {
+      expect(init).toEqual(expect.objectContaining({ redirect: 'error' }));
+    }
   });
 
   it('re-authorizes once on 401 then retries', async () => {
     let unauthorizedCalls = 0;
+    let receivedChallenge: unknown;
     let firstCall = true;
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+    const onBeforeFetch = vi.fn(async () => undefined);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
       const body = JSON.parse((init as RequestInit).body as string);
       if (body.method === 'initialize' && firstCall) {
         firstCall = false;
-        return new Response('unauthorized', { status: 401 });
+        return new Response('unauthorized', {
+          status: 401,
+          headers: {
+            'WWW-Authenticate':
+              'Bearer resource_metadata="https://mcp.test/oauth/prm", scope="files:read"',
+          },
+        });
       }
       if (body.method === 'initialize') return jsonResponse(initializeResult(body.id));
       return jsonResponse(emptyCapabilityResult(body.method, body.id));
@@ -128,14 +148,68 @@ describe('McpClient', () => {
     const client = new McpClient({
       url: 'https://mcp.test/mcp',
       authHeader: async () => 'Bearer t',
-      onUnauthorized: async () => {
+      onBeforeFetch,
+      onUnauthorized: async (challenge) => {
         unauthorizedCalls++;
+        receivedChallenge = challenge;
         return true;
       },
     });
     // initialize triggers 401 → reauth → retry succeeds.
     await client.connect();
     expect(unauthorizedCalls).toBe(1);
+    expect(receivedChallenge).toEqual({
+      resourceMetadataUrl: 'https://mcp.test/oauth/prm',
+      scope: 'files:read',
+      error: undefined,
+    });
+    expect(onBeforeFetch).toHaveBeenCalledTimes(fetchSpy.mock.calls.length);
+  });
+
+  it('fails closed before network I/O when the host permission preflight rejects', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const client = new McpClient({
+      url: 'https://mcp.test/mcp',
+      authHeader: async () => null,
+      onBeforeFetch: async () => {
+        throw new Error('MCP host permission is required');
+      },
+    });
+
+    await expect(client.connect()).rejects.toThrow(/host permission/i);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('performs step-up authorization for an insufficient_scope challenge', async () => {
+    let firstCall = true;
+    const onUnauthorized = vi.fn(async () => true);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const body = JSON.parse((init as RequestInit).body as string);
+      if (body.method === 'initialize' && firstCall) {
+        firstCall = false;
+        return new Response('forbidden', {
+          status: 403,
+          headers: {
+            'WWW-Authenticate':
+              'Bearer error="insufficient_scope", scope="files:write", resource_metadata="https://mcp.test/oauth/prm"',
+          },
+        });
+      }
+      if (body.method === 'initialize') return jsonResponse(initializeResult(body.id));
+      return jsonResponse(emptyCapabilityResult(body.method, body.id));
+    });
+
+    const client = new McpClient({
+      url: 'https://mcp.test/mcp',
+      authHeader: async () => 'Bearer t',
+      onUnauthorized,
+    });
+    await client.connect();
+    expect(onUnauthorized).toHaveBeenCalledWith({
+      resourceMetadataUrl: 'https://mcp.test/oauth/prm',
+      scope: 'files:write',
+      error: 'insufficient_scope',
+    });
   });
 
   it('surfaces JSON-RPC errors', async () => {

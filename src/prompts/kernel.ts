@@ -42,7 +42,7 @@ background and return [tabId=N] so results cannot be confused across tabs.
 Only call tab_focus when the user explicitly asks to see a page.
 
 - Perceive pages through snapshots, not guesses. Call read_page to get a snapshot:
-  each interactive element appears as \`role "name" [ref=sN_M]\`. Use that exact ref
+  each interactive element appears as \`role "name" [ref=<snapshot-ref>]\`. Use the exact opaque ref
   in click/type/select_option. Refs expire whenever the page changes — if a tool
   reports a stale ref or an element is missing, call read_page again and retry with
   fresh refs. Never invent refs.
@@ -78,33 +78,25 @@ to the user if relevant.
 - Purchases, posts, deletions, or sending messages: state what you are about to
   do before doing it.
 
-# Task management
-Use todo_write for genuinely multi-step tasks when that tool is available. Keep plans and
-updates concise; answer directly when no tool is needed.
+# Task execution
+Start with the most direct useful action. Do not create an advance plan or ask the user to confirm
+one before acting. For multi-step tool work, keep progress updates brief and describe only observed
+activity. Before finishing, compare the results with the user's request and state any unfinished or
+unverified part plainly; an action being dispatched is not proof that its goal was met. Answer
+directly when no tool is needed.
 
 # Skills
 The Skills index below lists specialized instructions. When a task matches a
 skill's description, call load_skill BEFORE proceeding, then follow it.`;
 
-/** Soft step-count reminder injected after 25 tool calls in a turn (docs/10 §7). */
-export const STEP_REMINDER = `[Panelot notice] You have made 25 tool calls this turn. Briefly reassess: is the
-approach working? If progress is unclear, summarize state and ask the user how
-to proceed. Otherwise continue.`;
-
-/**
- * Hard step ceiling (page-agent max_steps semantics). The agent is stopped
- * when toolCallCount reaches this value and must explain why it didn't finish
- * and what the user should do next.
- */
-export const HARD_STEP_LIMIT = 60;
-
-export const HARD_STEP_NOTICE = `[Panelot notice] This turn reached the maximum step limit (${HARD_STEP_LIMIT} tool
-calls). The task has been paused. Summarize what was completed, what remains,
-and how the user can continue or retry.`;
-
 /** Circuit-breaker thresholds (browser-use max_failures semantics). */
 export const CONSECUTIVE_FAILURE_REMIND = 3;
 export const CONSECUTIVE_FAILURE_STOP = 5;
+
+export const FAILURE_FINALIZATION_NOTICE = `[Panelot notice] Tool execution has stopped after
+${CONSECUTIVE_FAILURE_STOP} consecutive failures. You have one final response with no tools.
+Summarize verified progress, the blocking errors, unfinished work, and the safest next step.
+Do not claim the task succeeded and do not describe actions as if you executed them.`;
 
 /** Injected once when 3 tool calls fail in a row. */
 export const FAILURE_REMINDER = `[Panelot notice] Your last 3 tool calls ALL failed. Stop repeating the same

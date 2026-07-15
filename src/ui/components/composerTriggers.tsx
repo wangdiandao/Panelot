@@ -7,8 +7,8 @@
  */
 
 import { useEffect, useState } from 'react';
-import type { ContextBlock } from '../../messaging/protocol';
-import { attachSelection, attachTab, listAttachableTabs } from '../pageContext';
+import type { ContextBlock, SubmissionBrowserContext } from '../../messaging/protocol';
+import { attachSelectionFromTab, attachTab, listAttachableTabs } from '../pageContext';
 import type { SkillFrontmatter, VariableDef } from '../../skills/parse';
 import type { TriggerItem, TriggerState } from './TriggerMenu';
 import { hostPermissionBroker } from '../../permissions/hostPermissionBroker';
@@ -22,21 +22,21 @@ export const DYNAMIC_VARIABLES = [
 ] as const;
 
 /** Evaluate {{VAR}} placeholders at submit time (docs/09 §5). */
-export async function evaluateVariables(text: string): Promise<string> {
+export async function evaluateVariables(
+  text: string,
+  browserContext?: SubmissionBrowserContext,
+): Promise<string> {
   if (!/\{\{(PAGE_URL|PAGE_TITLE|SELECTION|CLIPBOARD|CURRENT_DATE)\}\}/.test(text)) return text;
   const values = new Map<string, string>();
   values.set('CURRENT_DATE', new Date().toISOString().slice(0, 10));
   if (text.includes('{{PAGE_URL}}') || text.includes('{{PAGE_TITLE}}')) {
-    try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      values.set('PAGE_URL', tab?.url ?? '');
-      values.set('PAGE_TITLE', tab?.title ?? '');
-    } catch {
-      /* non-extension env */
-    }
+    values.set('PAGE_URL', browserContext?.defaultTab?.url ?? '');
+    values.set('PAGE_TITLE', browserContext?.defaultTab?.title ?? '');
   }
   if (text.includes('{{SELECTION}}')) {
-    const sel = await attachSelection();
+    const sel = browserContext?.defaultTab
+      ? await attachSelectionFromTab(browserContext.defaultTab)
+      : null;
     const first = sel?.content[0];
     values.set('SELECTION', first?.type === 'text' ? first.text : '');
   }

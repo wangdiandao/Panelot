@@ -10,6 +10,9 @@ import { toast } from 'sonner';
 import { Button } from '../components/ui/button';
 import { Switch } from '../components/ui/switch';
 import { Textarea } from '../components/ui/textarea';
+import { Label } from '../components/ui/label';
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '../components/ui/empty';
+import { FieldError } from '../components/ui/field';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../components/ui/collapsible';
 import {
   AlertDialog,
@@ -21,9 +24,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '../components/ui/alert-dialog';
-import { parseMcpJson, type McpServerConfig } from '../../mcp/types';
+import {
+  parseMcpJson,
+  type McpOAuthPermissionRequired,
+  type McpServerConfig,
+} from '../../mcp/types';
 import { listMcpServers, saveMcpServers } from '../../mcp/store';
 import { hostPermissionBroker } from '../../permissions/hostPermissionBroker';
+import { cn } from '../lib/utils';
+import { t } from '../i18n';
 
 export function McpPage() {
   const [servers, setServers] = useState<McpServerConfig[]>([]);
@@ -32,14 +41,22 @@ export function McpPage() {
   const [importOpen, setImportOpen] = useState(false);
   const [deleting, setDeleting] = useState<McpServerConfig | null>(null);
   const [descriptions, setDescriptions] = useState<Record<string, McpDescription>>({});
+  const [permissionPlans, setPermissionPlans] = useState<
+    Record<string, McpOAuthPermissionRequired>
+  >({});
 
   const loadDescription = useCallback(async (id: string, connect = false) => {
     const response = (await chrome.runtime.sendMessage({
       type: connect ? 'panelot.mcpConnect' : 'panelot.mcpStatus',
       id,
-    })) as { ok: boolean; error?: string; description?: McpDescription };
+    })) as McpResponse;
     if (response.description) {
       setDescriptions((current) => ({ ...current, [id]: response.description! }));
+    }
+    if (response.permissionRequired) {
+      setPermissionPlans((current) => ({ ...current, [id]: response.permissionRequired! }));
+    } else if (response.ok && connect) {
+      setPermissionPlans((current) => withoutKey(current, id));
     }
     if (!response.ok && response.error) toast.error(response.error);
   }, []);
@@ -71,39 +88,76 @@ export function McpPage() {
       }));
       for (const server of added) {
         const granted = await hostPermissionBroker.request(server.url);
-        if (!granted) throw new Error(`未授予 ${server.url} 的访问权限`);
+        if (!granted) throw new Error(t('settings.mcp.permissionDenied', { url: server.url }));
       }
       await save([...servers, ...added]);
       setImportText('');
       setImportOpen(false);
       setError(null);
-      toast.success(`已添加 ${added.length} 个服务器`);
+      toast.success(t('settings.mcp.added', { n: added.length }));
     } catch (e) {
       setError((e as Error).message);
     }
   };
 
-  const requestHost = async (url: string) => {
+  const requestHost = async (url: string): Promise<boolean> => {
     try {
-      await hostPermissionBroker.request(url);
+      return await hostPermissionBroker.request(url);
     } catch {
-      /* non-extension env */
+      return false;
     }
   };
 
+  const runOAuth = async (server: McpServerConfig, plan?: McpOAuthPermissionRequired) => {
+    const granted = plan
+      ? await hostPermissionBroker.requestAll(plan.origins)
+      : await requestHost(server.url);
+    if (!granted) {
+      toast.error(
+        t('settings.mcp.permissionDenied', { url: plan?.origins.join(', ') ?? server.url }),
+      );
+      return;
+    }
+    const response = (await chrome.runtime.sendMessage({
+      type: 'panelot.mcpOauth',
+      id: server.id,
+      permissionApproval: plan ? { stage: plan.stage, planDigest: plan.planDigest } : undefined,
+    })) as McpResponse;
+    if (response.permissionRequired) {
+      setPermissionPlans((current) => ({
+        ...current,
+        [server.id]: response.permissionRequired!,
+      }));
+      return;
+    }
+    if (!response.ok) {
+      toast.error(response.error ?? t('settings.mcp.oauthFailed'));
+      return;
+    }
+    setPermissionPlans((current) => withoutKey(current, server.id));
+    if (response.description) {
+      setDescriptions((current) => ({ ...current, [server.id]: response.description! }));
+    } else {
+      await loadDescription(server.id);
+    }
+    toast.success(t('settings.mcp.oauthComplete'));
+  };
+
   return (
-    <div className="max-w-2xl space-y-3">
+    <div className="flex max-w-2xl flex-col gap-3">
       <div className="flex items-center">
-        <h2 className="text-[15px] font-semibold">MCP 服务器</h2>
+        <h2 className="text-[15px] font-semibold">{t('settings.section.mcp')}</h2>
         <Button size="sm" className="ml-auto" onClick={() => setImportOpen((v) => !v)}>
-          粘贴 JSON 导入
+          {t('settings.mcp.importJson')}
         </Button>
       </div>
 
       <Collapsible open={importOpen} onOpenChange={setImportOpen}>
-        <CollapsibleTrigger className="sr-only">导入配置</CollapsibleTrigger>
+        <CollapsibleTrigger className="sr-only">
+          {t('settings.mcp.importConfig')}
+        </CollapsibleTrigger>
         <CollapsibleContent>
-          <div className="space-y-2 rounded-lg border border-border p-3">
+          <div className="flex flex-col gap-2 rounded-lg border border-border p-3">
             <Textarea
               value={importText}
               onChange={(e) => setImportText(e.target.value)}
@@ -113,25 +167,26 @@ export function McpPage() {
               }
               className="font-mono text-[12px]"
             />
-            <div className="text-[11px] text-muted-foreground">
-              兼容 Claude Code mcpServers / Cursor 配置片段（识别 url / type /
-              headers.Authorization）。
-            </div>
-            {error && <div className="text-[12px] text-destructive">{error}</div>}
+            <div className="text-[11px] text-muted-foreground">{t('settings.mcp.compatHint')}</div>
+            {error && <FieldError>{error}</FieldError>}
             <Button variant="outline" size="sm" onClick={() => void doImport()}>
-              解析并添加
+              {t('settings.mcp.parseAdd')}
             </Button>
           </div>
         </CollapsibleContent>
       </Collapsible>
 
       {servers.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border p-6 text-center text-[13px] text-muted-foreground">
-          还没有 MCP 服务器。粘贴一份配置片段即可接入远端工具。
-        </div>
+        <Empty className="border border-dashed p-6 md:p-6">
+          <EmptyHeader>
+            <EmptyTitle className="text-base">{t('settings.mcp.emptyTitle')}</EmptyTitle>
+            <EmptyDescription>{t('settings.mcp.emptyHint')}</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       ) : (
         servers.map((s) => {
           const description = descriptions[s.id];
+          const permissionPlan = permissionPlans[s.id];
           return (
             <div key={s.id} className="rounded-lg border border-border bg-card px-4 py-3">
               <div className="flex items-center gap-3">
@@ -142,51 +197,52 @@ export function McpPage() {
                       () => refresh(),
                     )
                   }
-                  aria-label={`启用 ${s.name}`}
+                  aria-label={t('settings.mcp.enable', { name: s.name })}
                 />
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 text-[13px] font-medium">
                     {s.name}
                     <span
-                      className={`size-1.5 rounded-full ${description?.state.status === 'ready' ? 'bg-success' : description?.state.status === 'error' ? 'bg-destructive' : 'bg-muted-foreground'}`}
+                      className={cn(
+                        'size-1.5 rounded-full',
+                        description?.state.status === 'ready'
+                          ? 'bg-success'
+                          : description?.state.status === 'error'
+                            ? 'bg-destructive'
+                            : 'bg-muted-foreground',
+                      )}
                     />
                     <span className="text-[10px] font-normal text-faint-foreground">
-                      {description?.state.status ?? 'disconnected'}
+                      {t(`settings.mcp.status.${description?.state.status ?? 'disconnected'}`)}
                     </span>
                   </div>
                   <div className="truncate font-mono text-[11px] text-muted-foreground">
-                    {s.url} · {s.auth.kind}
+                    {s.url} · {t(`settings.mcp.auth.${s.auth.kind}`)}
                   </div>
                 </div>
                 <div className="ml-auto flex gap-2">
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => void requestHost(s.url).then(() => loadDescription(s.id, true))}
+                    onClick={() =>
+                      void requestHost(s.url).then((granted) => {
+                        if (granted) return loadDescription(s.id, true);
+                        toast.error(t('settings.mcp.permissionDenied', { url: s.url }));
+                      })
+                    }
                     disabled={!s.enabled || description?.state.status === 'connecting'}
                   >
-                    {description?.state.status === 'ready' ? '重新连接' : '连接测试'}
+                    {description?.state.status === 'ready'
+                      ? t('settings.mcp.reconnect')
+                      : t('settings.mcp.test')}
                   </Button>
                   {s.auth.kind === 'oauth' && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        void requestHost(s.url).then(() =>
-                          chrome.runtime.sendMessage({ type: 'panelot.mcpOauth', id: s.id }),
-                        )
-                      }
-                    >
-                      授权
+                    <Button variant="outline" size="sm" onClick={() => void runOAuth(s)}>
+                      {t('settings.mcp.authorize')}
                     </Button>
                   )}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                    onClick={() => setDeleting(s)}
-                  >
-                    删除
+                  <Button variant="destructive" size="sm" onClick={() => setDeleting(s)}>
+                    {t('settings.mcp.delete')}
                   </Button>
                 </div>
               </div>
@@ -195,18 +251,75 @@ export function McpPage() {
                   {description.state.reason}
                 </div>
               )}
+              {permissionPlan && (
+                <div className="mt-2 flex flex-col gap-2 rounded-md border border-warning/40 bg-warning/10 p-3 text-[11px]">
+                  <div className="font-medium text-foreground">
+                    {t('settings.mcp.permissionTitle')}
+                  </div>
+                  <div className="break-all text-muted-foreground">
+                    {t('settings.mcp.permissionResource', {
+                      resource: permissionPlan.summary.resource,
+                    })}
+                  </div>
+                  {permissionPlan.summary.issuer && (
+                    <div className="break-all text-muted-foreground">
+                      {t('settings.mcp.permissionIssuer', {
+                        issuer: permissionPlan.summary.issuer,
+                      })}
+                    </div>
+                  )}
+                  {permissionPlan.originReasons.length > 0 ? (
+                    <ul className="flex list-disc flex-col gap-1 pl-4">
+                      {permissionPlan.originReasons.map(({ origin, reason }) => (
+                        <li key={origin}>
+                          <code className="break-all">{origin}</code>
+                          <span className="text-muted-foreground"> — {reason}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <div className="text-muted-foreground">
+                      {t(
+                        permissionPlan.reason === 'plan_expired'
+                          ? 'settings.mcp.permissionPlanExpired'
+                          : 'settings.mcp.permissionPlanChanged',
+                      )}
+                    </div>
+                  )}
+                  <div className="flex gap-2">
+                    <Button size="sm" onClick={() => void runOAuth(s, permissionPlan)}>
+                      {t('settings.mcp.permissionContinue')}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setPermissionPlans((current) => withoutKey(current, s.id))}
+                    >
+                      {t('app.cancel')}
+                    </Button>
+                  </div>
+                </div>
+              )}
               {description && (
                 <Collapsible>
                   <CollapsibleTrigger className="mt-2 text-[11px] text-muted-foreground hover:text-foreground">
-                    工具 {description.tools.length} · Prompts {description.promptCount} · Resources{' '}
-                    {description.resourceCount}
+                    {t('settings.mcp.inventory', {
+                      tools: description.tools.length,
+                      prompts: description.promptCount,
+                      resources: description.resourceCount,
+                    })}
                   </CollapsibleTrigger>
-                  <CollapsibleContent className="mt-1 space-y-1 border-t border-border/40 pt-2">
+                  <CollapsibleContent className="mt-1 flex flex-col gap-1 pt-2">
                     {description.tools.map((tool) => (
-                      <label key={tool.name} className="flex items-start gap-2 text-[11px]">
+                      <Label
+                        key={tool.name}
+                        htmlFor={`mcp-tool-${s.id}-${tool.name}`}
+                        className="flex items-start gap-2"
+                      >
                         <Switch
+                          id={`mcp-tool-${s.id}-${tool.name}`}
                           checked={!s.disabledTools.includes(tool.name)}
-                          aria-label={`启用 MCP 工具 ${tool.name}`}
+                          aria-label={t('settings.mcp.enableTool', { name: tool.name })}
                           onCheckedChange={(enabled) => {
                             const disabledTools = enabled
                               ? s.disabledTools.filter((name) => name !== tool.name)
@@ -222,10 +335,12 @@ export function McpPage() {
                           <span className="font-mono text-foreground">{tool.name}</span>
                           {tool.description ? ` — ${tool.description}` : ''}
                         </span>
-                      </label>
+                      </Label>
                     ))}
                     {description.tools.length === 0 && (
-                      <div className="text-[11px] text-faint-foreground">连接后显示工具清单</div>
+                      <div className="text-[11px] text-faint-foreground">
+                        {t('settings.mcp.toolsAfterConnect')}
+                      </div>
                     )}
                   </CollapsibleContent>
                 </Collapsible>
@@ -238,22 +353,24 @@ export function McpPage() {
       <AlertDialog open={deleting !== null} onOpenChange={(o) => !o && setDeleting(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>删除 {deleting?.name}？</AlertDialogTitle>
-            <AlertDialogDescription>其提供的工具与 Prompt 将不再可用。</AlertDialogDescription>
+            <AlertDialogTitle>
+              {t('settings.mcp.deleteTitle', { name: deleting?.name || '' })}
+            </AlertDialogTitle>
+            <AlertDialogDescription>{t('settings.mcp.deleteHint')}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogCancel>{t('app.cancel')}</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
               onClick={() => {
                 if (deleting) {
                   void save(servers.filter((x) => x.id !== deleting.id));
-                  toast.success('服务器已删除');
+                  toast.success(t('settings.mcp.deleted'));
                 }
                 setDeleting(null);
               }}
             >
-              删除
+              {t('settings.mcp.delete')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -270,4 +387,17 @@ interface McpDescription {
   tools: { name: string; description?: string; disabled: boolean }[];
   promptCount: number;
   resourceCount: number;
+}
+
+interface McpResponse {
+  ok: boolean;
+  error?: string;
+  description?: McpDescription;
+  permissionRequired?: McpOAuthPermissionRequired;
+}
+
+function withoutKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  const next = { ...record };
+  delete next[key];
+  return next;
 }

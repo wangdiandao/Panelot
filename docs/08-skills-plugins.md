@@ -68,11 +68,10 @@ interface SkillRecord {
 
 ## 4. 斜杠命令体系
 
-命令来源三类，统一注册到命令面板（09 §5）：
+命令来自 Skill 与 MCP Prompt，统一注册到命令面板（09 §5）：
 
 | 来源 | 形态 | 示例 |
 |---|---|---|
-| 内置 | 当前由 ThreadView 注入 | `/plan` |
 | Skill | `panelot.command` 声明，未声明时默认 `/{name}` | `/xhs` → 可弹变量表单 → 发送时由后台把 Skill body 作为 attached ContextBlock 直接附到 user message；这条显式命令路径不调用 `load_skill` |
 | MCP Prompt | `/server:prompt` | manager 发现 prompt 后注册 TriggerMenu；有参数时复用变量表单，提交后调用 `prompts/get` 并附加不可信 ContextBlock |
 
@@ -92,7 +91,7 @@ my-plugin/
 
 安装器接受本地 ZIP、普通 GitHub 仓库 URL、tree/archive/release ZIP URL；普通仓库先读取 default branch，再从 codeload 下载。GitHub archive 的单一顶层目录会安全剥离。所有文件必须在 manifest 中声明，完整解析/冲突检查后才在单个 Dexie 事务中写入；设置页显示已安装资产清单并支持整体启停/卸载。
 
-**信任边界**：Plugin 是数据不是代码。压缩包限制 10 MB、解压 50 MB、1000 文件，拒绝路径穿越、symlink、Unix executable bit 和常见可执行扩展名；资产只读，编辑前复制为用户资产。当前格式不导入 MCP 配置或权限规则。
+**信任边界**：Plugin 是数据不是代码。压缩包限制 10 MB，实际解压输出按流逐块累计并限制 50 MB，文件数限制 1000；超限立即中止分析，不信任 ZIP 声明的未压缩大小。拒绝路径穿越、symlink、Unix executable bit 和常见可执行扩展名；资产只读，编辑前复制为用户资产。当前格式不导入 MCP 配置或权限规则。
 
 精选索引接口随构建内置，当前返回空列表；不做自动更新、市场评分或远程可执行内容。
 

@@ -8,7 +8,7 @@ describe('panelot runtime schema', () => {
     expect(db.name).toBe('panelot_v1');
   });
 
-  it('contains durable run, receipt, approval, and plugin tables', () => {
+  it('contains durable runtime, plugin, and maintenance tables', () => {
     const db = new PanelotDB(`schema-test-${Date.now()}`);
     expect(db.tables.map((table) => table.name).sort()).toEqual(
       [
@@ -16,6 +16,7 @@ describe('panelot runtime schema', () => {
         'attachments',
         'commandReceipts',
         'memories',
+        'maintenance',
         'nodes',
         'plugins',
         'pluginAssets',

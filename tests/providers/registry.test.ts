@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   CONNECTION_TEMPLATES,
+  createAdapter,
   fetchAllModels,
   inferCapabilities,
   normalizeBaseUrl,
@@ -26,6 +27,28 @@ describe('normalizeBaseUrl (docs/03 §4)', () => {
     expect(r.hint).toMatch(/v1/);
     expect(normalizeBaseUrl('https://api.x.com/v1', 'openai').hint).toBeUndefined();
     expect(normalizeBaseUrl('https://api.anthropic.com', 'anthropic').hint).toBeUndefined();
+  });
+
+  it('rejects insecure remote HTTP, credentials, and fragments', () => {
+    expect(() => normalizeBaseUrl('http://api.x.com/v1', 'openai')).toThrow(/HTTPS/);
+    expect(() => normalizeBaseUrl('https://user:pass@api.x.com/v1', 'openai')).toThrow(
+      /用户名或密码/,
+    );
+    expect(() => normalizeBaseUrl('https://api.x.com/v1#secret', 'openai')).toThrow(/fragment/);
+  });
+
+  it('revalidates persisted endpoints at the adapter boundary', () => {
+    const unsafe: Connection = {
+      id: 'legacy-unsafe',
+      name: 'Legacy unsafe',
+      kind: 'openai',
+      baseUrl: 'http://api.x.com/v1',
+      apiKeys: ['key'],
+      enabled: true,
+    };
+
+    expect(() => createAdapter(unsafe)).toThrow(/HTTPS/);
+    expect(() => createAdapter({ ...unsafe, baseUrl: 'http://127.0.0.1:11434/v1' })).not.toThrow();
   });
 });
 

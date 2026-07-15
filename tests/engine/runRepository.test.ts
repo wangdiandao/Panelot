@@ -29,8 +29,7 @@ describe('RunRepository', () => {
       input: { text: 'use the selected model' },
       overrides: {
         model: { connectionId: 'connection-b', modelId: 'model-c' },
-        approvalPolicy: 'always',
-        capabilityScope: 'read-only',
+        permissionPolicy: 'always',
         enabledToolLevels: ['L0'],
       },
     });
@@ -40,8 +39,7 @@ describe('RunRepository', () => {
       input: { text: 'use the selected model' },
       overrides: {
         model: { connectionId: 'connection-b', modelId: 'model-c' },
-        approvalPolicy: 'always',
-        capabilityScope: 'read-only',
+        permissionPolicy: 'always',
         enabledToolLevels: ['L0'],
       },
     });
@@ -113,6 +111,41 @@ describe('RunRepository', () => {
     );
   });
 
+  it('preserves recovery reasons and accepts the prior done label on stored runs', async () => {
+    const threadId = await createThread();
+    const paused = await runs.enqueue({
+      threadId,
+      clientId: 'client-a',
+      submissionId: 'paused-reason',
+      input: { text: 'pause' },
+    });
+    await runs.transition(paused.id, 'preparing');
+    await runs.transition(paused.id, 'paused_budget', { stopReason: 'budget_pause' });
+
+    const legacy = await runs.enqueue({
+      threadId,
+      clientId: 'client-a',
+      submissionId: 'legacy-done',
+      input: { text: 'old completion' },
+    });
+    await runs.transition(legacy.id, 'preparing');
+    await runs.transition(legacy.id, 'streaming_model');
+    await runs.transition(legacy.id, 'completed', { stopReason: 'done' });
+
+    expect(await runs.recoverOpenRuns()).toContainEqual(
+      expect.objectContaining({
+        id: paused.id,
+        state: 'paused_budget',
+        stopReason: 'budget_pause',
+        recoveryAction: 'none',
+      }),
+    );
+    expect(await runs.get(legacy.id)).toMatchObject({
+      state: 'completed',
+      stopReason: 'done',
+    });
+  });
+
   it('commits usage and thread statistics in one transaction', async () => {
     const threadId = await createThread();
     const run = await runs.enqueue({
@@ -152,22 +185,28 @@ describe('RunRepository', () => {
           model: 'model-a',
           connectionId: 'connection-a',
           usage: { input: 20, output: 5 },
+          providerStopReason: 'max_tokens',
         },
       },
       { input: 20, output: 5 },
       0.1,
       'completed',
-      { stepCursor: 1 },
+      { stepCursor: 1, stopReason: 'max_tokens' },
     );
 
-    expect((await db.runs.get(run.id))?.state).toBe('completed');
+    expect(await db.runs.get(run.id)).toMatchObject({
+      state: 'completed',
+      stopReason: 'max_tokens',
+    });
     expect((await db.runs.get(run.id))?.usage).toEqual({ input: 20, output: 5 });
     expect((await db.threads.get(threadId))?.stats).toEqual({
       turns: 0,
       totalTokens: 25,
       costUsd: 0.1,
     });
-    expect(await db.nodes.where('threadId').equals(threadId).count()).toBe(1);
+    const nodes = await db.nodes.where('threadId').equals(threadId).toArray();
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0]?.payload).toMatchObject({ providerStopReason: 'max_tokens' });
   });
 
   it('rolls back assistant usage when its run transition is invalid', async () => {
@@ -472,13 +511,13 @@ describe('RunRepository', () => {
 
     const edited = await runs.updateQueued(run.id, {
       input: { text: 'after' },
-      overrides: { approvalPolicy: 'always' },
+      overrides: { permissionPolicy: 'always' },
     });
     expect(edited).toMatchObject({
       state: 'queued',
       revision: 1,
       input: { text: 'after' },
-      overrides: { approvalPolicy: 'always' },
+      overrides: { permissionPolicy: 'always' },
     });
 
     const removed = await runs.removeQueued(run.id);

@@ -14,10 +14,10 @@ import { CommandPalette } from '../../src/ui/components/CommandPalette';
 import { ShortcutHelp } from '../../src/ui/components/ShortcutHelp';
 import { LazyToaster } from '../../src/ui/components/LazyToaster';
 import { Button } from '../../src/ui/components/ui/button';
-import { Badge } from '../../src/ui/components/ui/badge';
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuTrigger,
@@ -29,11 +29,15 @@ import {
   TooltipTrigger,
 } from '../../src/ui/components/ui/tooltip';
 import { useTheme } from '../../src/ui/useTheme';
-import { t } from '../../src/ui/i18n';
+import { t, useLanguage } from '../../src/ui/i18n';
 import { attachCurrentPage, getActiveTab } from '../../src/ui/pageContext';
-import { SettingsStore } from '../../src/settings/store';
+import type { Connection } from '../../src/providers/types';
+import { useStorageValue } from '../../src/ui/useStorageValue';
 import { PanelotDB } from '../../src/db/schema';
 import type { ThreadMeta } from '../../src/db/types';
+import { cn } from '../../src/ui/lib/utils';
+import { handoffMenuCloseToApproval } from '../../src/ui/focusHandoff';
+import { openFullPageChat } from '../../src/ui/openFullPageChat';
 
 const db = new PanelotDB();
 const SettingsModal = lazy(() =>
@@ -43,17 +47,28 @@ const SettingsModal = lazy(() =>
 );
 
 export function App() {
+  useLanguage();
   useTheme();
   const session = useMemo(() => new EngineSession(), []);
   const state = useEngineState(session);
-  const [providerConfigured, setProviderConfigured] = useState(true);
+  const storedConnections = useStorageValue<Connection[] | null>('connections', null);
+  const providerConfigured =
+    storedConnections === null ||
+    storedConnections.some(
+      (connection) =>
+        connection.enabled &&
+        (connection.apiKeys.length > 0 || connection.baseUrl.includes('localhost')),
+    );
   const [threads, setThreads] = useState<ThreadMeta[]>([]);
   const [staged, setStaged] = useState<ContextBlock[]>([]);
   const [currentPage, setCurrentPage] = useState<{ title: string; url?: string } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
 
-  useEffect(() => () => session.dispose(), [session]);
+  useEffect(() => {
+    session.start();
+    return () => session.stop();
+  }, [session]);
 
   // Keyboard shortcuts (docs/09 §6): Ctrl/Cmd+K palette, Ctrl/Cmd+N new chat.
   useEffect(() => {
@@ -69,21 +84,12 @@ export function App() {
         // Ctrl/Cmd+E: expand to the full-page form (docs/09 §6).
         e.preventDefault();
         const threadId = session.store.getState().threadId;
-        void chrome.tabs.create({
-          url: chrome.runtime.getURL(`/chat.html${threadId ? `?thread=${threadId}` : ''}`),
-        });
+        void openFullPageChat(threadId ?? undefined);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [session]);
-
-  const checkProvider = () =>
-    void SettingsStore.connections.get().then((conns) => {
-      setProviderConfigured(
-        conns.some((c) => c.enabled && (c.apiKeys.length > 0 || c.baseUrl.includes('localhost'))),
-      );
-    });
 
   const refreshThreads = () =>
     db.threads
@@ -97,7 +103,6 @@ export function App() {
       });
 
   useEffect(() => {
-    checkProvider();
     void refreshThreads().then(() => {
       const live = session.store.getState().threadId;
       void db.threads
@@ -140,14 +145,8 @@ export function App() {
   const iconButton = (label: string, Icon: typeof Plus, onClick: () => void) => (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-8 text-muted-foreground"
-          aria-label={label}
-          onClick={onClick}
-        >
-          <Icon className="size-4" />
+        <Button variant="ghost" size="icon-sm" aria-label={label} onClick={onClick}>
+          <Icon />
         </Button>
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
@@ -164,35 +163,41 @@ export function App() {
                 variant="ghost"
                 className="min-w-0 flex-1 justify-start gap-1 px-2.5 text-[13px] font-medium"
               >
-                <span className="truncate">{state.meta?.title || '新会话'}</span>
-                <ChevronDown className="size-3.5 shrink-0 text-faint-foreground" />
+                <span className="truncate">{state.meta?.title || t('app.newChat')}</span>
+                <ChevronDown data-icon="inline-end" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="max-h-72 w-64 overflow-y-auto">
-              <DropdownMenuLabel className="text-[11px] text-faint-foreground">
-                最近会话
-              </DropdownMenuLabel>
-              {threads.map((t) => (
-                <DropdownMenuItem
-                  key={t.id}
-                  className={t.id === state.threadId ? 'bg-accent font-medium' : ''}
-                  onClick={() => session.openThread(t.id)}
-                >
-                  <span className="truncate">{t.title || '未命名会话'}</span>
-                </DropdownMenuItem>
-              ))}
-              {threads.length === 0 && (
-                <div className="px-2 py-2 text-[12px] text-faint-foreground">暂无历史会话</div>
-              )}
+            <DropdownMenuContent
+              align="start"
+              className="max-h-72 w-[min(16rem,calc(100vw-1rem))] overflow-y-auto"
+              onCloseAutoFocus={handoffMenuCloseToApproval}
+            >
+              <DropdownMenuGroup>
+                <DropdownMenuLabel className="text-[11px] text-faint-foreground">
+                  {t('app.recentThreads')}
+                </DropdownMenuLabel>
+                {threads.map((thread) => (
+                  <DropdownMenuItem
+                    key={thread.id}
+                    className={cn(thread.id === state.threadId && 'bg-accent font-medium')}
+                    onClick={() => session.openThread(thread.id)}
+                  >
+                    <span className="truncate">{thread.title || t('app.untitled')}</span>
+                  </DropdownMenuItem>
+                ))}
+                {threads.length === 0 && (
+                  <div className="px-2 py-2 text-[12px] text-faint-foreground">
+                    {t('app.noThreads')}
+                  </div>
+                )}
+              </DropdownMenuGroup>
             </DropdownMenuContent>
           </DropdownMenu>
-          {iconButton('展开全屏', Expand, () => {
+          {iconButton(t('app.expand'), Expand, () => {
             const threadId = session.store.getState().threadId;
-            void chrome.tabs.create({
-              url: chrome.runtime.getURL(`/chat.html${threadId ? `?thread=${threadId}` : ''}`),
-            });
+            void openFullPageChat(threadId ?? undefined);
           })}
-          {iconButton('新会话', Plus, () => session.startDraft())}
+          {iconButton(t('app.newChat'), Plus, () => session.startDraft())}
         </header>
 
         {currentPage && !staged.some((c) => c.kind === 'page') && (
@@ -200,15 +205,14 @@ export function App() {
             <span className="flex min-w-0 items-center gap-1 truncate text-muted-foreground">
               <Paperclip className="size-3 shrink-0" /> {currentPage.title}
             </span>
-            <Badge
-              asChild
+            <Button
               variant="outline"
-              className="ml-auto shrink-0 cursor-pointer hover:border-primary hover:text-primary"
+              size="sm"
+              className="ml-auto shrink-0"
+              onClick={() => void attachPage()}
             >
-              <button type="button" onClick={() => void attachPage()}>
-                {t('app.attachPage')}
-              </button>
-            </Badge>
+              {t('app.attachPage')}
+            </Button>
           </div>
         )}
 
@@ -216,7 +220,6 @@ export function App() {
           <ThreadView
             session={session}
             providerConfigured={providerConfigured}
-            onProviderConfigured={checkProvider}
             onOpenSettings={() => setSettingsOpen(true)}
             stagedContext={staged}
             onRemoveStagedContext={(i) => setStaged((s) => s.filter((_, idx) => idx !== i))}

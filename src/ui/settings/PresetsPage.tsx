@@ -4,8 +4,9 @@ import { toast } from 'sonner';
 import { PanelotDB } from '../../db/schema';
 import type { SkillRecord } from '../../db/types';
 import type { Connection, GenParams, ModelPreset } from '../../providers/types';
-import { upsertModelPreset } from '../../settings/presets';
 import { SettingsStore, type GlobalSettings } from '../../settings/store';
+import { normalizeModelPreset, type LegacyModelPreset } from '../../settings/presets';
+import { useStorageValue } from '../useStorageValue';
 import { listEnabledPluginPresets, type PluginPresetAsset } from '../../plugins/assets';
 import { ModelSelector } from '../components/ModelSelector';
 import {
@@ -60,6 +61,7 @@ import {
 import { Separator } from '../components/ui/separator';
 import { Textarea } from '../components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '../components/ui/toggle-group';
+import { t } from '../i18n';
 
 const db = new PanelotDB();
 const TOOL_LEVELS = ['L0', 'L1', 'L2', 'mcp'] as const;
@@ -70,8 +72,7 @@ function createPreset(): ModelPreset {
     name: '',
     base: { connectionId: '', modelId: '' },
     enabledToolLevels: [...TOOL_LEVELS],
-    defaultApprovalPolicy: 'untrusted',
-    defaultCapabilityScope: 'full',
+    defaultPermissionPolicy: 'untrusted',
     skills: [],
     promptVersion: 'kernel',
   };
@@ -81,41 +82,40 @@ function optionalNumber(value: string): number | undefined {
   return value.trim() ? Number(value) : undefined;
 }
 
+export function presetPermissionPolicyLabel(policy: string): string {
+  return t(`settings.permissions.policy.${policy}.label`);
+}
+
 export function PresetsPage() {
-  const [presets, setPresets] = useState<ModelPreset[]>([]);
-  const [connections, setConnections] = useState<Connection[]>([]);
   const [skills, setSkills] = useState<SkillRecord[]>([]);
-  const [global, setGlobal] = useState<GlobalSettings>({});
   const [pluginPresets, setPluginPresets] = useState<PluginPresetAsset[]>([]);
   const [editing, setEditing] = useState<ModelPreset | null>(null);
   const [deleting, setDeleting] = useState<ModelPreset | null>(null);
+  const connections = (useStorageValue<Connection[] | null>('connections', null) ?? []).filter(
+    (connection) => connection.enabled,
+  );
+  const global = useStorageValue<GlobalSettings | null>('global_settings', null) ?? {};
+  const presets = (useStorageValue<LegacyModelPreset[] | null>('model_presets', null) ?? []).map(
+    normalizeModelPreset,
+  );
 
   useEffect(() => {
     void Promise.all([
-      SettingsStore.presets.get(),
-      SettingsStore.connections.get(),
       db.skills.where('enabled').equals(1).toArray(),
-      SettingsStore.global.get(),
       listEnabledPluginPresets(db),
-    ]).then(([storedPresets, storedConnections, enabledSkills, storedGlobal, installedPresets]) => {
-      setPresets(storedPresets);
-      setConnections(storedConnections.filter((connection) => connection.enabled));
+    ]).then(([enabledSkills, installedPresets]) => {
       setSkills(enabledSkills);
-      setGlobal(storedGlobal);
       setPluginPresets(installedPresets);
     });
   }, []);
 
-  const persist = async (next: ModelPreset[]) => {
-    setPresets(next);
-    await SettingsStore.presets.set(next);
-  };
-
   const updateTaskModel = async (choice: { connectionId: string; modelId: string } | null) => {
-    const next = { ...global, taskModel: choice ?? undefined };
-    setGlobal(next);
-    await SettingsStore.global.set(next);
-    toast.success(choice ? `Task model: ${choice.modelId}` : 'Task model follows the default');
+    await SettingsStore.global.patch({ taskModel: choice ?? undefined });
+    toast.success(
+      choice
+        ? t('settings.presets.taskModelSet', { model: choice.modelId })
+        : t('settings.presets.taskModelDefault'),
+    );
   };
 
   if (editing) {
@@ -126,9 +126,9 @@ export function PresetsPage() {
         skills={skills}
         onCancel={() => setEditing(null)}
         onSave={async (candidate) => {
-          await persist(upsertModelPreset(presets, candidate));
+          await SettingsStore.presets.upsert(candidate);
           setEditing(null);
-          toast.success('Preset saved');
+          toast.success(t('settings.presets.saved'));
         }}
       />
     );
@@ -136,25 +136,21 @@ export function PresetsPage() {
 
   return (
     <div className="flex max-w-3xl flex-col gap-4">
-      <div className="flex items-start gap-3">
-        <div>
-          <h2 className="text-[15px] font-semibold">Model presets</h2>
-          <p className="mt-1 text-[12px] text-muted-foreground">
-            Pin model, prompt, tools, and approval policy into an auditable agent profile.
-          </p>
+      <div className="flex flex-col items-start gap-3 sm:flex-row">
+        <div className="min-w-0">
+          <h2 className="text-[15px] font-semibold">{t('settings.presets.title')}</h2>
+          <p className="mt-1 text-[12px] text-muted-foreground">{t('settings.presets.summary')}</p>
         </div>
-        <Button className="ml-auto" size="sm" onClick={() => setEditing(createPreset())}>
+        <Button className="sm:ml-auto" size="sm" onClick={() => setEditing(createPreset())}>
           <Plus data-icon="inline-start" />
-          New preset
+          {t('settings.presets.new')}
         </Button>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Task model</CardTitle>
-          <CardDescription>
-            Used for titles and other low-cost background tasks. Empty follows the default model.
-          </CardDescription>
+          <CardTitle>{t('settings.presets.taskModel')}</CardTitle>
+          <CardDescription>{t('settings.presets.taskModelHint')}</CardDescription>
           <CardAction>
             <ModelSelector
               value={global.taskModel ?? null}
@@ -174,15 +170,13 @@ export function PresetsPage() {
             <EmptyMedia variant="icon">
               <Bot />
             </EmptyMedia>
-            <EmptyTitle>No model presets yet</EmptyTitle>
-            <EmptyDescription>
-              Create one to give new chats a consistent model, parameters, and capability boundary.
-            </EmptyDescription>
+            <EmptyTitle>{t('settings.presets.emptyTitle')}</EmptyTitle>
+            <EmptyDescription>{t('settings.presets.emptyHint')}</EmptyDescription>
           </EmptyHeader>
           <EmptyContent>
             <Button size="sm" onClick={() => setEditing(createPreset())}>
               <Plus data-icon="inline-start" />
-              New preset
+              {t('settings.presets.new')}
             </Button>
           </EmptyContent>
         </Empty>
@@ -203,21 +197,21 @@ export function PresetsPage() {
                 </CardDescription>
                 <CardAction>
                   <Button variant="outline" size="sm" onClick={() => setEditing(preset)}>
-                    Edit
+                    {t('settings.presets.edit')}
                   </Button>
                 </CardAction>
               </CardHeader>
               <CardContent className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                 <span>{(preset.enabledToolLevels ?? TOOL_LEVELS).join(', ')}</span>
                 <Separator orientation="vertical" className="h-4" />
-                <span>{preset.defaultApprovalPolicy ?? 'untrusted'}</span>
-                <Separator orientation="vertical" className="h-4" />
-                <span>{preset.defaultCapabilityScope ?? 'full'}</span>
+                <span>
+                  {presetPermissionPolicyLabel(preset.defaultPermissionPolicy ?? 'untrusted')}
+                </span>
               </CardContent>
               <CardFooter>
-                <Button variant="ghost" size="sm" onClick={() => setDeleting(preset)}>
+                <Button variant="destructive" size="sm" onClick={() => setDeleting(preset)}>
                   <Trash2 data-icon="inline-start" />
-                  Delete
+                  {t('settings.presets.delete')}
                 </Button>
               </CardFooter>
             </Card>
@@ -227,7 +221,7 @@ export function PresetsPage() {
 
       {pluginPresets.length > 0 && (
         <div className="flex flex-col gap-3">
-          <h3 className="text-sm font-medium">Plugin presets</h3>
+          <h3 className="text-sm font-medium">{t('settings.presets.pluginTitle')}</h3>
           {pluginPresets.map((asset) => (
             <Card key={`${asset.assetId}:${asset.preset.id}`}>
               <CardHeader>
@@ -236,7 +230,8 @@ export function PresetsPage() {
                   <Badge variant="outline">{asset.pluginId}</Badge>
                 </CardTitle>
                 <CardDescription>
-                  {asset.preset.base.connectionId} · {asset.preset.base.modelId} · read-only
+                  {asset.preset.base.connectionId} · {asset.preset.base.modelId} ·{' '}
+                  {presetPermissionPolicyLabel(asset.preset.defaultPermissionPolicy ?? 'untrusted')}
                 </CardDescription>
                 <CardAction>
                   <Button
@@ -246,11 +241,11 @@ export function PresetsPage() {
                       setEditing({
                         ...asset.preset,
                         id: crypto.randomUUID(),
-                        name: `${asset.preset.name} copy`,
+                        name: t('settings.presets.copySuffix', { name: asset.preset.name }),
                       })
                     }
                   >
-                    Copy and edit
+                    {t('settings.presets.copyEdit')}
                   </Button>
                 </CardAction>
               </CardHeader>
@@ -262,21 +257,19 @@ export function PresetsPage() {
       <AlertDialog open={deleting !== null} onOpenChange={(open) => !open && setDeleting(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete this model preset?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Existing chat records remain, but this preset can no longer be selected.
-            </AlertDialogDescription>
+            <AlertDialogTitle>{t('settings.presets.deleteTitle')}</AlertDialogTitle>
+            <AlertDialogDescription>{t('settings.presets.deleteHint')}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{t('app.cancel')}</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
               onClick={() => {
-                if (deleting) void persist(presets.filter((preset) => preset.id !== deleting.id));
+                if (deleting) void SettingsStore.presets.remove(deleting.id);
                 setDeleting(null);
               }}
             >
-              Delete
+              {t('settings.presets.delete')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -306,16 +299,16 @@ function PresetForm({
   return (
     <Card className="max-w-3xl">
       <CardHeader>
-        <CardTitle>{initialPreset.name ? 'Edit preset' : 'Create model preset'}</CardTitle>
-        <CardDescription>
-          Every field is persisted into the resolved run environment.
-        </CardDescription>
+        <CardTitle>
+          {initialPreset.name ? t('settings.presets.editTitle') : t('settings.presets.createTitle')}
+        </CardTitle>
+        <CardDescription>{t('settings.presets.formHint')}</CardDescription>
       </CardHeader>
       <CardContent>
         <FieldGroup>
-          <div className="grid grid-cols-[1fr_9rem] gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_9rem]">
             <Field data-invalid={Boolean(error && !preset.name.trim())}>
-              <FieldLabel htmlFor="preset-name">Name</FieldLabel>
+              <FieldLabel htmlFor="preset-name">{t('settings.presets.name')}</FieldLabel>
               <Input
                 id="preset-name"
                 value={preset.name}
@@ -324,7 +317,7 @@ function PresetForm({
               />
             </Field>
             <Field>
-              <FieldLabel htmlFor="preset-icon">Icon or emoji</FieldLabel>
+              <FieldLabel htmlFor="preset-icon">{t('settings.presets.icon')}</FieldLabel>
               <Input
                 id="preset-icon"
                 value={preset.icon ?? ''}
@@ -333,9 +326,9 @@ function PresetForm({
             </Field>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field>
-              <FieldLabel>Connection</FieldLabel>
+              <FieldLabel>{t('settings.presets.connection')}</FieldLabel>
               <Select
                 value={preset.base.connectionId || undefined}
                 onValueChange={(connectionId) =>
@@ -343,7 +336,7 @@ function PresetForm({
                 }
               >
                 <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Select a connection" />
+                  <SelectValue placeholder={t('settings.presets.selectConnection')} />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
@@ -357,7 +350,7 @@ function PresetForm({
               </Select>
             </Field>
             <Field>
-              <FieldLabel htmlFor="preset-model">Model ID</FieldLabel>
+              <FieldLabel htmlFor="preset-model">{t('settings.presets.modelId')}</FieldLabel>
               <Input
                 id="preset-model"
                 value={preset.base.modelId}
@@ -384,7 +377,7 @@ function PresetForm({
           </div>
 
           <Field>
-            <FieldLabel htmlFor="preset-prompt">System prompt</FieldLabel>
+            <FieldLabel htmlFor="preset-prompt">{t('settings.presets.systemPrompt')}</FieldLabel>
             <Textarea
               id="preset-prompt"
               rows={6}
@@ -394,8 +387,8 @@ function PresetForm({
           </Field>
 
           <FieldSet>
-            <FieldLegend variant="label">Generation parameters</FieldLegend>
-            <FieldGroup className="grid grid-cols-2 gap-4">
+            <FieldLegend variant="label">{t('settings.presets.parameters')}</FieldLegend>
+            <FieldGroup className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <NumberField
                 id="preset-temperature"
                 label="Temperature"
@@ -416,14 +409,14 @@ function PresetForm({
               />
               <NumberField
                 id="preset-max-tokens"
-                label="Maximum output tokens"
+                label={t('settings.presets.maxTokens')}
                 value={preset.params?.maxTokens}
                 min={1}
                 step={1}
                 onChange={(value) => updateParams({ maxTokens: value })}
               />
               <Field>
-                <FieldLabel>Reasoning effort</FieldLabel>
+                <FieldLabel>{t('settings.presets.reasoning')}</FieldLabel>
                 <Select
                   value={preset.params?.reasoningEffort ?? 'unset'}
                   onValueChange={(value) =>
@@ -440,10 +433,12 @@ function PresetForm({
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
-                      <SelectItem value="unset">Not set</SelectItem>
-                      <SelectItem value="low">Low</SelectItem>
-                      <SelectItem value="medium">Medium</SelectItem>
-                      <SelectItem value="high">High</SelectItem>
+                      <SelectItem value="unset">{t('settings.presets.reasoning.unset')}</SelectItem>
+                      <SelectItem value="low">{t('settings.presets.reasoning.low')}</SelectItem>
+                      <SelectItem value="medium">
+                        {t('settings.presets.reasoning.medium')}
+                      </SelectItem>
+                      <SelectItem value="high">{t('settings.presets.reasoning.high')}</SelectItem>
                     </SelectGroup>
                   </SelectContent>
                 </Select>
@@ -452,7 +447,7 @@ function PresetForm({
           </FieldSet>
 
           <Field>
-            <FieldLabel htmlFor="preset-stop">Stop sequences, one per line</FieldLabel>
+            <FieldLabel htmlFor="preset-stop">{t('settings.presets.stop')}</FieldLabel>
             <Textarea
               id="preset-stop"
               rows={3}
@@ -462,7 +457,7 @@ function PresetForm({
           </Field>
 
           <FieldSet>
-            <FieldLegend variant="label">Enabled tool levels</FieldLegend>
+            <FieldLegend variant="label">{t('settings.presets.toolLevels')}</FieldLegend>
             <ToggleGroup
               type="multiple"
               variant="outline"
@@ -473,7 +468,7 @@ function PresetForm({
                   enabledToolLevels: levels as ModelPreset['enabledToolLevels'],
                 })
               }
-              aria-label="Enabled tool levels"
+              aria-label={t('settings.presets.toolLevels')}
             >
               {TOOL_LEVELS.map((level) => (
                 <ToggleGroupItem key={level} value={level} aria-label={level}>
@@ -481,38 +476,30 @@ function PresetForm({
                 </ToggleGroupItem>
               ))}
             </ToggleGroup>
-            <FieldDescription>L0 read · L1 page write · L2 debugger · MCP</FieldDescription>
+            <FieldDescription>{t('settings.presets.toolLevelsHint')}</FieldDescription>
           </FieldSet>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4">
             <EnumField
-              label="Default approval policy"
-              value={preset.defaultApprovalPolicy ?? 'untrusted'}
-              values={['always', 'untrusted', 'on-request', 'granular', 'auto', 'never']}
+              label={t('settings.presets.defaultPolicy')}
+              value={preset.defaultPermissionPolicy ?? 'untrusted'}
+              values={['always', 'untrusted', 'auto']}
+              getOptionLabel={presetPermissionPolicyLabel}
               onChange={(value) =>
                 setPreset({
                   ...preset,
-                  defaultApprovalPolicy: value as ModelPreset['defaultApprovalPolicy'],
-                })
-              }
-            />
-            <EnumField
-              label="Default capability scope"
-              value={preset.defaultCapabilityScope ?? 'full'}
-              values={['read-only', 'same-origin-write', 'cross-origin', 'full']}
-              onChange={(value) =>
-                setPreset({
-                  ...preset,
-                  defaultCapabilityScope: value as ModelPreset['defaultCapabilityScope'],
+                  defaultPermissionPolicy: value as ModelPreset['defaultPermissionPolicy'],
                 })
               }
             />
           </div>
 
           <FieldSet>
-            <FieldLegend variant="label">Active Skills</FieldLegend>
+            <FieldLegend variant="label">{t('settings.presets.skills')}</FieldLegend>
             <FieldGroup className="gap-3">
-              {skills.length === 0 && <FieldDescription>No enabled Skills</FieldDescription>}
+              {skills.length === 0 && (
+                <FieldDescription>{t('settings.presets.noSkills')}</FieldDescription>
+              )}
               {skills.map((skill) => {
                 const checked = preset.skills?.includes(skill.id) ?? false;
                 return (
@@ -546,7 +533,9 @@ function PresetForm({
           </FieldSet>
 
           <Field>
-            <FieldLabel htmlFor="preset-prompt-version">Prompt version</FieldLabel>
+            <FieldLabel htmlFor="preset-prompt-version">
+              {t('settings.presets.promptVersion')}
+            </FieldLabel>
             <Input
               id="preset-prompt-version"
               value={preset.promptVersion ?? ''}
@@ -566,10 +555,10 @@ function PresetForm({
             );
           }}
         >
-          Save preset
+          {t('settings.presets.save')}
         </Button>
         <Button variant="outline" onClick={onCancel}>
-          Cancel
+          {t('app.cancel')}
         </Button>
       </CardFooter>
     </Card>
@@ -609,11 +598,13 @@ function EnumField({
   label,
   value,
   values,
+  getOptionLabel,
   onChange,
 }: {
   label: string;
   value: string;
   values: readonly string[];
+  getOptionLabel: (value: string) => string;
   onChange: (value: string) => void;
 }) {
   return (
@@ -627,7 +618,7 @@ function EnumField({
           <SelectGroup>
             {values.map((option) => (
               <SelectItem key={option} value={option}>
-                {option}
+                {getOptionLabel(option)}
               </SelectItem>
             ))}
           </SelectGroup>

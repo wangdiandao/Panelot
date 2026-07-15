@@ -45,6 +45,35 @@ function isBlockIndex(value: unknown): value is number {
 }
 import { verifyConnection } from './openai';
 
+function mapAnthropicStopReason(reason: string, status: number): FinalResult['stopReason'] {
+  switch (reason) {
+    case 'end_turn':
+    case 'stop_sequence':
+      return 'end';
+    case 'tool_use':
+      return 'tool_use';
+    case 'max_tokens':
+    case 'model_context_window_exceeded':
+      return 'max_tokens';
+    case 'refusal':
+      return 'content_filter';
+    case 'pause_turn':
+      throw createResponseFormatError(
+        'protocol',
+        status,
+        'pause_turn requires a server-tool continuation loop that Panelot does not support',
+        'pause_turn requires an unsupported server-tool continuation',
+      );
+    default:
+      throw createResponseFormatError(
+        'protocol',
+        status,
+        `unsupported stop_reason: ${reason}`,
+        'provider returned an unsupported stop_reason',
+      );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Message conversion: UnifiedMessage → Anthropic messages format
 // ---------------------------------------------------------------------------
@@ -179,7 +208,9 @@ export class AnthropicAdapter implements ProviderAdapter {
     // index → partial tool_use block
     const partialBlocks = new Map<number, { id: string; name: string; json: string }>();
     let usage: Usage = { input: 0, output: 0 };
-    let stopReason = '';
+    let stopReason: string | undefined;
+    let sawMessageStop = false;
+    let finalStopReason: FinalResult['stopReason'] | undefined;
     // Transport keepalives do not prove the provider produced a model response;
     // only shape-valid model lifecycle or data frames do.
     let recognizedFrame = false;
@@ -192,6 +223,7 @@ export class AnthropicAdapter implements ProviderAdapter {
           try {
             res = await fetch(url, {
               method: 'POST',
+              redirect: 'error',
               headers: headers(apiKey),
               body: JSON.stringify(body),
               signal: req.signal,
@@ -222,6 +254,7 @@ export class AnthropicAdapter implements ProviderAdapter {
       );
 
       for await (const sse of iterateSse(response.body!, req.signal)) {
+        if (sse.terminal === 'done') continue;
         let parsed: unknown;
         try {
           parsed = JSON.parse(sse.data);
@@ -230,6 +263,15 @@ export class AnthropicAdapter implements ProviderAdapter {
         }
         if (!isRecord(parsed) || typeof parsed.type !== 'string') continue;
         const ev = parsed;
+
+        if (sawMessageStop && ev.type !== 'ping') {
+          throw createResponseFormatError(
+            'protocol',
+            response.status,
+            `provider emitted ${ev.type} after message_stop`,
+            'provider emitted an event after the final message_stop',
+          );
+        }
 
         switch (ev.type) {
           case 'error': {
@@ -329,6 +371,14 @@ export class AnthropicAdapter implements ProviderAdapter {
             if (!isTokenCount(ev.usage.output_tokens)) break;
             recognizedFrame = true;
             if (typeof ev.delta.stop_reason === 'string' && ev.delta.stop_reason) {
+              if (stopReason && stopReason !== ev.delta.stop_reason) {
+                throw createResponseFormatError(
+                  'protocol',
+                  response.status,
+                  'provider returned conflicting stop_reason values',
+                  'provider returned conflicting stop_reason values',
+                );
+              }
               stopReason = ev.delta.stop_reason;
             }
             usage = { ...usage, output: ev.usage.output_tokens };
@@ -340,6 +390,7 @@ export class AnthropicAdapter implements ProviderAdapter {
             break;
           case 'message_stop':
             recognizedFrame = true;
+            sawMessageStop = true;
             break;
           case 'ping':
             break;
@@ -354,6 +405,23 @@ export class AnthropicAdapter implements ProviderAdapter {
           'provider response contained no recognizable frames',
         );
       }
+      if (!stopReason) {
+        throw createResponseFormatError(
+          'protocol',
+          response.status,
+          'provider stream ended without message_delta.stop_reason',
+          'provider stream ended without message_delta.stop_reason',
+        );
+      }
+      if (!sawMessageStop) {
+        throw createResponseFormatError(
+          'protocol',
+          response.status,
+          'provider stream ended before message_stop',
+          'provider stream ended before message_stop',
+        );
+      }
+      finalStopReason = mapAnthropicStopReason(stopReason, response.status);
     }
 
     const iterator = run();
@@ -382,14 +450,6 @@ export class AnthropicAdapter implements ProviderAdapter {
             }
             return call;
           });
-        const finalStop: FinalResult['stopReason'] =
-          stopReason === 'tool_use'
-            ? 'tool_use'
-            : stopReason === 'max_tokens'
-              ? 'max_tokens'
-              : stopReason === 'refusal'
-                ? 'content_filter'
-                : 'end';
         const message: ContentBlock[] = [];
         const text = textParts.join('');
         if (text) message.push({ type: 'text', text });
@@ -399,7 +459,7 @@ export class AnthropicAdapter implements ProviderAdapter {
           reasoning: reasoning || undefined,
           toolCalls,
           usage,
-          stopReason: finalStop,
+          stopReason: finalStopReason!,
         };
       },
     };
@@ -408,6 +468,7 @@ export class AnthropicAdapter implements ProviderAdapter {
   async listModels(): Promise<string[]> {
     const keys = createKeyRing(this.connection.apiKeys);
     const res = await fetch(`${this.connection.baseUrl}/v1/models`, {
+      redirect: 'error',
       headers: this.headers(keys.current()),
       signal: AbortSignal.timeout(4000),
     });

@@ -2,30 +2,32 @@
 
 ## English
 
-- Account data: not collected.
+- Account data: not collected by Panelot's operator.
 - Analytics/telemetry: not collected.
 - Advertising data: not collected.
 - Location: not collected.
-- Browsing activity: processed locally when the user attaches a page or runs a browser tool; transmitted only to the user-selected model/MCP endpoint as necessary for that request.
-- Website content and form data: processed for user-requested agent actions; protected by approval policy and origin checks.
-- Credentials: provider keys, MCP bearer/refresh tokens, and sensitive headers are encrypted locally and sent only to their configured destination.
-- Attachments: stored locally and uploaded only when the user explicitly selected the file and approved the destination action.
-- Data sale/sharing: Panelot's operator does not sell data or disclose it to unrelated third parties, except for user-initiated transmissions to configured destination endpoints when necessary to fulfill a request.
-- Retention: local records remain until the user deletes them, clears extension data, or uninstalls Panelot. Exported copies are managed by the user.
+- Browsing activity and website content: processed locally when the user attaches a page or when the agent runs a browser read tool. The selected content and browser-tool results enter the conversation and are sent to the user-selected model endpoint. Under `always`, browser reads ask first; under `untrusted` and `auto`, browser reads run without a separate approval prompt.
+- Browser writes and remote MCP tools: `untrusted` normally asks before a write or remote MCP call unless a matching session grant or stored allow rule already applies. `auto` can run them without a per-call prompt unless a permission rule or safety check forces ASK or DENY. `always` asks for every browser or MCP tool call. Permission rules remain mandatory in all three policies.
+- MCP data: tool parameters are sent to the configured MCP server and tool results return to the conversation, where they can be sent to the selected model. Server-supplied annotations such as `readOnlyHint` are treated only as untrusted descriptive metadata and do not by themselves bypass approval.
+- Credentials: Provider keys and custom authorization headers are sent to the configured Provider endpoint, and MCP bearer/access tokens are sent to the configured MCP server. Credential-bearing Provider and MCP requests are sent directly to request URLs derived from the validated configuration; automatic HTTP redirects are refused. OAuth codes and refresh tokens are sent only to validated HTTPS authorization/token endpoints. OAuth authorization, code exchange, and refresh requests bind the canonical MCP server resource identifier. Credentials are protected in local extension storage as described in the privacy policy.
+- Attachments: stored locally. An attachment selected for a conversation is sent to the selected model as part of that request without a separate browser-tool approval. Uploading an attachment to a website is a browser write and follows the active approval policy and rules.
+- Data sale/sharing: Panelot's operator does not sell data or disclose it to unrelated third parties. User-requested transmissions to configured Provider/MCP endpoints are necessary to perform the request and are described above.
+- Retention: local records remain until the user deletes them, clears extension data, or uninstalls Panelot. Exported copies are managed by the user. Remote endpoints apply their own retention policies.
 
 Privacy URL: `https://wangdiandao.github.io/Panelot/`
 
 ## 简体中文
 
-- 账户数据：不收集。
+- 账户数据：Panelot 运营方不收集账户数据。
 - 分析/遥测数据：不收集。
 - 广告数据：不收集。
 - 位置信息：不收集。
-- 浏览活动：当用户附加页面或运行浏览器工具时在本地处理；仅在完成该请求所必需时传输至用户选择的模型/MCP 端点。
-- 网站内容和表单数据：为执行用户请求的 Agent 操作而处理；受审批策略和源站（origin）检查保护。
-- 凭据：模型提供商密钥、MCP Bearer/refresh token 和敏感请求头在本地加密，并且仅发送至其配置的目标端点。
-- 附件：存储在本地；只有在用户明确选择文件并批准针对目标端点的操作后才会上传。
-- 数据出售/共享：Panelot 运营方不出售数据，也不向无关第三方披露数据；但由用户发起、为完成请求所必需且发送至已配置目标端点的数据传输除外。
-- 数据保留：本地记录会保留到用户将其删除、清除扩展数据或卸载 Panelot；导出的副本由用户自行管理。
+- 浏览活动和网站内容：当用户附加页面或 Agent 运行浏览器读取工具时在本地处理。所选内容和浏览器工具结果会进入对话，并发送到用户选择的模型端点。`always` 会在读取前询问；`untrusted` 和 `auto` 下，浏览器读取不会另行弹出审批。
+- 浏览器写操作和远程 MCP 工具：`untrusted` 通常会在写操作或远程 MCP 调用前询问，但已生效的会话授权或持久 allow 规则可放行。`auto` 可在没有逐次审批的情况下执行，除非权限规则或安全检查强制 ASK 或 DENY。`always` 会询问每次浏览器或 MCP 工具调用。三种策略下都必须遵守权限规则。
+- MCP 数据：工具参数会发送到已配置的 MCP 服务器；工具结果返回对话，并可能继续发送到所选模型。服务器提供的 `readOnlyHint` 等 annotation 仅作为不可信描述信息，不能单独绕过审批。
+- 凭据：Provider 密钥和自定义授权 Header 发送到已配置的 Provider 端点，MCP Bearer/access token 发送到已配置的 MCP 服务器。携带凭据的 Provider 和 MCP 请求会直接发送到根据已校验配置生成的请求 URL；自动 HTTP 重定向会被拒绝。OAuth code 和 refresh token 只发送到经过校验的 HTTPS 授权/token 端点。OAuth 授权、code 交换和 refresh 请求会绑定规范化的 MCP 服务器资源标识符。凭据按隐私政策所述方式保护在本地扩展存储中。
+- 附件：存储在本地。用户为对话选择的附件会作为该请求的一部分发送到所选模型，不另行触发浏览器工具审批。把附件上传到网站属于浏览器写操作，遵循当前审批档位和规则。
+- 数据出售/共享：Panelot 运营方不出售数据，也不向无关第三方披露数据。为完成用户请求而发送到已配置 Provider/MCP 端点的数据传输属于必要处理，具体如上所述。
+- 数据保留：本地记录会保留到用户将其删除、清除扩展数据或卸载 Panelot。导出的副本由用户自行管理；远程端点适用其各自的数据保留政策。
 
 隐私政策网址：`https://wangdiandao.github.io/Panelot/`

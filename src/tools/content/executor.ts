@@ -8,7 +8,7 @@
  * minWait 250ms → mutation-idle 500ms → 5s cap (docs/05 §4).
  */
 
-import { buildSnapshot, type SnapshotResult } from '../snapshot/engine';
+import { buildSnapshot, type LocatorHint, type SnapshotResult } from '../snapshot/engine';
 import {
   BADGE_BG,
   BADGE_BORDER,
@@ -16,8 +16,13 @@ import {
   BRAND_PRIMARY,
   BRAND_PRIMARY_HALO,
 } from '../../styles/brand';
-import { actionError } from '../action/errors';
-import { ActionDeadline } from '../action/deadline';
+import { actionError, ActionError } from '../action/errors';
+import {
+  ActionDeadline,
+  deadlineForTool,
+  type ActionExecutionContext,
+  waitWithContext,
+} from '../action/deadline';
 import { ensureActionable } from './actionability';
 import type { ActionEvidence } from '../action/types';
 import { diffSnapshotYaml } from '../snapshot/diff';
@@ -28,7 +33,24 @@ import { diffSnapshotYaml } from '../snapshot/diff';
 
 let currentSnapshot: SnapshotResult | null = null;
 let snapshotCounter = 0;
-const priorHints = new Map<string, import('../snapshot/engine').LocatorHint>();
+
+interface RefDocumentIdentity {
+  documentToken: string;
+  rootDocument: Document;
+  ownerDocument: Document;
+  frameChain: {
+    frame: HTMLIFrameElement;
+    ownerDocument: Document;
+    document: Document;
+  }[];
+}
+
+interface PriorRefHint {
+  hint: LocatorHint;
+  identity: RefDocumentIdentity;
+}
+
+const priorHints = new Map<string, PriorRefHint>();
 
 const WAIT_DEFAULTS = {
   minWaitMs: 250,
@@ -44,7 +66,7 @@ const WAIT_DEFAULTS = {
 class StaleRefError extends Error {
   constructor(ref: string) {
     super(
-      `快照已过期：ref "${ref}" 不属于当前快照 s${currentSnapshot?.snapshotId ?? 0}。请重新 read_page 获取新快照后用新 ref 重试。`,
+      `快照已过期：ref "${ref}" 不属于当前文档和快照。请重新 read_page 获取新快照后用新 ref 重试。`,
     );
     this.name = 'StaleRefError';
   }
@@ -54,7 +76,7 @@ function resolveRef(ref: string): Element {
   if (!currentSnapshot) {
     throw actionError('stale_ref', new StaleRefError(ref).message, 'resolve', true);
   }
-  const prefix = `s${currentSnapshot.snapshotId}_`;
+  const prefix = `s${currentSnapshot.documentToken}_${currentSnapshot.snapshotId}_`;
   if (!ref.startsWith(prefix)) {
     throw actionError('stale_ref', new StaleRefError(ref).message, 'resolve', true);
   }
@@ -62,7 +84,64 @@ function resolveRef(ref: string): Element {
   if (!el || !el.isConnected) {
     throw actionError('stale_ref', new StaleRefError(ref).message, 'resolve', true);
   }
+  const frameChain = currentSnapshot.frameMap.get(ref) ?? [];
+  let expectedOwnerDocument = document;
+  for (const { frame, document: frameDocument } of frameChain) {
+    if (
+      !frame.isConnected ||
+      frame.ownerDocument !== expectedOwnerDocument ||
+      frame.contentDocument !== frameDocument ||
+      !frameDocument.defaultView
+    ) {
+      throw actionError('stale_ref', new StaleRefError(ref).message, 'resolve', true);
+    }
+    expectedOwnerDocument = frameDocument;
+  }
+  if (el.ownerDocument !== expectedOwnerDocument) {
+    throw actionError('stale_ref', new StaleRefError(ref).message, 'resolve', true);
+  }
   return el;
+}
+
+function refDocumentIdentity(
+  snapshot: SnapshotResult,
+  ref: string,
+): RefDocumentIdentity | undefined {
+  const element = snapshot.refMap.get(ref);
+  const frameChain = snapshot.frameMap.get(ref);
+  if (!element || !frameChain) return undefined;
+  return {
+    documentToken: snapshot.documentToken,
+    rootDocument: frameChain[0]?.frame.ownerDocument ?? element.ownerDocument,
+    ownerDocument: element.ownerDocument,
+    frameChain: frameChain.map(({ frame, document: frameDocument }) => ({
+      frame,
+      ownerDocument: frame.ownerDocument,
+      document: frameDocument,
+    })),
+  };
+}
+
+function sameRefDocumentIdentity(
+  previous: RefDocumentIdentity,
+  candidate: RefDocumentIdentity,
+): boolean {
+  if (
+    previous.documentToken !== candidate.documentToken ||
+    previous.rootDocument !== candidate.rootDocument ||
+    previous.ownerDocument !== candidate.ownerDocument ||
+    previous.frameChain.length !== candidate.frameChain.length
+  ) {
+    return false;
+  }
+  return previous.frameChain.every((frame, index) => {
+    const candidateFrame = candidate.frameChain[index];
+    return (
+      candidateFrame?.frame === frame.frame &&
+      candidateFrame.ownerDocument === frame.ownerDocument &&
+      candidateFrame.document === frame.document
+    );
+  });
 }
 
 function resolveRefWithRecovery(
@@ -73,17 +152,23 @@ function resolveRefWithRecovery(
     return { element: resolveRef(ref) };
   } catch (error) {
     if (!allowRecovery) throw error;
-    const hint = priorHints.get(ref);
-    if (!hint || !currentSnapshot) throw error;
-    const matches = [...currentSnapshot.hintMap.entries()].filter(
+    if (!currentSnapshot || !ref.startsWith(`s${currentSnapshot.documentToken}_`)) throw error;
+    const previous = priorHints.get(ref);
+    if (!previous || !currentSnapshot) throw error;
+    const hintMatches = [...currentSnapshot.hintMap.entries()].filter(
       ([, candidate]) =>
-        candidate.role === hint.role &&
-        candidate.name === hint.name &&
-        candidate.tagName === hint.tagName &&
-        candidate.inputType === hint.inputType &&
-        candidate.label === hint.label &&
-        candidate.placeholder === hint.placeholder,
+        candidate.role === previous.hint.role &&
+        candidate.name === previous.hint.name &&
+        candidate.tagName === previous.hint.tagName &&
+        candidate.inputType === previous.hint.inputType &&
+        candidate.label === previous.hint.label &&
+        candidate.placeholder === previous.hint.placeholder,
     );
+    const matches = hintMatches.filter(([candidateRef]) => {
+      const identity = refDocumentIdentity(currentSnapshot!, candidateRef);
+      return identity !== undefined && sameRefDocumentIdentity(previous.identity, identity);
+    });
+    if (matches.length === 0 && hintMatches.length > 0) throw error;
     if (matches.length !== 1) {
       throw actionError(
         'ambiguous_target',
@@ -92,52 +177,150 @@ function resolveRefWithRecovery(
       );
     }
     const [recoveredRef] = matches[0]!;
-    return { element: currentSnapshot.refMap.get(recoveredRef)!, recoveredRef };
+    return { element: resolveRef(recoveredRef), recoveredRef };
   }
+}
+
+interface RefRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+function unsupportedFrameGeometry(reason: string): ActionError {
+  return actionError(
+    'unsupported_frame',
+    '该 iframe 的几何变换无法安全映射到顶层视口；请使用 read_page_deep 获取新 ref。',
+    'resolve',
+    true,
+    { reason },
+  );
+}
+
+function assertAxisAlignedFrame(frame: HTMLIFrameElement): void {
+  const view = frame.ownerDocument.defaultView;
+  if (!view)
+    throw actionError('stale_ref', 'iframe 文档已失效；请重新 read_page。', 'resolve', true);
+  for (let element: Element | null = frame; element; element = element.parentElement) {
+    const style = view.getComputedStyle(element);
+    if (element === frame) {
+      const padding = [
+        style.paddingLeft,
+        style.paddingTop,
+        style.paddingRight,
+        style.paddingBottom,
+      ].map(Number.parseFloat);
+      if (padding.some((value) => Number.isFinite(value) && Math.abs(value) > 0.01)) {
+        throw unsupportedFrameGeometry('iframe_padding');
+      }
+    }
+    if (!style.transform || style.transform === 'none') continue;
+    const Matrix = view.DOMMatrixReadOnly;
+    if (!Matrix) throw unsupportedFrameGeometry('transform_matrix_unavailable');
+    let matrix: DOMMatrixReadOnly;
+    try {
+      matrix = new Matrix(style.transform);
+    } catch {
+      throw unsupportedFrameGeometry('unparseable_transform');
+    }
+    if (
+      !matrix.is2D ||
+      Math.abs(matrix.b) > 0.0001 ||
+      Math.abs(matrix.c) > 0.0001 ||
+      matrix.a <= 0 ||
+      matrix.d <= 0
+    ) {
+      throw unsupportedFrameGeometry('non_axis_aligned_transform');
+    }
+  }
+}
+
+function mapRectToParentViewport(rect: RefRect, frame: HTMLIFrameElement): RefRect {
+  assertAxisAlignedFrame(frame);
+  const frameRect = frame.getBoundingClientRect();
+  const childView = frame.contentWindow;
+  if (!childView || frame.offsetWidth <= 0 || frame.offsetHeight <= 0) {
+    throw actionError('stale_ref', 'iframe 已脱离页面；请重新 read_page。', 'resolve', true);
+  }
+  const outerScaleX = frameRect.width / frame.offsetWidth;
+  const outerScaleY = frameRect.height / frame.offsetHeight;
+  const viewportWidth = childView.innerWidth;
+  const viewportHeight = childView.innerHeight;
+  const contentScaleX = (frame.clientWidth * outerScaleX) / viewportWidth;
+  const contentScaleY = (frame.clientHeight * outerScaleY) / viewportHeight;
+  if (
+    ![outerScaleX, outerScaleY, contentScaleX, contentScaleY].every(
+      (value) => Number.isFinite(value) && value > 0,
+    )
+  ) {
+    throw unsupportedFrameGeometry('invalid_frame_dimensions');
+  }
+  return {
+    left: frameRect.left + frame.clientLeft * outerScaleX + rect.left * contentScaleX,
+    top: frameRect.top + frame.clientTop * outerScaleY + rect.top * contentScaleY,
+    width: rect.width * contentScaleX,
+    height: rect.height * contentScaleY,
+  };
+}
+
+function getRefViewportRect(ref: string): RefRect {
+  const element = resolveRef(ref);
+  const source = element.getBoundingClientRect();
+  let rect: RefRect = {
+    left: source.left,
+    top: source.top,
+    width: source.width,
+    height: source.height,
+  };
+  const frameChain = currentSnapshot!.frameMap.get(ref) ?? [];
+  for (let index = frameChain.length - 1; index >= 0; index--) {
+    rect = mapRectToParentViewport(rect, frameChain[index]!.frame);
+  }
+  return rect;
 }
 
 // ---------------------------------------------------------------------------
 // Stabilization (docs/05 §4)
 // ---------------------------------------------------------------------------
 
-async function stabilize(opts = WAIT_DEFAULTS): Promise<{ timedOut: boolean }> {
+async function stabilize(
+  context: ActionExecutionContext,
+  opts = WAIT_DEFAULTS,
+): Promise<{ timedOut: boolean }> {
   const start = Date.now();
-  await sleep(opts.minWaitMs);
+  await waitWithContext(opts.minWaitMs, context);
 
-  return new Promise((resolve) => {
-    let lastMutation = Date.now();
-    const observer = new MutationObserver(() => {
-      lastMutation = Date.now();
-    });
-    observer.observe(document.documentElement, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-    });
-
-    const check = () => {
-      const now = Date.now();
-      if (now - lastMutation >= opts.networkIdleMs) {
-        observer.disconnect();
-        resolve({ timedOut: false });
-      } else if (now - start >= opts.maxWaitMs) {
-        observer.disconnect();
-        resolve({ timedOut: true });
-      } else {
-        setTimeout(check, 100);
-      }
-    };
-    setTimeout(check, 100);
+  let lastMutation = Date.now();
+  const observer = new MutationObserver(() => {
+    lastMutation = Date.now();
   });
+  observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+  });
+  try {
+    for (;;) {
+      const now = Date.now();
+      if (now - lastMutation >= opts.networkIdleMs) return { timedOut: false };
+      if (now - start >= opts.maxWaitMs) return { timedOut: true };
+      await waitWithContext(100, context);
+    }
+  } finally {
+    observer.disconnect();
+  }
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number, context: ActionExecutionContext = {}) =>
+  waitWithContext(ms, context, 'execute');
 
 // ---------------------------------------------------------------------------
 // Visual feedback (docs/05 §5) — Shadow DOM isolated
 // ---------------------------------------------------------------------------
 
 let overlayHost: HTMLElement | null = null;
+let indicatorOwner: string | null = null;
 
 function getOverlay(): ShadowRoot {
   if (!overlayHost || !overlayHost.isConnected) {
@@ -150,9 +333,9 @@ function getOverlay(): ShadowRoot {
   return overlayHost.shadowRoot!;
 }
 
-function highlight(el: Element): void {
+function highlight(ref: string): void {
   try {
-    const rect = el.getBoundingClientRect();
+    const rect = getRefViewportRect(ref);
     const shadow = getOverlay();
     const box = document.createElement('div');
     box.style.cssText = `position:fixed;left:${rect.left - 3}px;top:${rect.top - 3}px;width:${rect.width + 6}px;height:${rect.height + 6}px;border:2px solid ${BRAND_PRIMARY};border-radius:4px;pointer-events:none;transition:opacity 300ms;box-shadow:0 0 0 2px ${BRAND_PRIMARY_HALO};`;
@@ -166,7 +349,8 @@ function highlight(el: Element): void {
   }
 }
 
-export function showIndicator(text: string): void {
+export function showIndicator(requestId: string, text: string): void {
+  indicatorOwner = requestId;
   const shadow = getOverlay();
   let badge = shadow.getElementById('indicator');
   if (!badge) {
@@ -178,7 +362,9 @@ export function showIndicator(text: string): void {
   badge.textContent = text;
 }
 
-export function hideIndicator(): void {
+export function hideIndicator(requestId: string): void {
+  if (indicatorOwner !== requestId) return;
+  indicatorOwner = null;
   overlayHost?.shadowRoot?.getElementById('indicator')?.remove();
 }
 
@@ -190,7 +376,7 @@ function annotateRefs(): string {
   layer.id = 'ref-annotations';
   const legend: string[] = [];
   for (const [ref, element] of currentSnapshot!.refMap) {
-    const rect = element.getBoundingClientRect();
+    const rect = getRefViewportRect(ref);
     if (rect.width <= 0 || rect.height <= 0) continue;
     const badge = document.createElement('div');
     badge.textContent = ref;
@@ -213,33 +399,35 @@ function clearRefAnnotations(): void {
 // ---------------------------------------------------------------------------
 
 let manualHandler: (() => void) | null = null;
-let agentActing = false;
+const activeAgentRequests = new Set<string>();
 
 // ---------------------------------------------------------------------------
-// Dialog reports from the MAIN-world patch (injected by the gateway):
-// auto-answered alert/confirm/prompt land here and ride along in the next
-// tool result so the model knows a dialog fired.
+// Dialog reports from the MAIN-world write-tool patch (injected by the gateway)
+// ride along in the result so the model knows the dialog was dismissed.
 // ---------------------------------------------------------------------------
 
-const pendingDialogs: { kind: string; message: string; response: string }[] = [];
+const pendingDialogs = new Map<string, { kind: string; message: string; response: string }[]>();
+let activeDialogRequestId: string | null = null;
 if (typeof document !== 'undefined') {
   document.addEventListener('panelot:dialog', (e) => {
     try {
       const detail = JSON.parse((e as CustomEvent<string>).detail);
-      pendingDialogs.push(detail);
+      if (!activeDialogRequestId) return;
+      const reports = pendingDialogs.get(activeDialogRequestId) ?? [];
+      reports.push(detail);
+      pendingDialogs.set(activeDialogRequestId, reports);
     } catch {
       /* malformed — page interference, ignore */
     }
   });
 }
 
-function drainDialogReports(): string {
-  if (pendingDialogs.length === 0) return '';
-  const lines = pendingDialogs.map(
-    (d) => `- ${d.kind}("${d.message.slice(0, 200)}") → ${d.response}`,
-  );
-  pendingDialogs.length = 0;
-  return `\n[页面弹出了 ${lines.length} 个对话框，已自动处理:\n${lines.join('\n')}]`;
+function drainDialogReports(requestId: string): string {
+  const reports = pendingDialogs.get(requestId) ?? [];
+  pendingDialogs.delete(requestId);
+  if (reports.length === 0) return '';
+  const lines = reports.map((d) => `- ${d.kind}("${d.message.slice(0, 200)}") → ${d.response}`);
+  return `\n[页面弹出了 ${lines.length} 个对话框，已按安全默认处理:\n${lines.join('\n')}]`;
 }
 
 export function watchManualOperation(onManual: () => void): void {
@@ -248,7 +436,7 @@ export function watchManualOperation(onManual: () => void): void {
     document.addEventListener(
       type,
       (e) => {
-        if (e.isTrusted && !agentActing) manualHandler?.();
+        if (e.isTrusted && activeAgentRequests.size === 0) manualHandler?.();
       },
       { capture: true, passive: true },
     );
@@ -274,20 +462,104 @@ function setNativeValue(el: HTMLInputElement | HTMLTextAreaElement, value: strin
   dispatchInputEvents(el);
 }
 
-async function doClick(params: {
-  ref: string;
-  button?: 'left' | 'right';
-  doubleClick?: boolean;
-  allowRecovery?: boolean;
-}): Promise<string> {
+interface ActionVerification {
+  verified: boolean;
+  effects: string[];
+}
+
+interface ExecutedAction {
+  text: string;
+  verify?: () => ActionVerification;
+  verificationRequired?: boolean;
+  opensNewBrowsingContext?: boolean;
+}
+
+function elementEffectState(element: Element): string {
+  const input = element instanceof HTMLInputElement ? element : null;
+  const select = element instanceof HTMLSelectElement ? element : null;
+  return JSON.stringify({
+    text: element.textContent,
+    value:
+      element instanceof HTMLInputElement ||
+      element instanceof HTMLTextAreaElement ||
+      element instanceof HTMLSelectElement
+        ? element.value
+        : undefined,
+    checked: input?.checked,
+    selected: select ? [...select.selectedOptions].map((option) => option.value) : undefined,
+    expanded: element.getAttribute('aria-expanded'),
+    pressed: element.getAttribute('aria-pressed'),
+    ariaChecked: element.getAttribute('aria-checked'),
+    hidden: element.getAttribute('hidden'),
+    open: element instanceof HTMLDetailsElement ? element.open : undefined,
+  });
+}
+
+function isPanelotNode(node: Node): boolean {
+  if (node === overlayHost) return true;
+  if (!(node instanceof Element)) return false;
+  return node.matches('panelot-overlay') || node.closest('panelot-overlay') !== null;
+}
+
+function observePageEffects(): { stop: () => string[] } {
+  const beforeUrl = location.href;
+  let mutationCount = 0;
+  const observer = new MutationObserver((records) => {
+    for (const record of records) {
+      if (isPanelotNode(record.target)) continue;
+      const changedNodes = [...record.addedNodes, ...record.removedNodes];
+      if (changedNodes.length > 0 && changedNodes.every(isPanelotNode)) continue;
+      mutationCount++;
+    }
+  });
+  observer.observe(document.documentElement, {
+    attributes: true,
+    childList: true,
+    characterData: true,
+    subtree: true,
+  });
+  return {
+    stop: () => {
+      observer.disconnect();
+      const effects: string[] = [];
+      if (location.href !== beforeUrl) effects.push('url_changed');
+      if (mutationCount > 0) effects.push('dom_changed');
+      return effects;
+    },
+  };
+}
+
+async function doClick(
+  params: {
+    ref: string;
+    button?: 'left' | 'right';
+    doubleClick?: boolean;
+    allowRecovery?: boolean;
+  },
+  context: ActionExecutionContext,
+): Promise<ExecutedAction> {
   const { element: resolved, recoveredRef } = resolveRefWithRecovery(
     params.ref,
     params.allowRecovery,
   );
   const el = resolved as HTMLElement;
+  const baseTarget = document.querySelector('base[target]')?.getAttribute('target')?.toLowerCase();
+  const link = el.closest('a[href]');
+  const linkTarget = link ? (link.getAttribute('target')?.toLowerCase() ?? baseTarget) : undefined;
+  const submitter = el.closest('button, input');
+  const submitsForm =
+    (submitter instanceof HTMLButtonElement && submitter.type === 'submit') ||
+    (submitter instanceof HTMLInputElement && ['submit', 'image'].includes(submitter.type));
+  const form = submitsForm ? submitter.form : null;
+  const formTarget = form ? (form.getAttribute('target')?.toLowerCase() ?? baseTarget) : undefined;
+  const opensNewBrowsingContext = [linkTarget, formTarget].some(
+    (target) => !!target && !['_self', '_top', '_parent'].includes(target),
+  );
   el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' as ScrollBehavior });
-  await ensureActionable(el, 'click', new ActionDeadline(1500));
-  highlight(el);
+  await ensureActionable(el, 'click', new ActionDeadline(1500, context.signal, context.deadlineAt));
+  const beforeState = elementEffectState(el);
+  const beforeFocus = document.activeElement;
+  highlight(recoveredRef ?? params.ref);
   const opts = { bubbles: true, cancelable: true, view: window };
   if (params.button === 'right') {
     el.dispatchEvent(new MouseEvent('contextmenu', opts));
@@ -300,44 +572,67 @@ async function doClick(params: {
     el.dispatchEvent(new MouseEvent('mouseup', opts));
     el.click();
   }
-  return `已点击${recoveredRef ? `（目标已恢复为 ${recoveredRef}）` : ''}`;
+  return {
+    text: `已点击${recoveredRef ? `（目标已恢复为 ${recoveredRef}）` : ''}`,
+    opensNewBrowsingContext,
+    verify: () => {
+      const effects: string[] = [];
+      if (el.isConnected && elementEffectState(el) !== beforeState)
+        effects.push('target_state_changed');
+      if (document.activeElement !== beforeFocus) effects.push('focus_changed');
+      return { verified: false, effects };
+    },
+  };
 }
 
-async function doType(params: {
-  ref: string;
-  text: string;
-  mode?: 'replace' | 'append';
-  submit?: boolean;
-  slowly?: boolean;
-  allowRecovery?: boolean;
-}): Promise<string> {
+async function doType(
+  params: {
+    ref: string;
+    text: string;
+    mode?: 'replace' | 'append';
+    submit?: boolean;
+    slowly?: boolean;
+    allowRecovery?: boolean;
+  },
+  context: ActionExecutionContext,
+): Promise<ExecutedAction> {
   const { element: resolved, recoveredRef } = resolveRefWithRecovery(
     params.ref,
     params.allowRecovery,
   );
   const el = resolved as HTMLElement;
+  const form = params.submit ? (el.closest('form') as HTMLFormElement | null) : null;
+  const baseTarget = document.querySelector('base[target]')?.getAttribute('target')?.toLowerCase();
+  const formTarget = form ? (form.getAttribute('target')?.toLowerCase() ?? baseTarget) : undefined;
+  const opensNewBrowsingContext =
+    !!formTarget && !['_self', '_top', '_parent'].includes(formTarget);
   el.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior });
-  await ensureActionable(el, 'type', new ActionDeadline(1500));
-  highlight(el);
+  await ensureActionable(el, 'type', new ActionDeadline(1500, context.signal, context.deadlineAt));
+  highlight(recoveredRef ?? params.ref);
   el.focus();
 
+  const beforeValue =
+    el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement
+      ? el.value
+      : (el.textContent ?? '');
+  const desiredValue = (params.mode === 'append' ? beforeValue : '') + params.text;
+
   if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-    const base = params.mode === 'append' ? el.value : '';
     if (params.slowly) {
       // Char-by-char with key events for pickier frameworks.
-      let acc = base;
+      let acc = params.mode === 'append' ? beforeValue : '';
       for (const ch of params.text) {
         acc += ch;
         el.dispatchEvent(new KeyboardEvent('keydown', { key: ch, bubbles: true }));
         setNativeValue(el, acc);
         el.dispatchEvent(new KeyboardEvent('keyup', { key: ch, bubbles: true }));
-        await sleep(20);
+        await sleep(20, context);
       }
     } else {
-      setNativeValue(el, base + params.text);
+      setNativeValue(el, desiredValue);
     }
     // Verify the value stuck (framework may have swallowed synthetic events).
-    if (el.value !== base + params.text && !params.slowly) {
+    if (el.value !== desiredValue && !params.slowly) {
       throw actionError('l1_not_effective', '输入未生效（页面可能忽略合成事件）。', 'verify', true);
     }
   } else if (el.isContentEditable) {
@@ -358,22 +653,52 @@ async function doType(params: {
       }),
     );
     el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
-    (el.closest('form') as HTMLFormElement | null)?.requestSubmit?.();
+    form?.requestSubmit?.();
   }
-  return `已输入${params.submit ? '并提交' : ''}${recoveredRef ? `（目标已恢复为 ${recoveredRef}）` : ''}`;
+  const changed = desiredValue !== beforeValue;
+  return {
+    text: `${changed ? '已输入' : '字段原本已是目标值，已派发输入事件但未观察到值变化'}${params.submit ? '并提交' : ''}${recoveredRef ? `（目标已恢复为 ${recoveredRef}）` : ''}`,
+    verify: () => {
+      const value =
+        el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement
+          ? el.value
+          : (el.textContent ?? '');
+      const verified = changed && el.isConnected && value === desiredValue;
+      return { verified, effects: verified ? ['value_set'] : [] };
+    },
+    verificationRequired: changed,
+    opensNewBrowsingContext,
+  };
 }
 
-async function doSelect(params: {
-  ref: string;
-  values: string[];
-  allowRecovery?: boolean;
-}): Promise<string> {
+async function doSelect(
+  params: {
+    ref: string;
+    values: string[];
+    allowRecovery?: boolean;
+  },
+  context: ActionExecutionContext,
+): Promise<ExecutedAction> {
   const { element: el, recoveredRef } = resolveRefWithRecovery(params.ref, params.allowRecovery);
-  await ensureActionable(el, 'select', new ActionDeadline(1500));
+  await ensureActionable(
+    el,
+    'select',
+    new ActionDeadline(1500, context.signal, context.deadlineAt),
+  );
   if (!(el instanceof HTMLSelectElement)) {
     throw actionError('not_editable', `ref ${params.ref} 不是 select 元素`, 'precheck');
   }
-  highlight(el);
+  highlight(recoveredRef ?? params.ref);
+  const selectedValues = () =>
+    el.multiple
+      ? [...el.options]
+          .filter((option) => option.selected)
+          .map((option) => option.value)
+          .sort()
+      : el.value
+        ? [el.value]
+        : [];
+  const beforeSelection = selectedValues();
   const matched: string[] = [];
   for (const option of el.options) {
     const hit =
@@ -388,8 +713,20 @@ async function doSelect(params: {
       .join(', ');
     throw new Error(`未匹配到选项。可用选项：${available}`);
   }
+  const desiredSelection = selectedValues();
+  const changed = JSON.stringify(beforeSelection) !== JSON.stringify(desiredSelection);
   dispatchInputEvents(el);
-  return `已选择 ${matched.join(', ')}${recoveredRef ? `（目标已恢复为 ${recoveredRef}）` : ''}`;
+  return {
+    text: `${changed ? `已选择 ${matched.join(', ')}` : `下拉框原本已选择 ${matched.join(', ')}，已派发选择事件但未观察到值变化`}${recoveredRef ? `（目标已恢复为 ${recoveredRef}）` : ''}`,
+    verify: () => {
+      const verified =
+        changed &&
+        el.isConnected &&
+        JSON.stringify(selectedValues()) === JSON.stringify(desiredSelection);
+      return { verified, effects: verified ? ['selection_set'] : [] };
+    },
+    verificationRequired: changed,
+  };
 }
 
 async function doPressKey(params: { key: string }): Promise<string> {
@@ -434,7 +771,7 @@ async function doScroll(params: {
 async function doHover(params: { ref: string }): Promise<string> {
   const el = resolveRef(params.ref) as HTMLElement;
   el.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior });
-  highlight(el);
+  highlight(params.ref);
   const opts = { bubbles: true, view: window };
   el.dispatchEvent(new PointerEvent('pointerover', opts));
   el.dispatchEvent(new MouseEvent('mouseover', opts));
@@ -443,13 +780,16 @@ async function doHover(params: { ref: string }): Promise<string> {
   return `已悬停`;
 }
 
-async function doWaitFor(params: {
-  text?: string;
-  textGone?: boolean | string;
-  timeMs?: number;
-}): Promise<string> {
+async function doWaitFor(
+  params: {
+    text?: string;
+    textGone?: boolean | string;
+    timeMs?: number;
+  },
+  context: ActionExecutionContext,
+): Promise<string> {
   if (params.timeMs !== undefined) {
-    await sleep(Math.min(params.timeMs, 30_000));
+    await sleep(Math.min(params.timeMs, 30_000), context);
     return `已等待 ${params.timeMs}ms`;
   }
   const gone =
@@ -468,7 +808,7 @@ async function doWaitFor(params: {
     if (Date.now() > deadline) {
       throw new Error(`等待超时（30s）：${gone ? `"${target}" 未消失` : `"${target}" 未出现`}`);
     }
-    await sleep(200);
+    await sleep(200, context);
   }
 }
 
@@ -477,12 +817,12 @@ async function doUpload(params: {
   filename: string;
   mime: string;
   base64: string;
-}): Promise<string> {
+}): Promise<ExecutedAction> {
   const el = resolveRef(params.ref);
   if (!(el instanceof HTMLInputElement) || el.type !== 'file') {
     throw new Error(`ref ${params.ref} 不是文件输入框（<input type="file">）`);
   }
-  highlight(el);
+  highlight(params.ref);
   // DataTransfer synthesis — the extension-compatible path (CDP's
   // DOM.setFileInputFiles needs local file paths extensions can't provide).
   const binary = atob(params.base64);
@@ -494,7 +834,14 @@ async function doUpload(params: {
   el.files = dt.files;
   dispatchInputEvents(el);
   if (el.files.length !== 1) throw new Error('文件设置未生效（页面可能重置了输入框）');
-  return `已选择文件 ${params.filename}（${(bytes.length / 1024).toFixed(1)} KB）`;
+  return {
+    text: `已选择文件 ${params.filename}（${(bytes.length / 1024).toFixed(1)} KB）`,
+    verify: () => ({
+      verified: el.isConnected && el.files?.length === 1 && el.files[0]?.name === params.filename,
+      effects: ['file_set'],
+    }),
+    verificationRequired: true,
+  };
 }
 
 function doGetSelection(): string {
@@ -523,7 +870,10 @@ function doFindInPage(params: { query: string }): string {
 
 function takeSnapshot(params: { maxTokens?: number }): string {
   if (currentSnapshot) {
-    for (const [ref, hint] of currentSnapshot.hintMap) priorHints.set(ref, hint);
+    for (const [ref, hint] of currentSnapshot.hintMap) {
+      const identity = refDocumentIdentity(currentSnapshot, ref);
+      if (identity) priorHints.set(ref, { hint, identity });
+    }
     while (priorHints.size > 500) priorHints.delete(priorHints.keys().next().value!);
   }
   snapshotCounter++;
@@ -647,26 +997,41 @@ interface BatchAction {
   params: Record<string, unknown>;
 }
 
-async function doBatch(params: { actions: BatchAction[] }): Promise<string> {
+async function doBatch(
+  params: { actions: BatchAction[] },
+  context: ActionExecutionContext,
+): Promise<ExecutedAction> {
   if (params.actions.length > 4) throw new Error('batch_actions 最多 4 个动作');
   const executed: string[] = [];
+  const verifications: { verify: () => ActionVerification; required: boolean }[] = [];
   const refCountBefore = currentSnapshot?.refMap.size ?? 0;
 
   for (const [i, action] of params.actions.entries()) {
-    if (i > 0) await sleep(WAIT_DEFAULTS.betweenActionsMs);
-    let result: string;
+    new ActionDeadline(Number.POSITIVE_INFINITY, context.signal, context.deadlineAt).throwIfDone();
+    if (i > 0) await sleep(WAIT_DEFAULTS.betweenActionsMs, context);
+    let result: ExecutedAction;
     switch (action.kind) {
       case 'click':
-        result = await doClick(action.params as never);
+        result = await doClick(action.params as never, context);
         break;
       case 'type':
-        result = await doType(action.params as never);
+        result = await doType(action.params as never, context);
         break;
       case 'select_option':
-        result = await doSelect(action.params as never);
+        result = await doSelect(action.params as never, context);
         break;
     }
-    executed.push(`${i + 1}. ${action.kind}: ${result}`);
+    executed.push(`${i + 1}. ${action.kind}: ${result.text}`);
+    if (result.verify) {
+      verifications.push({ verify: result.verify, required: result.verificationRequired === true });
+    }
+
+    if (result.opensNewBrowsingContext && i < params.actions.length - 1) {
+      executed.push(
+        `[动作目标可能打开新的浏览上下文，中断剩余 ${params.actions.length - i - 1} 个动作]`,
+      );
+      break;
+    }
 
     // Change-interruption: if the DOM shifted significantly, remaining refs
     // are unreliable — stop and force a fresh snapshot.
@@ -678,7 +1043,17 @@ async function doBatch(params: { actions: BatchAction[] }): Promise<string> {
       }
     }
   }
-  return executed.join('\n');
+  return {
+    text: executed.join('\n'),
+    verify: () => {
+      const results = verifications.map(({ verify, required }) => ({ ...verify(), required }));
+      return {
+        verified: results.filter((result) => result.required).every((result) => result.verified),
+        effects: [...new Set(results.flatMap((result) => result.effects))],
+      };
+    },
+    verificationRequired: verifications.some((verification) => verification.required),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -687,6 +1062,8 @@ async function doBatch(params: { actions: BatchAction[] }): Promise<string> {
 
 export interface ExecuteResult {
   resultText: string;
+  /** The tab that now represents the action result (for example, a link-opened child tab). */
+  resultTabId?: number;
   /** New incremental snapshot after write actions. */
   snapshot?: string;
   pageStabilized?: boolean;
@@ -704,13 +1081,30 @@ const WRITE_ACTIONS = new Set([
   'upload',
 ]);
 
-export async function executeContentTool(tool: string, params: unknown): Promise<ExecuteResult> {
-  agentActing = true;
+export async function executeContentTool(
+  tool: string,
+  params: unknown,
+  providedContext: ActionExecutionContext = {},
+): Promise<ExecuteResult> {
+  const requestId = providedContext.requestId ?? crypto.randomUUID();
+  const context: ActionExecutionContext = {
+    ...providedContext,
+    requestId,
+    deadlineAt: providedContext.deadlineAt ?? deadlineForTool(tool, params),
+  };
+  const deadline = new ActionDeadline(Number.POSITIVE_INFINITY, context.signal, context.deadlineAt);
+  deadline.throwIfDone();
+  activeAgentRequests.add(requestId);
+  activeDialogRequestId = requestId;
+  const effectObserver = WRITE_ACTIONS.has(tool) ? observePageEffects() : undefined;
+  let effectsStopped = false;
+  let actionDispatched = false;
   try {
     // Params were zod-validated at the AgentTool layer before dispatch.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const p = (params ?? {}) as any;
     let resultText: string;
+    let executedAction: ExecutedAction | undefined;
     const actionStart = Date.now();
     const actionGeneration = currentSnapshot?.snapshotId;
 
@@ -727,8 +1121,7 @@ export async function executeContentTool(tool: string, params: unknown): Promise
       case 'get_selection':
         return { resultText: doGetSelection() };
       case 'get_rect': {
-        const element = resolveRef(p.ref);
-        const rect = element.getBoundingClientRect();
+        const rect = getRefViewportRect(p.ref);
         const documentCoordinates = p.coordinateSpace !== 'viewport';
         return {
           resultText: `Bounds for ${p.ref}`,
@@ -740,19 +1133,28 @@ export async function executeContentTool(tool: string, params: unknown): Promise
           },
         };
       }
+      case 'validate_ref':
+        resolveRef(p.ref);
+        return { resultText: 'ref valid' };
       case 'annotate_refs':
         return { resultText: annotateRefs() };
       case 'clear_annotations':
         clearRefAnnotations();
         return { resultText: 'annotations cleared' };
       case 'click':
-        resultText = await doClick(p);
+        actionDispatched = true;
+        executedAction = await doClick(p, context);
+        resultText = executedAction.text;
         break;
       case 'type':
-        resultText = await doType(p);
+        actionDispatched = true;
+        executedAction = await doType(p, context);
+        resultText = executedAction.text;
         break;
       case 'select_option':
-        resultText = await doSelect(p);
+        actionDispatched = true;
+        executedAction = await doSelect(p, context);
+        resultText = executedAction.text;
         break;
       case 'focus': {
         // Focus for the CDP press_key path: bring the element into view and
@@ -763,21 +1165,27 @@ export async function executeContentTool(tool: string, params: unknown): Promise
         return { resultText: '已聚焦' };
       }
       case 'press_key':
+        actionDispatched = true;
         resultText = await doPressKey(p);
         break;
       case 'scroll':
         resultText = await doScroll(p);
         break;
       case 'hover':
+        actionDispatched = true;
         resultText = await doHover(p);
         break;
       case 'wait_for':
-        return { resultText: await doWaitFor(p) };
+        return { resultText: await doWaitFor(p, context) };
       case 'batch_actions':
-        resultText = await doBatch(p);
+        actionDispatched = true;
+        executedAction = await doBatch(p, context);
+        resultText = executedAction.text;
         break;
       case 'upload':
-        resultText = await doUpload(p);
+        actionDispatched = true;
+        executedAction = await doUpload(p);
+        resultText = executedAction.text;
         break;
       default:
         throw new Error(`content script 不支持工具: ${tool}`);
@@ -786,9 +1194,30 @@ export async function executeContentTool(tool: string, params: unknown): Promise
     // Write actions: stabilize, then return a fresh snapshot (docs/05 §1.3).
     let stabilized = true;
     if (WRITE_ACTIONS.has(tool)) {
-      const { timedOut } = await stabilize();
+      const { timedOut } = await stabilize(context);
       stabilized = !timedOut;
     }
+    deadline.throwIfDone();
+    const observedEffects = effectObserver?.stop() ?? [];
+    effectsStopped = true;
+    const verification = executedAction?.verify?.();
+    if (executedAction?.verificationRequired && !verification?.verified) {
+      throw actionError(
+        'l1_not_effective',
+        '动作派发后目标状态未能保持，页面可能回滚了该操作。',
+        'verify',
+        true,
+        { effectState: observedEffects.length > 0 ? 'observed' : 'dispatched' },
+      );
+    }
+    const allEffects = [...new Set([...observedEffects, ...(verification?.effects ?? [])])];
+    const effectState: ActionEvidence['effectState'] = verification?.verified
+      ? 'verified'
+      : allEffects.length > 0
+        ? 'observed'
+        : 'dispatched';
+    const outcome: ActionEvidence['outcome'] =
+      effectState === 'verified' ? 'verified' : 'uncertain';
     const previousSnapshot = currentSnapshot?.yaml;
     const fullSnapshot = takeSnapshot({ maxTokens: 1500 });
     const snapshot = diffSnapshotYaml(previousSnapshot, fullSnapshot).text;
@@ -805,18 +1234,43 @@ export async function executeContentTool(tool: string, params: unknown): Promise
               durationMs: Date.now() - actionStart,
             },
           ],
-          observedEffects:
-            currentSnapshot?.snapshotId !== actionGeneration ? ['snapshot_changed'] : [],
-          outcome: 'verified',
+          effectState,
+          observedEffects: allEffects,
+          outcome,
         }
       : undefined;
+    const effectNotice =
+      effectState === 'dispatched'
+        ? '\n[动作已派发，但未观察到可确认的页面效果。]'
+        : effectState === 'observed'
+          ? '\n[已观察到页面变化，但无法确认是否达到预期效果。]'
+          : '';
     return {
-      resultText: resultText + drainDialogReports() + (stabilized ? '' : '\n[页面可能未完全加载]'),
+      resultText:
+        resultText +
+        effectNotice +
+        drainDialogReports(requestId) +
+        (stabilized ? '' : '\n[页面可能未完全加载]'),
       snapshot,
       pageStabilized: stabilized,
       ...(evidence ? { evidence } : {}),
     };
+  } catch (error) {
+    if (
+      error instanceof ActionError &&
+      actionDispatched &&
+      (error.failure.code === 'aborted' || error.failure.code === 'timeout')
+    ) {
+      throw new ActionError({
+        ...error.failure,
+        details: { ...error.failure.details, effectMayHaveOccurred: true },
+      });
+    }
+    throw error;
   } finally {
-    agentActing = false;
+    if (!effectsStopped) effectObserver?.stop();
+    activeAgentRequests.delete(requestId);
+    if (activeDialogRequestId === requestId) activeDialogRequestId = null;
+    pendingDialogs.delete(requestId);
   }
 }

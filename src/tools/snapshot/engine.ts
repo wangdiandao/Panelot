@@ -2,7 +2,7 @@
  * Accessibility snapshot engine (docs/05 §1) — runs inside the content script.
  *
  * Output format follows Playwright MCP's ariaSnapshot (YAML indent tree of
- * `role "name" [attrs] [ref=sN_M]`), with Chrome DevTools MCP's versioned-uid
+ * `role "name" [attrs] [ref=<snapshot-ref>]`), with Chrome DevTools MCP's versioned-uid
  * pattern for refs: refs embed the snapshot id, and execution rejects any ref
  * whose prefix isn't the tab's CURRENT snapshot — killing state divergence at
  * the protocol level (nanobrowser/browser-use's chronic bug).
@@ -28,14 +28,22 @@ export interface SnapshotNode {
 
 export interface SnapshotResult {
   snapshotId: number;
+  documentToken: string;
   url: string;
   title: string;
   yaml: string;
   /** ref → element, kept by the content script for execution. */
   refMap: Map<string, Element>;
+  /** ref → same-origin iframe chain, outermost first. */
+  frameMap: Map<string, FrameRefContext[]>;
   /** Stable, non-sensitive identity hints used for one high-confidence recovery. */
   hintMap: Map<string, LocatorHint>;
   truncatedNodes: number;
+}
+
+export interface FrameRefContext {
+  frame: HTMLIFrameElement;
+  document: Document;
 }
 
 export interface LocatorHint {
@@ -310,17 +318,37 @@ function isHidden(el: Element, win: Window): boolean {
 export interface BuildOptions {
   snapshotId: number;
   maxTokens?: number;
+  /** Defaults to a nonce created once for this content-script document. */
+  documentToken?: string;
 }
 
 const MAX_IFRAME_DEPTH = 4;
+const DOCUMENT_TOKENS = new WeakMap<Document, string>();
+
+function randomRefToken(): string {
+  const values = new Uint32Array(2);
+  crypto.getRandomValues(values);
+  return [...values].map((value) => value.toString(36)).join('');
+}
+
+function documentRefToken(document: Document): string {
+  const existing = DOCUMENT_TOKENS.get(document);
+  if (existing) return existing;
+  const token = randomRefToken();
+  DOCUMENT_TOKENS.set(document, token);
+  return token;
+}
 
 export function buildSnapshot(win: Window, opts: BuildOptions): SnapshotResult {
   const doc = win.document;
   const refMap = new Map<string, Element>();
+  const frameMap = new Map<string, FrameRefContext[]>();
   const hintMap = new Map<string, LocatorHint>();
   let refIndex = 0;
   let iframeDepth = 0;
+  const frameStack: FrameRefContext[] = [];
   const sid = opts.snapshotId;
+  const documentToken = opts.documentToken ?? documentRefToken(doc);
 
   /** Children in composed-tree order: open shadow root replaces light children. */
   function childrenOf(el: Element): SnapshotNode[] {
@@ -366,9 +394,11 @@ export function buildSnapshot(win: Window, opts: BuildOptions): SnapshotResult {
     }
     const node: SnapshotNode = { role: 'iframe', name: label, attrs: [], children: [] };
     iframeDepth++;
+    frameStack.push({ frame: el, document: frameBody.ownerDocument });
     try {
       for (const child of frameBody.children) node.children.push(...walk(child));
     } finally {
+      frameStack.pop();
       iframeDepth--;
     }
     return [node];
@@ -392,8 +422,9 @@ export function buildSnapshot(win: Window, opts: BuildOptions): SnapshotResult {
       };
       if (interactive) {
         refIndex++;
-        node.ref = `s${sid}_${refIndex}`;
+        node.ref = `s${documentToken}_${sid}_${refIndex}`;
         refMap.set(node.ref, el);
+        frameMap.set(node.ref, [...frameStack]);
         hintMap.set(node.ref, {
           role,
           name: node.name,
@@ -447,13 +478,15 @@ export function buildSnapshot(win: Window, opts: BuildOptions): SnapshotResult {
   // Serialize with token cap (docs/05 §1.3): drop non-interactive text first.
   const { yaml, truncated } = serialize(roots, opts.maxTokens ?? 3000);
 
-  const header = `# Page Snapshot (s${sid})\nURL: ${win.location.href}\nTitle: ${doc.title}\n\n`;
+  const header = `# Page Snapshot (s${documentToken}_${sid})\nURL: ${win.location.href}\nTitle: ${doc.title}\n\n`;
   return {
     snapshotId: sid,
+    documentToken,
     url: win.location.href,
     title: doc.title,
     yaml: header + yaml + (truncated > 0 ? `\n[已截断: ${truncated} 个节点]` : ''),
     refMap,
+    frameMap,
     hintMap,
     truncatedNodes: truncated,
   };

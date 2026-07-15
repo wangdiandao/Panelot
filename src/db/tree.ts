@@ -20,6 +20,23 @@ export interface AppendNodeInput {
   ts?: number;
 }
 
+export function createThreadMeta(partial: Partial<ThreadMeta> = {}, now = Date.now()): ThreadMeta {
+  return {
+    id: partial.id ?? crypto.randomUUID(),
+    title: partial.title ?? '',
+    createdAt: now,
+    updatedAt: now,
+    leafId: null,
+    tags: [],
+    pinned: false,
+    archived: false,
+    stats: { turns: 0, totalTokens: 0, costUsd: 0 },
+    scopeOrigins: [],
+    ...partial,
+    revision: partial.revision ?? 0,
+  };
+}
+
 /** Max parent-chain hops = total node count — guards against cycles (docs/02 §3.4). */
 class TraversalGuard {
   private hops = 0;
@@ -31,6 +48,10 @@ class TraversalGuard {
   }
 }
 
+// Short branches are cheaper as point reads, while long histories must not pay one
+// IndexedDB round trip per ancestor.
+const SERIAL_PATH_LOOKUP_LIMIT = 32;
+
 export class ThreadTree {
   constructor(private db: PanelotDB) {}
 
@@ -39,21 +60,7 @@ export class ThreadTree {
   // -------------------------------------------------------------------------
 
   async createThread(partial?: Partial<ThreadMeta>): Promise<ThreadMeta> {
-    const now = Date.now();
-    const meta: ThreadMeta = {
-      id: partial?.id ?? crypto.randomUUID(),
-      title: partial?.title ?? '',
-      createdAt: now,
-      updatedAt: now,
-      leafId: null,
-      tags: [],
-      pinned: false,
-      archived: false,
-      stats: { turns: 0, totalTokens: 0, costUsd: 0 },
-      scopeOrigins: [],
-      ...partial,
-      revision: partial?.revision ?? 0,
-    };
+    const meta = createThreadMeta(partial);
     await this.db.threads.add(meta);
     return meta;
   }
@@ -313,14 +320,28 @@ export class ThreadTree {
    * Throws if the chain is broken or cyclic — callers use validateLeaf first.
    */
   async getPath(threadId: string, leafId: string): Promise<ThreadNode[]> {
-    const total = await this.db.nodes.where('threadId').equals(threadId).count();
-    const guard = new TraversalGuard(total);
-
     const path: ThreadNode[] = [];
+    const seen = new Set<string>();
+    let serialLookups = 0;
+    let nodesById: Map<string, ThreadNode> | undefined;
     let currentId: string | null = leafId;
     while (currentId !== null) {
-      guard.step();
-      const node: ThreadNode | undefined = await this.db.nodes.get(currentId);
+      if (seen.has(currentId)) {
+        throw new Error('tree traversal cycle — data corruption suspected');
+      }
+      seen.add(currentId);
+
+      let node: ThreadNode | undefined;
+      if (serialLookups < SERIAL_PATH_LOOKUP_LIMIT) {
+        node = await this.db.nodes.get(currentId);
+        serialLookups++;
+      } else {
+        if (!nodesById) {
+          const nodes = await this.db.nodes.where('threadId').equals(threadId).toArray();
+          nodesById = new Map(nodes.map((candidate) => [candidate.id, candidate]));
+        }
+        node = nodesById.get(currentId);
+      }
       if (!node || node.threadId !== threadId) {
         throw new Error(`broken parent chain at ${currentId}`);
       }

@@ -4,7 +4,7 @@
  * with structured results. Built on shadcn/ui primitives.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '../components/ui/button';
@@ -14,6 +14,14 @@ import { Label } from '../components/ui/label';
 import { Switch } from '../components/ui/switch';
 import { Checkbox } from '../components/ui/checkbox';
 import { Alert, AlertDescription } from '../components/ui/alert';
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from '../components/ui/empty';
+import { FieldError } from '../components/ui/field';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../components/ui/collapsible';
 import {
   AlertDialog,
@@ -28,13 +36,21 @@ import {
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from '../components/ui/select';
 import { createAdapter, normalizeBaseUrl } from '../../providers/registry';
-import type { Connection, QuirkFlags, VerifyResult } from '../../providers/types';
-import { SettingsStore } from '../../settings/store';
+import {
+  ProviderError,
+  type Connection,
+  type ProviderErrorKind,
+  type QuirkFlags,
+  type VerifyResult,
+} from '../../providers/types';
+import { SettingsStore, type GlobalSettings } from '../../settings/store';
+import { useStorageValue } from '../useStorageValue';
 import {
   decryptHeaderValue,
   decryptSecret,
@@ -45,14 +61,9 @@ import {
 import { hostPermissionBroker } from '../../permissions/hostPermissionBroker';
 import { ModelSelector } from '../components/ModelSelector';
 import { ProviderErrorNotice } from '../components/ProviderErrorNotice';
+import { cn } from '../lib/utils';
 import type { ProviderErrorViewInput } from '../providerErrorPresentation';
-
-const FAILURE_TEXT: Record<NonNullable<VerifyResult['failure']>, string> = {
-  invalid_key: 'API Key 无效 — 检查 Key 是否正确、是否有余额',
-  unreachable: '域名不可达 — 检查网络、baseUrl 拼写，或该端点是否需要代理',
-  needs_host_permission: '需要授权访问该域名 — 点击 Verify 时允许权限申请',
-  protocol_mismatch: '协议不符 — 确认该端点兼容所选 API 风格（OpenAI/Anthropic）',
-};
+import { t } from '../i18n';
 
 const VERIFY_KIND: Record<NonNullable<VerifyResult['failure']>, string> = {
   invalid_key: 'auth',
@@ -60,6 +71,15 @@ const VERIFY_KIND: Record<NonNullable<VerifyResult['failure']>, string> = {
   needs_host_permission: 'network',
   protocol_mismatch: 'protocol',
 };
+
+function failureText(failure: NonNullable<VerifyResult['failure']>): string {
+  if (failure === 'invalid_key')
+    return `${t('error.reason.invalid_key')} — ${t('error.guidance.invalid_key')}`;
+  if (failure === 'unreachable') return `${t('error.network')} — ${t('error.guidance.network')}`;
+  if (failure === 'needs_host_permission')
+    return `${t('settings.providers.needsHostPermission')} — ${t('settings.providers.needsHostPermissionHint')}`;
+  return `${t('error.protocol')} — ${t('error.guidance.protocol')}`;
+}
 
 export function providerErrorFromVerifyResult(
   result: VerifyResult,
@@ -70,56 +90,101 @@ export function providerErrorFromVerifyResult(
     Object.values(result.details).some((value) => value !== undefined);
   return {
     message: hasStructuredDetails
-      ? (result.detail ?? FAILURE_TEXT[result.failure])
-      : FAILURE_TEXT[result.failure],
+      ? (result.detail ?? failureText(result.failure))
+      : failureText(result.failure),
     kind: VERIFY_KIND[result.failure],
     ...(hasStructuredDetails ? { details: result.details } : {}),
+  };
+}
+
+function verifyFailureForProviderKind(
+  kind: ProviderErrorKind,
+): NonNullable<VerifyResult['failure']> {
+  if (kind === 'auth') return 'invalid_key';
+  if (kind === 'protocol') return 'protocol_mismatch';
+  return 'unreachable';
+}
+
+function requestVerifyFailure(error: unknown): VerifyResult {
+  const safeError = t('settings.providers.verifyRequestError');
+  if (error instanceof ProviderError) {
+    const details = {
+      ...(error.details.status === undefined ? {} : { status: error.details.status }),
+      ...(error.details.reason === undefined ? {} : { reason: error.details.reason }),
+      raw: safeError,
+    };
+    return {
+      reachable: false,
+      keyValid: false,
+      streaming: false,
+      toolUse: false,
+      failure: verifyFailureForProviderKind(error.kind),
+      detail: safeError,
+      details,
+    };
+  }
+  return {
+    reachable: false,
+    keyValid: false,
+    streaming: false,
+    toolUse: false,
+    failure: 'unreachable',
+    detail: safeError,
+    details: { raw: safeError },
   };
 }
 
 function VerifyStatus({ result }: { result: VerifyResult }) {
   return (
     <div className="flex flex-wrap gap-3 text-[13px]">
-      <span className={result.reachable ? 'text-success' : 'text-destructive'}>
-        {result.reachable ? '✓' : '✗'} 可达
+      <span className={cn(result.reachable ? 'text-success' : 'text-destructive')}>
+        {result.reachable ? '✓' : '✗'} {t('settings.providers.reachable')}
       </span>
-      <span className={result.keyValid ? 'text-success' : 'text-destructive'}>
-        {result.keyValid ? '✓' : '✗'} Key 有效
+      <span className={cn(result.keyValid ? 'text-success' : 'text-destructive')}>
+        {result.keyValid ? '✓' : '✗'} {t('settings.providers.keyValid')}
       </span>
-      <span className={result.streaming ? 'text-success' : 'text-muted-foreground'}>
-        {result.streaming ? '✓' : '—'} 流式
+      <span className={cn(result.streaming ? 'text-success' : 'text-muted-foreground')}>
+        {result.streaming ? '✓' : '—'} {t('settings.providers.streaming')}
       </span>
-      <span className={result.toolUse ? 'text-success' : 'text-muted-foreground'}>
-        {result.toolUse ? '✓' : '—'} 工具调用
+      <span className={cn(result.toolUse ? 'text-success' : 'text-muted-foreground')}>
+        {result.toolUse ? '✓' : '—'} {t('settings.providers.toolUse')}
       </span>
     </div>
   );
 }
 
 export function ProvidersPage() {
-  const [connections, setConnections] = useState<Connection[]>([]);
+  const storedConnections = useStorageValue<Connection[] | null>('connections', null);
+  const globalSettings = useStorageValue<GlobalSettings | null>('global_settings', null);
+  const connections = storedConnections ?? [];
   const [editing, setEditing] = useState<Connection | null>(null);
   const [deleting, setDeleting] = useState<Connection | null>(null);
-  const [defaultModel, setDefaultModel] = useState<{
-    connectionId: string;
-    modelId: string;
-  } | null>(null);
+  const defaultModel = globalSettings?.defaultModel ?? null;
 
-  useEffect(() => {
-    void SettingsStore.connections.get().then(setConnections);
-    void SettingsStore.global.get().then((g) => setDefaultModel(g.defaultModel ?? null));
-  }, []);
-
-  const saveDefaultModel = async (model: { connectionId: string; modelId: string } | null) => {
-    setDefaultModel(model);
-    const g = await SettingsStore.global.get();
-    await SettingsStore.global.set({ ...g, defaultModel: model ?? undefined });
-    toast.success(model ? '默认模型已设置' : '默认模型已清除');
+  const saveDefaultModel = async (model: { connectionId: string; modelId: string }) => {
+    await SettingsStore.global.patch({ defaultModel: model });
+    toast.success(t('settings.providers.defaultSet'));
   };
 
-  const save = async (list: Connection[]) => {
-    setConnections(list);
-    await SettingsStore.connections.set(list);
+  const clearDefaultModelForConnection = async (connectionId: string) => {
+    if (connections.some((connection) => connection.id !== connectionId && connection.enabled)) {
+      return;
+    }
+    const settings = await SettingsStore.global.get();
+    if (settings.defaultModel?.connectionId === connectionId) {
+      await SettingsStore.global.patch({ defaultModel: undefined });
+    }
+  };
+
+  const setConnectionEnabled = async (connection: Connection, enabled: boolean) => {
+    await SettingsStore.connections.upsert({ ...connection, enabled });
+    if (!enabled) await clearDefaultModelForConnection(connection.id);
+  };
+
+  const removeConnection = async (connection: Connection) => {
+    await SettingsStore.connections.remove(connection.id);
+    await clearDefaultModelForConnection(connection.id);
+    toast.success(t('settings.providers.deleted'));
   };
 
   const upsert = async (conn: Connection) => {
@@ -140,14 +205,9 @@ export function ProvidersPage() {
           )
         : undefined,
     };
-    const idx = connections.findIndex((c) => c.id === conn.id);
-    const list =
-      idx === -1
-        ? [...connections, encrypted]
-        : connections.map((c) => (c.id === conn.id ? encrypted : c));
-    await save(list);
+    await SettingsStore.connections.upsert(encrypted);
     setEditing(null);
-    toast.success('连接已保存');
+    toast.success(t('settings.providers.saved'));
   };
 
   if (editing) {
@@ -157,9 +217,9 @@ export function ProvidersPage() {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="flex flex-col gap-3">
       <div className="flex items-center">
-        <h2 className="text-[15px] font-semibold">Providers</h2>
+        <h2 className="text-[15px] font-semibold">{t('settings.providers.title')}</h2>
         <Button
           size="sm"
           className="ml-auto"
@@ -174,30 +234,53 @@ export function ProvidersPage() {
             })
           }
         >
-          <Plus /> 添加连接
+          <Plus data-icon="inline-start" /> {t('settings.providers.add')}
         </Button>
       </div>
       {connections.length === 0 && (
-        <div className="rounded-lg border border-dashed border-border p-6 text-center text-[13px] text-muted-foreground">
-          还没有配置任何模型连接。点击「添加连接」，选择预置模板，填入 API Key 即可开聊。
-        </div>
+        <Empty className="border border-dashed p-6 md:p-6">
+          <EmptyHeader>
+            <EmptyTitle className="text-base">{t('settings.providers.emptyTitle')}</EmptyTitle>
+            <EmptyDescription>{t('settings.providers.emptyHint')}</EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <Button
+              size="sm"
+              onClick={() =>
+                setEditing({
+                  id: crypto.randomUUID(),
+                  name: '',
+                  kind: 'openai',
+                  baseUrl: '',
+                  apiKeys: [],
+                  enabled: true,
+                })
+              }
+            >
+              <Plus data-icon="inline-start" /> {t('settings.providers.add')}
+            </Button>
+          </EmptyContent>
+        </Empty>
       )}
       {connections.length > 0 && (
         <div className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3">
           <div className="min-w-0">
-            <div className="text-[13px] font-medium">默认模型</div>
+            <div className="text-[13px] font-medium">{t('settings.providers.defaultModel')}</div>
             <div className="text-[11px] text-muted-foreground">
-              新会话默认使用的模型（会话内切换过则优先沿用上次选择）
+              {t('settings.providers.defaultModelHint')}
             </div>
           </div>
           <div className="ml-auto">
             <ModelSelector
               value={defaultModel}
-              onSelect={(choice) =>
-                void saveDefaultModel(
-                  choice ? { connectionId: choice.connectionId, modelId: choice.modelId } : null,
-                )
-              }
+              allowDefaultSelection={false}
+              onSelect={(choice) => {
+                if (choice)
+                  void saveDefaultModel({
+                    connectionId: choice.connectionId,
+                    modelId: choice.modelId,
+                  });
+              }}
             />
           </div>
         </div>
@@ -209,10 +292,8 @@ export function ProvidersPage() {
         >
           <Switch
             checked={c.enabled}
-            onCheckedChange={(on) =>
-              void save(connections.map((x) => (x.id === c.id ? { ...x, enabled: on } : x)))
-            }
-            aria-label={`启用 ${c.name}`}
+            onCheckedChange={(on) => void setConnectionEnabled(c, on)}
+            aria-label={t('settings.providers.enable', { name: c.name || c.baseUrl })}
           />
           <div className="min-w-0">
             <div className="text-[13px] font-medium">{c.name || c.baseUrl}</div>
@@ -222,15 +303,10 @@ export function ProvidersPage() {
           </div>
           <div className="ml-auto flex gap-2">
             <Button variant="outline" size="sm" onClick={() => setEditing(c)}>
-              编辑
+              {t('settings.providers.edit')}
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
-              onClick={() => setDeleting(c)}
-            >
-              删除
+            <Button variant="destructive" size="sm" onClick={() => setDeleting(c)}>
+              {t('settings.providers.delete')}
             </Button>
           </div>
         </div>
@@ -239,24 +315,25 @@ export function ProvidersPage() {
       <AlertDialog open={deleting !== null} onOpenChange={(o) => !o && setDeleting(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>删除连接「{deleting?.name}」？</AlertDialogTitle>
-            <AlertDialogDescription>
-              该连接的模型将不再可用；已有会话记录不受影响。
-            </AlertDialogDescription>
+            <AlertDialogTitle>
+              {t('settings.providers.deleteTitle', {
+                name: deleting?.name || deleting?.baseUrl || '',
+              })}
+            </AlertDialogTitle>
+            <AlertDialogDescription>{t('settings.providers.deleteHint')}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogCancel>{t('app.cancel')}</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
               onClick={() => {
                 if (deleting) {
-                  void save(connections.filter((x) => x.id !== deleting.id));
-                  toast.success('连接已删除');
+                  void removeConnection(deleting);
                 }
                 setDeleting(null);
               }}
             >
-              删除
+              {t('settings.providers.delete')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -284,14 +361,29 @@ function ConnectionForm({
     connection.models?.length ? JSON.stringify(connection.models, null, 2) : '',
   );
   const [formError, setFormError] = useState<string | null>(null);
+  const keyHydrationGeneration = useRef(0);
+  const headerHydrationGeneration = useRef(0);
+  const keysDirty = useRef(false);
+  const headersDirty = useRef(false);
 
   // Decrypt stored keys for display when editing an existing connection.
   useEffect(() => {
+    const generation = ++keyHydrationGeneration.current;
+    keysDirty.current = false;
     void Promise.all(
       connection.apiKeys.map((k) => (isEncrypted(k) ? decryptSecret(k) : Promise.resolve(k))),
-    ).then((keys) => setKeysText(keys.join('\n')));
+    ).then((keys) => {
+      if (keyHydrationGeneration.current === generation && !keysDirty.current) {
+        setKeysText(keys.join('\n'));
+      }
+    });
+    return () => {
+      if (keyHydrationGeneration.current === generation) keyHydrationGeneration.current += 1;
+    };
   }, [connection.apiKeys, connection.id]);
   useEffect(() => {
+    const generation = ++headerHydrationGeneration.current;
+    headersDirty.current = false;
     if (!connection.customHeaders) {
       setHeadersText('');
       return;
@@ -301,17 +393,30 @@ function ConnectionForm({
         async ([name, value]) =>
           [name, await decryptHeaderValue(connection.id, name, value)] as const,
       ),
-    ).then((headers) =>
-      setHeadersText(headers.map(([name, value]) => `${name}: ${value}`).join('\n')),
-    );
+    ).then((headers) => {
+      if (headerHydrationGeneration.current === generation && !headersDirty.current) {
+        setHeadersText(headers.map(([name, value]) => `${name}: ${value}`).join('\n'));
+      }
+    });
+    return () => {
+      if (headerHydrationGeneration.current === generation) {
+        headerHydrationGeneration.current += 1;
+      }
+    };
   }, [connection.customHeaders, connection.id]);
   const [verifying, setVerifying] = useState(false);
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
   const [urlHint, setUrlHint] = useState<string | undefined>();
 
   const built = (): Connection => {
-    const { url, hint } = normalizeBaseUrl(conn.baseUrl, conn.kind);
-    setUrlHint(hint);
+    let normalized: ReturnType<typeof normalizeBaseUrl>;
+    try {
+      normalized = normalizeBaseUrl(conn.baseUrl, conn.kind);
+    } catch {
+      throw new Error(t('settings.providers.invalidEndpoint'));
+    }
+    const { url, hint } = normalized;
+    setUrlHint(hint ? t('settings.providers.baseUrlHint') : undefined);
     // Name is optional — default to the endpoint hostname.
     const name =
       conn.name.trim() ||
@@ -324,7 +429,12 @@ function ConnectionForm({
       })();
     let models: Connection['models'];
     if (modelConfigText.trim()) {
-      const parsed: unknown = JSON.parse(modelConfigText);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(modelConfigText);
+      } catch {
+        throw new Error(t('settings.providers.invalidModelJson'));
+      }
       models = parseModelConfigs(parsed);
     }
     const customHeaders = Object.fromEntries(
@@ -332,9 +442,11 @@ function ConnectionForm({
         .split('\n')
         .map((line) => line.trim())
         .filter(Boolean)
-        .map((line) => {
+        .map((line, index) => {
           const separator = line.indexOf(':');
-          if (separator <= 0) throw new Error(`自定义 Header 格式无效: ${line}`);
+          if (separator <= 0) {
+            throw new Error(t('settings.providers.invalidHeader', { line: index + 1 }));
+          }
           return [line.slice(0, separator).trim(), line.slice(separator + 1).trim()];
         }),
     );
@@ -366,10 +478,12 @@ function ConnectionForm({
   };
 
   const verify = async () => {
-    const candidate = built();
     setVerifying(true);
     setVerifyResult(null);
+    setFormError(null);
+    let phase: 'configuration' | 'request' = 'configuration';
     try {
+      const candidate = built();
       const granted = await requestHostPermission(candidate.baseUrl);
       if (!granted) {
         setVerifyResult({
@@ -381,17 +495,20 @@ function ConnectionForm({
         });
         return;
       }
-      const result = await createAdapter(candidate).verify();
+      const adapter = createAdapter(candidate);
+      phase = 'request';
+      const result = await adapter.verify();
       setVerifyResult(result);
-    } catch (e) {
-      setVerifyResult({
-        reachable: false,
-        keyValid: false,
-        streaming: false,
-        toolUse: false,
-        failure: 'unreachable',
-        detail: (e as Error).message,
-      });
+    } catch (error) {
+      if (phase === 'configuration') {
+        setFormError(
+          error instanceof Error && error.message.trim()
+            ? error.message
+            : t('settings.providers.invalidConfiguration'),
+        );
+      } else {
+        setVerifyResult(requestVerifyFailure(error));
+      }
     } finally {
       setVerifying(false);
     }
@@ -401,15 +518,17 @@ function ConnectionForm({
   const verifyError = verifyResult ? providerErrorFromVerifyResult(verifyResult) : undefined;
 
   return (
-    <div className="max-w-xl space-y-4">
+    <div className="flex max-w-xl flex-col gap-4">
       <h2 className="text-[15px] font-semibold">
-        {connection.name ? `编辑 ${connection.name}` : '添加连接'}
+        {connection.name
+          ? `${t('settings.providers.edit')} ${connection.name}`
+          : t('settings.providers.add')}
       </h2>
 
       {/* Classified by interface type, not vendor: pick the wire protocol,
           then enter the endpoint domain + key. */}
       <div>
-        <Label className={labelCls}>接口类型</Label>
+        <Label className={labelCls}>{t('settings.providers.kind')}</Label>
         <Select
           value={conn.kind}
           onValueChange={(v) => setConn({ ...conn, kind: v as Connection['kind'] })}
@@ -418,21 +537,27 @@ function ConnectionForm({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="openai">OpenAI 兼容（/chat/completions）</SelectItem>
-            <SelectItem value="anthropic">Anthropic（/v1/messages）</SelectItem>
+            <SelectGroup>
+              <SelectItem value="openai">
+                {t('settings.providers.kind.openai')} (/chat/completions)
+              </SelectItem>
+              <SelectItem value="anthropic">
+                {t('settings.providers.kind.anthropic')} (/v1/messages)
+              </SelectItem>
+            </SelectGroup>
           </SelectContent>
         </Select>
       </div>
 
       <div>
         <Label className={labelCls} htmlFor="conn-name">
-          名称（可选，留空自动取域名）
+          {t('settings.providers.name')}
         </Label>
         <Input
           id="conn-name"
           value={conn.name}
           onChange={(e) => setConn({ ...conn, name: e.target.value })}
-          placeholder="给这个连接起个名字"
+          placeholder={t('settings.providers.namePlaceholder')}
         />
       </div>
 
@@ -452,21 +577,24 @@ function ConnectionForm({
 
       <div>
         <Label className={labelCls} htmlFor="conn-keys">
-          API Keys（每行一个，多 key 自动 failover）
+          {t('settings.providers.keys')}
         </Label>
         <Textarea
           id="conn-keys"
           className="font-mono"
           rows={2}
           value={keysText}
-          onChange={(e) => setKeysText(e.target.value)}
+          onChange={(e) => {
+            keysDirty.current = true;
+            setKeysText(e.target.value);
+          }}
           placeholder="sk-…"
         />
       </div>
 
       <div>
         <Label className={labelCls} htmlFor="conn-models">
-          模型列表（自动从端点 /models 获取；仅当端点不支持时手填，每行一个）
+          {t('settings.providers.models')}
         </Label>
         <Textarea
           id="conn-models"
@@ -474,26 +602,31 @@ function ConnectionForm({
           rows={2}
           value={modelsText}
           onChange={(e) => setModelsText(e.target.value)}
-          placeholder={'留空 = 自动获取\ngpt-5'}
+          placeholder={t('settings.providers.modelsPlaceholder')}
         />
       </div>
 
       <Collapsible>
         <CollapsibleTrigger className="text-[12px] text-muted-foreground hover:text-foreground data-[state=open]:text-foreground">
-          兼容性开关（quirks）
+          {t('settings.providers.quirks')}
         </CollapsibleTrigger>
         <CollapsibleContent>
-          <div className="mt-2 space-y-2 rounded-md border border-border p-3 text-[13px]">
+          <div className="mt-2 flex flex-col gap-2 rounded-md border border-border p-3 text-[13px]">
             {(
               [
-                ['noStreamOptions', '端点不支持 stream_options.include_usage'],
-                ['thinkTagReasoning', '推理内容走 <think> 内联标签（DeepSeek 等）'],
-                ['noParallelToolCalls', '强制单工具调用'],
-                ['noSystemRole', '不支持 system 角色（转为首条 user）'],
+                ['noStreamOptions', t('settings.providers.quirk.noStreamOptions')],
+                ['thinkTagReasoning', t('settings.providers.quirk.thinkTagReasoning')],
+                ['noParallelToolCalls', t('settings.providers.quirk.noParallelToolCalls')],
+                ['noSystemRole', t('settings.providers.quirk.noSystemRole')],
               ] as [keyof QuirkFlags, string][]
             ).map(([key, label]) => (
-              <label key={key} className="flex items-center gap-2">
+              <Label
+                key={key}
+                htmlFor={`quirk-${conn.id}-${key}`}
+                className="flex items-center gap-2"
+              >
                 <Checkbox
+                  id={`quirk-${conn.id}-${key}`}
                   checked={Boolean(conn.quirks?.[key])}
                   onCheckedChange={(on) =>
                     setConn({
@@ -503,10 +636,10 @@ function ConnectionForm({
                   }
                 />
                 {label}
-              </label>
+              </Label>
             ))}
-            <label className="flex items-center gap-2">
-              max_tokens 字段名
+            <Label className="flex items-center gap-2">
+              {t('settings.providers.maxTokensField')}
               <Select
                 value={conn.quirks?.maxTokensField ?? 'max_tokens'}
                 onValueChange={(v) =>
@@ -520,37 +653,42 @@ function ConnectionForm({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="max_tokens">max_tokens</SelectItem>
-                  <SelectItem value="max_completion_tokens">max_completion_tokens</SelectItem>
+                  <SelectGroup>
+                    <SelectItem value="max_tokens">max_tokens</SelectItem>
+                    <SelectItem value="max_completion_tokens">max_completion_tokens</SelectItem>
+                  </SelectGroup>
                 </SelectContent>
               </Select>
-            </label>
+            </Label>
           </div>
         </CollapsibleContent>
       </Collapsible>
 
       <Collapsible>
         <CollapsibleTrigger className="text-[12px] text-muted-foreground hover:text-foreground data-[state=open]:text-foreground">
-          自定义 Header 与模型能力/价格
+          {t('settings.providers.advanced')}
         </CollapsibleTrigger>
         <CollapsibleContent>
-          <div className="mt-2 space-y-3 rounded-md border border-border p-3">
+          <div className="mt-2 flex flex-col gap-3 rounded-md border border-border p-3">
             <div>
               <Label className={labelCls} htmlFor="conn-headers">
-                自定义 Header（每行 Name: Value，敏感值本机加密）
+                {t('settings.providers.headers')}
               </Label>
               <Textarea
                 id="conn-headers"
                 className="font-mono text-[12px]"
                 rows={3}
                 value={headersText}
-                onChange={(event) => setHeadersText(event.target.value)}
+                onChange={(event) => {
+                  headersDirty.current = true;
+                  setHeadersText(event.target.value);
+                }}
                 placeholder="X-Organization: org-id"
               />
             </div>
             <div>
               <Label className={labelCls} htmlFor="conn-model-config">
-                模型能力与价格 JSON（价格单位：$/M tokens）
+                {t('settings.providers.modelConfig')}
               </Label>
               <Textarea
                 id="conn-model-config"
@@ -584,7 +722,7 @@ function ConnectionForm({
           {verifyResult.models && verifyResult.models.length > 0 && (
             <div className="flex flex-col gap-1.5 text-[13px]">
               <div className="text-muted-foreground">
-                从端点发现 {verifyResult.models.length} 个模型：
+                {t('settings.providers.discovered', { n: verifyResult.models.length })}
               </div>
               <div className="flex max-h-24 flex-wrap gap-1 overflow-y-auto">
                 {verifyResult.models.map((m) => (
@@ -600,11 +738,17 @@ function ConnectionForm({
           )}
         </>
       )}
-      {formError && <div className="text-[12px] text-destructive">{formError}</div>}
+      {formError && <FieldError>{formError}</FieldError>}
 
       <div className="flex gap-2">
-        <Button variant="outline" size="sm" onClick={() => void verify()} disabled={verifying}>
-          {verifying ? '验证中…' : 'Verify 连接测试'}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void verify()}
+          disabled={verifying}
+          aria-busy={verifying}
+        >
+          {verifying ? t('settings.providers.verifying') : t('settings.providers.verify')}
         </Button>
         <Button
           size="sm"
@@ -618,10 +762,10 @@ function ConnectionForm({
             }
           }}
         >
-          保存
+          {t('app.save')}
         </Button>
         <Button variant="outline" size="sm" onClick={onCancel}>
-          取消
+          {t('app.cancel')}
         </Button>
       </div>
     </div>
@@ -629,10 +773,10 @@ function ConnectionForm({
 }
 
 function parseModelConfigs(value: unknown): NonNullable<Connection['models']> {
-  if (!Array.isArray(value)) throw new Error('模型能力/价格必须是 JSON 数组');
+  if (!Array.isArray(value)) throw new Error(t('settings.providers.invalidModelArray'));
   return value.map((entry, index) => {
     if (typeof entry !== 'object' || entry === null)
-      throw new Error(`模型配置 ${index + 1} 必须是对象`);
+      throw new Error(t('settings.providers.invalidModelObject', { index: index + 1 }));
     const model = entry as Record<string, unknown>;
     const capabilities = model.capabilities as Record<string, unknown> | undefined;
     if (
@@ -642,7 +786,7 @@ function parseModelConfigs(value: unknown): NonNullable<Connection['models']> {
       typeof capabilities.toolUse !== 'boolean' ||
       typeof capabilities.vision !== 'boolean'
     ) {
-      throw new Error(`模型配置 ${index + 1} 缺少 id/toolUse/vision`);
+      throw new Error(t('settings.providers.invalidModelCapabilities', { index: index + 1 }));
     }
     const pricing = model.pricing as Record<string, unknown> | undefined;
     if (
@@ -654,7 +798,7 @@ function parseModelConfigs(value: unknown): NonNullable<Connection['models']> {
         (pricing.cacheRead !== undefined &&
           (typeof pricing.cacheRead !== 'number' || pricing.cacheRead < 0)))
     ) {
-      throw new Error(`模型配置 ${index + 1} 的 pricing 无效`);
+      throw new Error(t('settings.providers.invalidPricing', { index: index + 1 }));
     }
     return entry as NonNullable<Connection['models']>[number];
   });

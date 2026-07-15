@@ -8,6 +8,15 @@
  */
 
 import type { AgentEvent, Op } from './protocol';
+import { parseAgentEvent } from './agentEventValidation';
+import { ENGINE_PORT_NAME, type EngineConnection } from './engineConnection';
+
+export {
+  ENGINE_PORT_NAME,
+  wrapBufferedPortConnection,
+  wrapPortConnection,
+} from './engineConnection';
+export type { ConnectionHandler, EngineConnection } from './engineConnection';
 
 // ---------------------------------------------------------------------------
 // Client side
@@ -23,26 +32,11 @@ export interface EngineTransport {
 }
 
 // ---------------------------------------------------------------------------
-// Engine side
-// ---------------------------------------------------------------------------
-
-/** One connected client, as seen by the engine. */
-export interface EngineConnection {
-  post(ev: AgentEvent): void;
-  onOp(cb: (op: Op) => void): void;
-  onClose(cb: () => void): void;
-  close(): void;
-}
-
-/** The engine implements this; transports call it for each new client. */
-export type ConnectionHandler = (conn: EngineConnection) => void;
-
-// ---------------------------------------------------------------------------
 // DirectTransport — in-process pair for tests (no chrome APIs)
 // ---------------------------------------------------------------------------
 
 export function createDirectPair(): { transport: EngineTransport; connection: EngineConnection } {
-  let opHandler: ((op: Op) => void) | null = null;
+  let opHandler: ((op: unknown) => void) | null = null;
   let closeHandler: (() => void) | null = null;
   const eventSubs = new Set<(ev: AgentEvent) => void>();
   const disconnectSubs = new Set<() => void>();
@@ -97,15 +91,23 @@ export function createDirectPair(): { transport: EngineTransport; connection: En
 // PortTransport — production client over chrome.runtime.connect
 // ---------------------------------------------------------------------------
 
-export const ENGINE_PORT_NAME = 'panelot-engine';
-
 export function createPortTransport(): EngineTransport {
   const port = chrome.runtime.connect({ name: ENGINE_PORT_NAME });
   const eventSubs = new Set<(ev: AgentEvent) => void>();
   const disconnectSubs = new Set<() => void>();
 
   port.onMessage.addListener((msg) => {
-    for (const cb of eventSubs) cb(msg as AgentEvent);
+    const parsed = parseAgentEvent(msg);
+    const event: AgentEvent = parsed.ok
+      ? parsed.value
+      : {
+          type: 'error',
+          code: 'protocol_mismatch',
+          message: `Malformed engine event: ${parsed.diagnostic}`,
+          retryable: false,
+          submissionId: parsed.submissionId,
+        };
+    for (const cb of eventSubs) cb(event);
   });
   port.onDisconnect.addListener(() => {
     for (const cb of disconnectSubs) cb();
@@ -122,28 +124,6 @@ export function createPortTransport(): EngineTransport {
     onDisconnect(cb) {
       disconnectSubs.add(cb);
       return () => disconnectSubs.delete(cb);
-    },
-    close() {
-      port.disconnect();
-    },
-  };
-}
-
-/** Engine-side wrapper for an incoming chrome.runtime Port. */
-export function wrapPortConnection(port: chrome.runtime.Port): EngineConnection {
-  return {
-    post(ev) {
-      try {
-        port.postMessage(ev);
-      } catch {
-        // Port already gone; onDisconnect will fire.
-      }
-    },
-    onOp(cb) {
-      port.onMessage.addListener((msg) => cb(msg as Op));
-    },
-    onClose(cb) {
-      port.onDisconnect.addListener(() => cb());
     },
     close() {
       port.disconnect();
