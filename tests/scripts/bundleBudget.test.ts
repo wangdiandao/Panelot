@@ -36,15 +36,43 @@ describe('bundle budget static graph', () => {
     );
     await writeFile(
       join(root, 'chunks/b.js'),
-      `export const value = 1;\n${' '.repeat(100 * 1024)}`,
+      `export const value = 1;\n${' '.repeat(120 * 1024)}`,
     );
 
     const result = spawnSync(process.execPath, [script, root], { encoding: 'utf8' });
 
     expect(result.status).toBe(1);
     expect(result.stdout).toContain('PASS production JS');
+    expect(result.stdout).toContain('PASS background.js entry');
     expect(result.stdout).toContain('FAIL background static graph');
-    expect(result.stdout).toContain('INFO background.js entry: 180.1 KiB');
+    expect(result.stdout).toContain('INFO largest background static modules:');
+    expect(result.stdout).toMatch(/chunks[\\/]b\.js/);
+  });
+
+  it('keeps a separate cap on the service worker entry', async () => {
+    const root = await fixture();
+    await writeFile(join(root, 'background.js'), `${' '.repeat(201 * 1024)}`);
+
+    const result = spawnSync(process.execPath, [script, root], { encoding: 'utf8' });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('FAIL background.js entry');
+    expect(result.stdout).toContain('PASS background static graph');
+  });
+
+  it('allows a bounded static graph larger than the entry budget', async () => {
+    const root = await fixture();
+    await writeFile(
+      join(root, 'background.js'),
+      `import './chunks/a.js';\n${' '.repeat(189 * 1024)}`,
+    );
+    await writeFile(join(root, 'chunks/a.js'), `${' '.repeat(162 * 1024)}`);
+
+    const result = spawnSync(process.execPath, [script, root], { encoding: 'utf8' });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('PASS background.js entry');
+    expect(result.stdout).toContain('PASS background static graph');
   });
 
   it('rejects a static import that escapes the build root', async () => {
@@ -65,6 +93,7 @@ describe('bundle budget static graph', () => {
     const result = spawnSync(process.execPath, [script, root], { encoding: 'utf8' });
 
     expect(result.status).toBe(0);
+    expect(result.stdout).toContain('PASS background.js entry');
     expect(result.stdout).toContain('PASS background static graph');
   });
 });

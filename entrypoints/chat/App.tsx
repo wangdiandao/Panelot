@@ -22,7 +22,7 @@ import type { SettingsSectionId } from '../../src/ui/settings/SettingsPanel';
 import { CommandPalette } from '../../src/ui/components/CommandPalette';
 import { ModelSelector } from '../../src/ui/components/ModelSelector';
 import { ShortcutHelp } from '../../src/ui/components/ShortcutHelp';
-import { LazyToaster } from '../../src/ui/components/LazyToaster';
+import { AppToaster } from '../../src/ui/components/AppToaster';
 import { Skeleton } from '../../src/ui/components/ui/skeleton';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '../../src/ui/components/ui/sidebar';
 import { useTheme } from '../../src/ui/useTheme';
@@ -323,7 +323,7 @@ export function App() {
       />
 
       <ShortcutHelp />
-      <LazyToaster />
+      <AppToaster />
     </SidebarProvider>
   );
 }

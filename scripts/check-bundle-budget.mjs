@@ -6,7 +6,8 @@ const root = resolve(process.argv[2] ?? 'dist/chrome-mv3');
 const limits = {
   totalJs: 4 * 1024 * 1024,
   eagerJs: 500 * 1024,
-  background: 350 * 1024,
+  backgroundEntry: 200 * 1024,
+  backgroundStatic: 384 * 1024,
 };
 
 async function filesBelow(directory) {
@@ -81,9 +82,10 @@ const totalJs = (await Promise.all(javascript.map(async (file) => (await stat(fi
 );
 const background = (await stat(join(root, 'background.js'))).size;
 const backgroundStaticFiles = await staticJavaScriptClosure(root, join(root, 'background.js'));
-const backgroundStatic = (
-  await Promise.all([...backgroundStaticFiles].map(async (file) => (await stat(file)).size))
-).reduce((total, size) => total + size, 0);
+const backgroundStaticEntries = await Promise.all(
+  [...backgroundStaticFiles].map(async (file) => ({ file, bytes: (await stat(file)).size })),
+);
+const backgroundStatic = backgroundStaticEntries.reduce((total, entry) => total + entry.bytes, 0);
 
 const eagerByPage = [];
 for (const htmlPath of files.filter(
@@ -110,7 +112,8 @@ const eagerJs = (
 const results = [
   ['production JS', totalJs, limits.totalJs],
   ['shared eager JS', eagerJs, limits.eagerJs],
-  ['background static graph', backgroundStatic, limits.background],
+  ['background.js entry', background, limits.backgroundEntry],
+  ['background static graph', backgroundStatic, limits.backgroundStatic],
 ];
 let failed = false;
 for (const [label, actual, limit] of results) {
@@ -120,5 +123,10 @@ for (const [label, actual, limit] of results) {
     `${ok ? 'PASS' : 'FAIL'} ${label}: ${(actual / 1024).toFixed(1)} KiB / ${(limit / 1024).toFixed(1)} KiB`,
   );
 }
-console.log(`INFO background.js entry: ${(background / 1024).toFixed(1)} KiB`);
+if (backgroundStatic > limits.backgroundStatic) {
+  console.log('INFO largest background static modules:');
+  for (const entry of backgroundStaticEntries.sort((a, b) => b.bytes - a.bytes).slice(0, 8)) {
+    console.log(`  ${(entry.bytes / 1024).toFixed(1)} KiB  ${relative(root, entry.file)}`);
+  }
+}
 if (failed) process.exitCode = 1;

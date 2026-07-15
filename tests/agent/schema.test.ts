@@ -91,9 +91,7 @@ describe('zod/mini validateParams diagnostics', () => {
   it('rejects unknown fields in strict objects', () => {
     const parameters = schema.object({ label: schema.string() });
 
-    expect(diagnostic(parameters, { label: 'ok', extra: true })).toMatch(
-      /extra: .*unknown field/i,
-    );
+    expect(diagnostic(parameters, { label: 'ok', extra: true })).toMatch(/extra: .*unknown field/i);
   });
 
   it('preserves unknown fields in loose objects', () => {

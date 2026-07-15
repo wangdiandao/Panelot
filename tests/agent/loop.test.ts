@@ -684,7 +684,9 @@ describe('gatekeeper integration', () => {
     ).done;
 
     expect(executed).not.toHaveBeenCalled();
-    const resultMsg = provider.requests[1]!.messages.find((message) => message.role === 'tool_result');
+    const resultMsg = provider.requests[1]!.messages.find(
+      (message) => message.role === 'tool_result',
+    );
     expect((resultMsg?.content[0] as { text?: string }).text).toContain(
       'target changed after the permission check',
     );

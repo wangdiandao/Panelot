@@ -12,7 +12,7 @@ import { EngineSession } from '../../src/ui/engineClient';
 import { ThreadView, useEngineState } from '../../src/ui/components/ThreadView';
 import { CommandPalette } from '../../src/ui/components/CommandPalette';
 import { ShortcutHelp } from '../../src/ui/components/ShortcutHelp';
-import { LazyToaster } from '../../src/ui/components/LazyToaster';
+import { AppToaster } from '../../src/ui/components/AppToaster';
 import { Button } from '../../src/ui/components/ui/button';
 import { Alert, AlertAction, AlertDescription } from '../../src/ui/components/ui/alert';
 import {
@@ -243,7 +243,7 @@ export function App() {
         />
         <ShortcutHelp />
         {/* Bottom-center: top-right would overlap the thread-switcher header. */}
-        <LazyToaster position="bottom-center" />
+        <AppToaster position="bottom-center" />
       </div>
     </TooltipProvider>
   );

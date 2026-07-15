@@ -10,6 +10,9 @@ export default defineConfig({
   outputDir: './output/playwright/test-results',
   testMatch: '**/*.spec.ts',
   fullyParallel: true,
+  // Persistent extension profiles each launch a full Chromium instance and service worker.
+  // Bounding concurrency keeps startup/recovery timing meaningful instead of measuring host contention.
+  workers: 4,
   timeout: 30_000,
   use: {
     headless: true,

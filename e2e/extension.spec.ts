@@ -7,6 +7,8 @@ const packageJson = JSON.parse(readFileSync(path.resolve('package.json'), 'utf8'
   version: string;
 };
 
+test.describe.configure({ mode: 'serial' });
+
 test('loads the production extension in a persistent Chromium context', async () => {
   const testInfo = test.info();
   const context = await chromium.launchPersistentContext(testInfo.outputPath('profile'), {

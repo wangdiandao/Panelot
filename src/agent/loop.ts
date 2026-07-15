@@ -135,9 +135,7 @@ async function assertPreparedTargetStillMatches(
 ): Promise<void> {
   if (!tool.resolveTarget || !preparedTarget) return;
   const currentTarget = await tool.resolveTarget(params as never);
-  const changed = TARGET_IDENTITY_KEYS.some(
-    (key) => preparedTarget[key] !== currentTarget?.[key],
-  );
+  const changed = TARGET_IDENTITY_KEYS.some((key) => preparedTarget[key] !== currentTarget?.[key]);
   if (changed) {
     throw new Error(
       'The tool target changed after the permission check. Inspect the current browser state and issue a fresh tool call; do not reuse the previous approval.',
@@ -631,11 +629,7 @@ export function runTurn(
 
           try {
             if (tool.effects === 'write' || approvalWasRequired) {
-              await assertPreparedTargetStillMatches(
-                tool,
-                validation.params,
-                preparedTool.target,
-              );
+              await assertPreparedTargetStillMatches(tool, validation.params, preparedTool.target);
             }
             await env.setRunState?.('executing_tool', {
               pendingTool: { ...preparedTool, startedAt: Date.now() },

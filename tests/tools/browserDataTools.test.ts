@@ -84,16 +84,9 @@ describe('browser data tools', () => {
   });
 
   it('always lists tab groups across all browser windows', async () => {
-    groupsQuery.mockResolvedValue([
-      { id: 5, title: 'Research', color: 'blue', collapsed: false },
-    ]);
+    groupsQuery.mockResolvedValue([{ id: 5, title: 'Research', color: 'blue', collapsed: false }]);
 
-    const result = await tool('tab_groups_list').execute(
-      'call',
-      {} as never,
-      signal(),
-      undefined,
-    );
+    const result = await tool('tab_groups_list').execute('call', {} as never, signal(), undefined);
 
     expect(groupsQuery).toHaveBeenCalledWith({});
     expect(output(result)).toContain('Research');
