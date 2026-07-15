@@ -29,6 +29,7 @@ import { Bubble, BubbleContent } from './ui/bubble';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from './ui/card';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible';
 import { Message, MessageContent, MessageFooter } from './ui/message';
+import { Marker, MarkerContent, MarkerIcon } from './ui/marker';
 import { Separator } from './ui/separator';
 import { Spinner } from './ui/spinner';
 import { Textarea } from './ui/textarea';
@@ -96,6 +97,7 @@ function assistantMessageHasContent(payload: AssistantMessagePayload): boolean {
 
 export function buildRows(items: SnapshotItem[], liveItems: LiveItem[]): Row[] {
   const rows: Row[] = [];
+  const cardByItemId = new Map<string, ToolCardData>();
   const resultByItemId = new Map<string, { payload: ToolResultPayload; ts: number }>();
   for (const item of items) {
     if (item.kind === 'tool_result') {
@@ -136,6 +138,7 @@ export function buildRows(items: SnapshotItem[], liveItems: LiveItem[]): Row[] {
     const last = assistant.segments[assistant.segments.length - 1];
     if (last?.kind === 'tools') last.cards.push(card);
     else assistant.segments.push({ kind: 'tools', key: card.itemId, cards: [card] });
+    cardByItemId.set(card.itemId, card);
   };
 
   // Visited URLs accumulate per turn; the turn's closing assistant message
@@ -256,16 +259,30 @@ export function buildRows(items: SnapshotItem[], liveItems: LiveItem[]): Row[] {
           liveReasoning: live.reasoning,
         });
       }
-    } else if (live.kind === 'tool_call' && live.status === 'streaming') {
+    } else if (live.kind === 'tool_call') {
+      const status = live.status === 'streaming' ? 'running' : live.status;
+      const progressText =
+        typeof live.toolProgress === 'object' && live.toolProgress !== null
+          ? String((live.toolProgress as { progressText?: string }).progressText ?? '')
+          : undefined;
+      const persisted = cardByItemId.get(live.itemId);
+      if (persisted) {
+        persisted.status = status;
+        persisted.live = true;
+        persisted.label = live.meta.label ?? live.meta.toolName ?? persisted.label;
+        persisted.toolName = live.meta.toolName ?? persisted.toolName;
+        persisted.progressText = progressText;
+        persisted.details = live.details ?? persisted.details;
+        continue;
+      }
       pushCard({
         itemId: live.itemId,
         toolName: live.meta.toolName ?? '',
         label: live.meta.label ?? live.meta.toolName ?? 'tool',
-        status: 'running',
-        progressText:
-          typeof live.toolProgress === 'object' && live.toolProgress !== null
-            ? String((live.toolProgress as { progressText?: string }).progressText ?? '')
-            : undefined,
+        status,
+        live: true,
+        progressText,
+        details: live.details,
       });
     }
   }
@@ -573,6 +590,24 @@ export function partitionAssistantSegments(
   return { processSegments, resultMessage };
 }
 
+export function isAssistantRowRunning(
+  row: Extract<MessageStreamRow, { kind: 'assistant' }>,
+  turnActive: boolean,
+  lastMessageKey: string | null,
+): boolean {
+  return (
+    (turnActive && row.key === lastMessageKey) ||
+    row.segments.some(
+      (segment) =>
+        (segment.kind === 'message' && segment.streaming) ||
+        (segment.kind === 'tools' &&
+          segment.cards.some(
+            (card) => card.live || card.status === 'pending' || card.status === 'running',
+          )),
+    )
+  );
+}
+
 function AssistantResponse({
   row,
   ctx,
@@ -587,14 +622,7 @@ function AssistantResponse({
   );
   const finalMessage = messages[messages.length - 1];
   const responseText = messages.map(segmentText).filter(Boolean).join('\n\n');
-  const running =
-    (ctx.turnActive && row.key === ctx.lastMessageKey) ||
-    row.segments.some(
-      (segment) =>
-        (segment.kind === 'message' && segment.streaming) ||
-        (segment.kind === 'tools' &&
-          segment.cards.some((card) => card.status === 'pending' || card.status === 'running')),
-    );
+  const running = isAssistantRowRunning(row, ctx.turnActive, ctx.lastMessageKey);
   const citations = Array.from(
     new Map(
       messages
@@ -621,7 +649,7 @@ function AssistantResponse({
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="group/process h-auto w-full justify-start rounded-none px-0 py-2 text-muted-foreground hover:bg-transparent hover:text-foreground"
+                      className="group/process w-full justify-start"
                     >
                       {running && <Spinner data-icon="inline-start" />}
                       <span>{running ? t('stream.working') : t('stream.completed')}</span>
@@ -655,13 +683,12 @@ function AssistantResponse({
                 </Collapsible>
               )}
               {running && processSegments.length === 0 && (
-                <div
-                  className="flex items-center gap-2 py-2 text-sm text-muted-foreground"
-                  role="status"
-                >
-                  <Spinner />
-                  {t('stream.working')}
-                </div>
+                <Marker role="status" className="py-2">
+                  <MarkerIcon>
+                    <Spinner />
+                  </MarkerIcon>
+                  <MarkerContent>{t('stream.working')}</MarkerContent>
+                </Marker>
               )}
               {resultMessage && (
                 <div className={cn('min-w-0', processSegments.length > 0 && 'pt-4')}>
@@ -728,10 +755,12 @@ function AssistantMessageContent({ segment }: { segment: AssistantMessageSegment
     <div className="min-w-0">
       {text && <Markdown content={text} streaming={segment.streaming} />}
       {segment.streaming && !text && (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
-          <Spinner />
-          {t('stream.working')}
-        </div>
+        <Marker role="status">
+          <MarkerIcon>
+            <Spinner />
+          </MarkerIcon>
+          <MarkerContent>{t('stream.working')}</MarkerContent>
+        </Marker>
       )}
     </div>
   );
@@ -771,6 +800,7 @@ function EditInPlace({
         <Textarea
           ref={ref}
           value={value}
+          aria-label={t('actions.edit')}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing || e.keyCode === 229) return;

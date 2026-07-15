@@ -15,6 +15,7 @@ import { Check, Copy } from 'lucide-react';
 import { t } from '../i18n';
 import { Button } from './ui/button';
 import { Skeleton } from './ui/skeleton';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 
 type RemarkPlugin = NonNullable<ReactMarkdownOptions['remarkPlugins']>[number];
 type RehypePlugin = NonNullable<ReactMarkdownOptions['rehypePlugins']>[number];
@@ -196,14 +197,23 @@ export const Markdown = memo(function Markdown({ content, streaming }: MarkdownP
               </a>
             );
           },
-          table({ children }) {
-            return (
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse text-[13px] [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-border [&_th]:bg-muted [&_th]:px-2 [&_th]:py-1">
-                  {children}
-                </table>
-              </div>
-            );
+          table({ children, ...props }) {
+            return <Table {...props}>{children}</Table>;
+          },
+          thead({ children, ...props }) {
+            return <TableHeader {...props}>{children}</TableHeader>;
+          },
+          tbody({ children, ...props }) {
+            return <TableBody {...props}>{children}</TableBody>;
+          },
+          tr({ children, ...props }) {
+            return <TableRow {...props}>{children}</TableRow>;
+          },
+          th({ children, ...props }) {
+            return <TableHead {...props}>{children}</TableHead>;
+          },
+          td({ children, ...props }) {
+            return <TableCell {...props}>{children}</TableCell>;
           },
         }}
       >

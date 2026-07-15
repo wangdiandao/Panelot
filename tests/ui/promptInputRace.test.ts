@@ -193,7 +193,7 @@ describe('PromptInput submission ordering', () => {
         attachmentIds: ['attachment-a'],
         attachedContext: contexts,
         browserContext: expect.objectContaining({
-          defaultTab: { tabId: 41, url: 'https://a.example/source', title: 'Thread A page' },
+          defaultTab: undefined,
           referencedTabs: [{ tabId: 41, url: 'https://a.example/source', title: 'Thread A page' }],
         }),
       },

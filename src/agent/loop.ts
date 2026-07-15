@@ -26,7 +26,7 @@ import type {
 import type { ProviderAdapter, GenParams, ToolSchema } from '../providers/types';
 import { isProviderErrorRetryable, ProviderError } from '../providers/types';
 import { ActionError } from '../tools/action/errors';
-import { validateParams, type ToolRegistry } from './tool';
+import { validateParams, type AnyAgentTool, type ToolRegistry } from './tool';
 import {
   CONSECUTIVE_FAILURE_REMIND,
   CONSECUTIVE_FAILURE_STOP,
@@ -124,6 +124,25 @@ export interface TurnHandle {
   steer(input: UserInput): Promise<void>;
   interrupt(): void;
   done: Promise<StopReason>;
+}
+
+const TARGET_IDENTITY_KEYS = ['tabId', 'frameId', 'origin', 'serverId'] as const;
+
+async function assertPreparedTargetStillMatches(
+  tool: AnyAgentTool,
+  params: unknown,
+  preparedTarget: PendingToolExecution['target'],
+): Promise<void> {
+  if (!tool.resolveTarget || !preparedTarget) return;
+  const currentTarget = await tool.resolveTarget(params as never);
+  const changed = TARGET_IDENTITY_KEYS.some(
+    (key) => preparedTarget[key] !== currentTarget?.[key],
+  );
+  if (changed) {
+    throw new Error(
+      'The tool target changed after the permission check. Inspect the current browser state and issue a fresh tool call; do not reuse the previous approval.',
+    );
+  }
 }
 
 interface ForcedFinalization {
@@ -580,7 +599,8 @@ export function runTurn(
             await fail(`Action denied by policy: ${verdictResult.reason}`, false);
             continue;
           }
-          if (verdictResult.verdict === 'ask') {
+          const approvalWasRequired = verdictResult.verdict === 'ask';
+          if (approvalWasRequired) {
             const decision = await env.requestApproval(
               turnId,
               verdictResult.request,
@@ -610,6 +630,13 @@ export function runTurn(
           }
 
           try {
+            if (tool.effects === 'write' || approvalWasRequired) {
+              await assertPreparedTargetStillMatches(
+                tool,
+                validation.params,
+                preparedTool.target,
+              );
+            }
             await env.setRunState?.('executing_tool', {
               pendingTool: { ...preparedTool, startedAt: Date.now() },
             });
@@ -733,6 +760,11 @@ export function runTurn(
                 break loop;
               }
               try {
+                await assertPreparedTargetStillMatches(
+                  escalationTool,
+                  escalationValidation.params,
+                  escalationPreparedTool.target,
+                );
                 await env.setRunState?.('executing_tool', {
                   pendingTool: { ...escalationPreparedTool, startedAt: Date.now() },
                 });

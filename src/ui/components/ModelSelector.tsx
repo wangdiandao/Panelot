@@ -16,6 +16,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, Cpu } from 'lucide-react';
 import { Button } from './ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
+import { ToggleGroup, ToggleGroupItem } from './ui/toggle-group';
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from './ui/empty';
 import {
   Command,
   CommandEmpty,
@@ -154,19 +156,15 @@ export function ModelSelector({
         {variant === 'header' ? (
           <Button
             variant="ghost"
-            className="h-8 min-w-0 max-w-full gap-1 px-2 text-[14px] font-medium sm:text-[15px]"
+            size="sm"
+            className="min-w-0 max-w-full"
             aria-label={t('model.select')}
           >
             <span className="max-w-24 truncate sm:max-w-40 lg:max-w-56">{current}</span>
             <ChevronDown data-icon="inline-end" />
           </Button>
         ) : (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 gap-1 rounded-full px-2 text-[11px] text-muted-foreground hover:text-foreground"
-            aria-label={t('model.select')}
-          >
+          <Button variant="ghost" size="xs" aria-label={t('model.select')}>
             <Cpu data-icon="inline-start" />
             <span className="max-w-32 truncate">{current}</span>
             <ChevronDown data-icon="inline-end" />
@@ -181,41 +179,48 @@ export function ModelSelector({
         {isEmpty ? (
           /* Dead-end → fix: no models means no key/connection (OpenWebUI's
              best onboarding micro-pattern). */
-          <div className="flex flex-col items-center gap-1.5 px-4 py-6 text-center">
-            <div className="text-[13px] font-medium">{t('model.none')}</div>
-            <div className="text-[12px] text-muted-foreground">{t('model.noneHint')}</div>
+          <Empty className="px-4 py-6 md:p-6">
+            <EmptyHeader>
+              <EmptyTitle>{t('model.none')}</EmptyTitle>
+              <EmptyDescription>{t('model.noneHint')}</EmptyDescription>
+            </EmptyHeader>
             {onOpenSettings && (
-              <Button
-                size="sm"
-                className="mt-2"
-                onClick={() => {
-                  setOpen(false);
-                  onOpenSettings();
-                }}
-              >
-                {t('model.manage')}
-              </Button>
+              <EmptyContent>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setOpen(false);
+                    onOpenSettings();
+                  }}
+                >
+                  {t('model.manage')}
+                </Button>
+              </EmptyContent>
             )}
-          </div>
+          </Empty>
         ) : (
           <Command>
             <CommandInput autoFocus placeholder={t('model.search')} />
             {connNames.length > 1 && (
-              <div className="flex gap-1 overflow-x-auto border-b border-border-soft px-2 py-1.5 [scrollbar-width:none]">
-                <FilterPill
-                  label={t('model.all')}
-                  active={connFilter === null}
-                  onClick={() => setConnFilter(null)}
-                />
+              <ToggleGroup
+                type="single"
+                value={connFilter ?? '__all__'}
+                onValueChange={(next) => {
+                  if (next) setConnFilter(next === '__all__' ? null : next);
+                }}
+                variant="outline"
+                size="sm"
+                spacing={1}
+                className="max-w-full overflow-x-auto border-b border-border-soft px-2 py-1.5 [scrollbar-width:none]"
+                aria-label={t('model.select')}
+              >
+                <ToggleGroupItem value="__all__">{t('model.all')}</ToggleGroupItem>
                 {connNames.map((name) => (
-                  <FilterPill
-                    key={name}
-                    label={name}
-                    active={connFilter === name}
-                    onClick={() => setConnFilter(name)}
-                  />
+                  <ToggleGroupItem key={name} value={name}>
+                    {name}
+                  </ToggleGroupItem>
                 ))}
-              </div>
+              </ToggleGroup>
             )}
             <CommandList>
               <CommandEmpty>{loaded ? t('model.noMatch') : t('model.loading')}</CommandEmpty>
@@ -228,7 +233,10 @@ export function ModelSelector({
                       setOpen(false);
                     }}
                   >
-                    <Check className={cn(value === null ? 'opacity-100' : 'opacity-0')} />
+                    <Check
+                      data-icon="inline-start"
+                      className={cn(value === null ? 'opacity-100' : 'opacity-0')}
+                    />
                     <div className="flex flex-col">
                       <span>{t('model.default')}</span>
                       <span className="text-[11px] text-muted-foreground">
@@ -252,7 +260,10 @@ export function ModelSelector({
                           setOpen(false);
                         }}
                       >
-                        <Check className={cn(selected ? 'opacity-100' : 'opacity-0')} />
+                        <Check
+                          data-icon="inline-start"
+                          className={cn(selected ? 'opacity-100' : 'opacity-0')}
+                        />
                         <span className="truncate font-mono text-[12px]">{m.label}</span>
                       </CommandItem>
                     );
@@ -264,28 +275,5 @@ export function ModelSelector({
         )}
       </PopoverContent>
     </Popover>
-  );
-}
-
-function FilterPill({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <Button
-      variant={active ? 'secondary' : 'ghost'}
-      size="sm"
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className="h-6 shrink-0 rounded-full"
-    >
-      {label}
-    </Button>
   );
 }

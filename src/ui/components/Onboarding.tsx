@@ -13,8 +13,18 @@ import { useRef, useState } from 'react';
 import { Check, ChevronRight, Loader2, ShieldCheck } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import { Label } from './ui/label';
-import { Field, FieldError, FieldLabel } from './ui/field';
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+  FieldTitle,
+} from './ui/field';
+import { Alert, AlertDescription } from './ui/alert';
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from './ui/card';
 import { RadioGroup, RadioGroupItem } from './ui/radio-group';
 import {
   Select,
@@ -180,73 +190,86 @@ export function Onboarding({ onConfigured, onOpenSettings, onTryDemo }: Props) {
       </div>
 
       {step === 1 && (
-        <div className="flex w-full flex-col gap-3 rounded-xl border border-border bg-card p-5">
-          <div className="text-[15px] font-semibold">① {t('onboarding.connect')}</div>
-          <Field>
-            <FieldLabel htmlFor="ob-kind">{t('settings.providers.kind')}</FieldLabel>
-            <Select
-              value={kind}
-              onValueChange={(v) => {
-                setKind(v as Connection['kind']);
-                invalidateVerification();
-              }}
-            >
-              <SelectTrigger id="ob-kind" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem value="openai">
-                    {t('settings.providers.kind.openai')} (/chat/completions)
-                  </SelectItem>
-                  <SelectItem value="anthropic">
-                    {t('settings.providers.kind.anthropic')} (/v1/messages)
-                  </SelectItem>
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="ob-url">{t('onboarding.baseUrl')}</FieldLabel>
-            <Input
-              id="ob-url"
-              value={baseUrl}
-              onChange={(e) => {
-                setBaseUrl(e.target.value);
-                invalidateVerification();
-              }}
-              placeholder={
-                kind === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.example.com/v1'
-              }
-              className="font-mono"
-            />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="ob-key">{t('onboarding.apiKey')}</FieldLabel>
-            <Input
-              id="ob-key"
-              type="password"
-              value={apiKey}
-              onChange={(e) => {
-                setApiKey(e.target.value);
-                invalidateVerification();
-              }}
-              placeholder="sk-…"
-              className="font-mono"
-            />
-          </Field>
-          {verified &&
-            (verified.keyValid ? (
-              <div role="status" className="text-success">
-                ✓ {t('onboarding.connected')}
-                {verified.models?.length
-                  ? t('onboarding.modelsFound', { n: verified.models.length })
-                  : ''}
-              </div>
-            ) : (
-              <FieldError>{t('onboarding.failed')}</FieldError>
-            ))}
-          <div className="flex gap-2">
+        <Card className="w-full gap-4">
+          <CardHeader>
+            <CardTitle>① {t('onboarding.connect')}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <FieldGroup className="gap-4">
+              <Field>
+                <FieldLabel htmlFor="ob-kind">{t('settings.providers.kind')}</FieldLabel>
+                <Select
+                  value={kind}
+                  onValueChange={(v) => {
+                    setKind(v as Connection['kind']);
+                    invalidateVerification();
+                  }}
+                >
+                  <SelectTrigger id="ob-kind" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value="openai">
+                        {t('settings.providers.kind.openai')} (/chat/completions)
+                      </SelectItem>
+                      <SelectItem value="anthropic">
+                        {t('settings.providers.kind.anthropic')} (/v1/messages)
+                      </SelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="ob-url">{t('onboarding.baseUrl')}</FieldLabel>
+                <Input
+                  id="ob-url"
+                  value={baseUrl}
+                  onChange={(e) => {
+                    setBaseUrl(e.target.value);
+                    invalidateVerification();
+                  }}
+                  placeholder={
+                    kind === 'anthropic'
+                      ? 'https://api.anthropic.com'
+                      : 'https://api.example.com/v1'
+                  }
+                  className="font-mono"
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="ob-key">{t('onboarding.apiKey')}</FieldLabel>
+                <Input
+                  id="ob-key"
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => {
+                    setApiKey(e.target.value);
+                    invalidateVerification();
+                  }}
+                  placeholder="sk-…"
+                  className="font-mono"
+                />
+              </Field>
+              {verified &&
+                (verified.keyValid ? (
+                  <Alert variant="success">
+                    <Check />
+                    <AlertDescription>
+                      {t('onboarding.connected')}
+                      {verified.models?.length
+                        ? t('onboarding.modelsFound', { n: verified.models.length })
+                        : ''}
+                    </AlertDescription>
+                  </Alert>
+                ) : (
+                  <Alert variant="destructive">
+                    <AlertDescription>{t('onboarding.failed')}</AlertDescription>
+                  </Alert>
+                ))}
+            </FieldGroup>
+          </CardContent>
+          <CardFooter>
             <Button
               variant="outline"
               size="sm"
@@ -264,60 +287,64 @@ export function Onboarding({ onConfigured, onOpenSettings, onTryDemo }: Props) {
             >
               {t('onboarding.next')} <ChevronRight data-icon="inline-end" />
             </Button>
-          </div>
-        </div>
+          </CardFooter>
+        </Card>
       )}
 
       {step === 2 && (
-        <div className="flex w-full flex-col gap-3 rounded-xl border border-border bg-card p-5">
-          <div className="flex items-center gap-2 text-[15px] font-semibold">
-            <ShieldCheck aria-hidden="true" /> ② {t('onboarding.approval')}
-          </div>
-          <RadioGroup
-            value={tier}
-            onValueChange={(value) => setTier(value as PermissionPolicy)}
-            className="gap-2"
-          >
-            {APPROVAL_TIERS.map((tierOption) => (
-              <Label
-                key={tierOption.id}
-                htmlFor={`tier-${tierOption.id}`}
-                className={cn(
-                  'flex cursor-pointer items-start gap-3 rounded-xl border p-3',
-                  tier === tierOption.id ? 'border-primary/60 bg-primary/5' : 'border-border',
-                )}
+        <Card className="w-full gap-4">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <ShieldCheck aria-hidden="true" /> ② {t('onboarding.approval')}
+            </CardTitle>
+            <CardDescription>{t('onboarding.approvalHint')}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <FieldSet>
+              <FieldLegend className="sr-only">{t('onboarding.approval')}</FieldLegend>
+              <RadioGroup
+                value={tier}
+                onValueChange={(value) => setTier(value as PermissionPolicy)}
+                className="gap-2"
               >
-                <RadioGroupItem
-                  id={`tier-${tierOption.id}`}
-                  value={tierOption.id}
-                  className="mt-0.5"
-                />
-                <div>
-                  <div className="text-[13px] font-medium">{t(tierOption.titleKey)}</div>
-                  <div className="text-[12px] text-muted-foreground">{t(tierOption.descKey)}</div>
-                </div>
-              </Label>
-            ))}
-          </RadioGroup>
-          <div className="text-[11px] text-faint-foreground">{t('onboarding.approvalHint')}</div>
-          <Button size="sm" className="w-full" onClick={() => void saveTier()}>
-            {t('onboarding.finish')} <ChevronRight data-icon="inline-end" />
-          </Button>
-        </div>
+                {APPROVAL_TIERS.map((tierOption) => (
+                  <FieldLabel key={tierOption.id} htmlFor={`tier-${tierOption.id}`}>
+                    <Field orientation="horizontal">
+                      <RadioGroupItem id={`tier-${tierOption.id}`} value={tierOption.id} />
+                      <FieldContent>
+                        <FieldTitle>{t(tierOption.titleKey)}</FieldTitle>
+                        <FieldDescription>{t(tierOption.descKey)}</FieldDescription>
+                      </FieldContent>
+                    </Field>
+                  </FieldLabel>
+                ))}
+              </RadioGroup>
+            </FieldSet>
+          </CardContent>
+          <CardFooter>
+            <Button size="sm" className="w-full" onClick={() => void saveTier()}>
+              {t('onboarding.finish')} <ChevronRight data-icon="inline-end" />
+            </Button>
+          </CardFooter>
+        </Card>
       )}
 
       {step === 3 && (
-        <div className="flex w-full flex-col gap-3 rounded-xl border border-border bg-card p-5 text-center">
-          <div className="text-[15px] font-semibold">🎉 {t('onboarding.ready')}</div>
-          <Button
-            variant="outline"
-            onClick={() => onTryDemo(t('onboarding.demo'))}
-            className="h-auto w-full rounded-xl py-3"
-          >
-            {t('onboarding.demo')}
-          </Button>
-          <div className="text-[11px] text-faint-foreground">{t('onboarding.demoHint')}</div>
-        </div>
+        <Card className="w-full gap-4 text-center">
+          <CardHeader>
+            <CardTitle>🎉 {t('onboarding.ready')}</CardTitle>
+            <CardDescription>{t('onboarding.demoHint')}</CardDescription>
+          </CardHeader>
+          <CardFooter>
+            <Button
+              variant="outline"
+              onClick={() => onTryDemo(t('onboarding.demo'))}
+              className="h-auto w-full rounded-xl py-3"
+            >
+              {t('onboarding.demo')}
+            </Button>
+          </CardFooter>
+        </Card>
       )}
 
       <Button variant="link" size="sm" onClick={onOpenSettings}>

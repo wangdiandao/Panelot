@@ -1,11 +1,11 @@
 // @vitest-environment happy-dom
 
-import { act, createElement } from 'react';
+import { act, createElement, type CSSProperties } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ThreadSidebar } from '../../src/ui/components/ThreadSidebar';
 import { SIDEBAR_WIDTH_VAR } from '../../src/ui/layoutTokens';
-import { TooltipProvider } from '../../src/ui/components/ui/tooltip';
+import { SidebarProvider } from '../../src/ui/components/ui/sidebar';
 
 let root: Root;
 let container: HTMLDivElement;
@@ -87,8 +87,8 @@ function renderSidebar(
   return act(async () =>
     root.render(
       createElement(
-        TooltipProvider,
-        null,
+        SidebarProvider,
+        { style: { '--sidebar-width': '300px' } as CSSProperties },
         createElement(ThreadSidebar, {
           threads: [],
           activeThreadId: null,
@@ -153,7 +153,8 @@ describe('ThreadSidebar pointer resizing', () => {
       pointer(separator, 'pointermove', 8, 360);
       pointer(separator, 'pointercancel', 8, 360);
     });
-    expect(document.documentElement.style.getPropertyValue(SIDEBAR_WIDTH_VAR)).toBe('300px');
+    const wrapper = container.querySelector<HTMLElement>('[data-slot="sidebar-wrapper"]')!;
+    expect(wrapper.style.getPropertyValue(SIDEBAR_WIDTH_VAR)).toBe('300px');
     expect(onWidthCommit).not.toHaveBeenCalled();
 
     await act(async () => {
@@ -162,7 +163,7 @@ describe('ThreadSidebar pointer resizing', () => {
       captures.get(separator)?.delete(9);
       pointer(separator, 'lostpointercapture', 9, 380);
     });
-    expect(document.documentElement.style.getPropertyValue(SIDEBAR_WIDTH_VAR)).toBe('300px');
+    expect(wrapper.style.getPropertyValue(SIDEBAR_WIDTH_VAR)).toBe('300px');
     expect(onWidthCommit).not.toHaveBeenCalled();
     expect(document.body.style.userSelect).toBe('');
     expect(document.body.style.cursor).toBe('');

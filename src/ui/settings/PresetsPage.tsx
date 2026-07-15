@@ -21,6 +21,7 @@ import {
 } from '../components/ui/alert-dialog';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
+import { Alert, AlertDescription } from '../components/ui/alert';
 import {
   Card,
   CardAction,
@@ -43,7 +44,6 @@ import {
   Field,
   FieldContent,
   FieldDescription,
-  FieldError,
   FieldGroup,
   FieldLabel,
   FieldLegend,
@@ -328,14 +328,16 @@ function PresetForm({
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field>
-              <FieldLabel>{t('settings.presets.connection')}</FieldLabel>
+              <FieldLabel htmlFor="preset-connection">
+                {t('settings.presets.connection')}
+              </FieldLabel>
               <Select
                 value={preset.base.connectionId || undefined}
                 onValueChange={(connectionId) =>
                   setPreset({ ...preset, base: { ...preset.base, connectionId } })
                 }
               >
-                <SelectTrigger className="w-full">
+                <SelectTrigger id="preset-connection" className="w-full">
                   <SelectValue placeholder={t('settings.presets.selectConnection')} />
                 </SelectTrigger>
                 <SelectContent>
@@ -416,7 +418,9 @@ function PresetForm({
                 onChange={(value) => updateParams({ maxTokens: value })}
               />
               <Field>
-                <FieldLabel>{t('settings.presets.reasoning')}</FieldLabel>
+                <FieldLabel htmlFor="preset-reasoning">
+                  {t('settings.presets.reasoning')}
+                </FieldLabel>
                 <Select
                   value={preset.params?.reasoningEffort ?? 'unset'}
                   onValueChange={(value) =>
@@ -428,7 +432,7 @@ function PresetForm({
                     })
                   }
                 >
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger id="preset-reasoning" className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -481,6 +485,7 @@ function PresetForm({
 
           <div className="grid grid-cols-1 gap-4">
             <EnumField
+              id="preset-default-policy"
               label={t('settings.presets.defaultPolicy')}
               value={preset.defaultPermissionPolicy ?? 'untrusted'}
               values={['always', 'untrusted', 'auto']}
@@ -543,7 +548,11 @@ function PresetForm({
             />
           </Field>
 
-          {error && <FieldError>{error}</FieldError>}
+          {error && (
+            <Alert variant="destructive">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
         </FieldGroup>
       </CardContent>
       <CardFooter className="gap-2">
@@ -595,12 +604,14 @@ function NumberField({
 }
 
 function EnumField({
+  id,
   label,
   value,
   values,
   getOptionLabel,
   onChange,
 }: {
+  id: string;
   label: string;
   value: string;
   values: readonly string[];
@@ -609,9 +620,9 @@ function EnumField({
 }) {
   return (
     <Field>
-      <FieldLabel>{label}</FieldLabel>
+      <FieldLabel htmlFor={id}>{label}</FieldLabel>
       <Select value={value} onValueChange={onChange}>
-        <SelectTrigger className="w-full">
+        <SelectTrigger id={id} className="w-full">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>

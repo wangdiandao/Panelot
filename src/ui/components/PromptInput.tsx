@@ -353,7 +353,7 @@ export function PromptInput({
                   onClick={() => onRemoveChip(i)}
                   aria-label={t('input.remove', { label: chip.label })}
                 >
-                  <X />
+                  <X data-icon="inline-start" />
                 </Button>
               </Badge>
             ))}
@@ -362,6 +362,7 @@ export function PromptInput({
         <InputGroupTextarea
           ref={taRef}
           value={text}
+          aria-label={t('input.placeholder')}
           onChange={(e) => {
             setText(e.target.value);
             refreshTrigger(e.target.value, e.target.selectionStart);
@@ -415,7 +416,7 @@ export function PromptInput({
                     aria-label={t('input.attach')}
                     disabled={disabled}
                   >
-                    <Plus />
+                    <Plus data-icon="inline-start" />
                   </Button>
                 </DropdownMenuTrigger>
                 {attachMenuOpen && (
@@ -436,7 +437,7 @@ export function PromptInput({
                       )}
                       <DropdownMenuSub>
                         <DropdownMenuSubTrigger>
-                          <FileText /> {t('input.attachPage')}
+                          <FileText data-icon="inline-start" /> {t('input.attachPage')}
                         </DropdownMenuSubTrigger>
                         <DropdownMenuSubContent className="max-h-64 w-64 overflow-y-auto">
                           <DropdownMenuGroup>
@@ -547,7 +548,7 @@ export function PromptInput({
               className="shrink-0 rounded-full"
               onClick={onStop}
             >
-              <Square />
+              <Square data-icon="inline-start" />
             </Button>
           ) : (
             <Button
@@ -558,7 +559,7 @@ export function PromptInput({
               className="shrink-0 rounded-full"
               onClick={() => submit('send')}
             >
-              <ArrowUp />
+              <ArrowUp data-icon="inline-start" />
             </Button>
           )}
         </InputGroupAddon>

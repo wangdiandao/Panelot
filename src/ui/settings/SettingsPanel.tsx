@@ -29,6 +29,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Textarea } from '../components/ui/textarea';
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '../components/ui/field';
 import { InputGroup, InputGroupAddon, InputGroupInput } from '../components/ui/input-group';
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '../components/ui/empty';
 import {
   Select,
   SelectContent,
@@ -187,7 +188,7 @@ export function SettingsPanel({ initialSection = 'providers', footer }: Props) {
     >
       <nav className="flex max-h-[45vh] w-full shrink-0 flex-col border-b border-border-soft bg-card p-3 sm:max-h-none sm:w-52 sm:border-r sm:border-b-0">
         <div className="mb-3 px-2 text-[15px] font-semibold">{t('settings.title')}</div>
-        <InputGroup className="mb-2 h-8 border-transparent bg-muted shadow-none">
+        <InputGroup className="mb-2">
           <InputGroupAddon>
             <Search aria-hidden="true" />
           </InputGroupAddon>
@@ -196,26 +197,23 @@ export function SettingsPanel({ initialSection = 'providers', footer }: Props) {
             onChange={(e) => setQuery(e.target.value)}
             placeholder={t('settings.search')}
             aria-label={t('settings.search')}
-            className="text-[13px]"
           />
         </InputGroup>
-        <TabsList
-          variant="line"
-          className="flex h-auto w-full flex-1 flex-row items-stretch justify-start gap-0.5 overflow-x-auto overflow-y-hidden bg-transparent p-0 sm:flex-col sm:overflow-x-hidden sm:overflow-y-auto"
-        >
+        <TabsList variant="line" className="w-full flex-1 overflow-y-auto">
           {SECTIONS.filter(({ id }) => visible.includes(id)).map(({ id, Icon }) => (
-            <TabsTrigger
-              key={id}
-              value={id}
-              className="h-auto w-auto flex-none justify-start gap-2.5 rounded-lg px-2.5 py-2 text-[13px] after:hidden data-[state=active]:border-transparent data-[state=active]:bg-muted data-[state=active]:font-medium sm:w-full"
-            >
+            <TabsTrigger key={id} value={id}>
               <Icon aria-hidden="true" />
               {settingsSectionLabel(id)}
             </TabsTrigger>
           ))}
         </TabsList>
         {visible.length === 0 && (
-          <div className="px-2 py-3 text-[12px] text-faint-foreground">{t('settings.noMatch')}</div>
+          <Empty className="p-3 md:p-3">
+            <EmptyHeader>
+              <EmptyTitle>{t('settings.noMatch')}</EmptyTitle>
+              <EmptyDescription>{t('settings.search')}</EmptyDescription>
+            </EmptyHeader>
+          </Empty>
         )}
         {footer && <div className="pt-2">{footer}</div>}
       </nav>

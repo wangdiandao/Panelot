@@ -14,6 +14,7 @@ import { CommandPalette } from '../../src/ui/components/CommandPalette';
 import { ShortcutHelp } from '../../src/ui/components/ShortcutHelp';
 import { LazyToaster } from '../../src/ui/components/LazyToaster';
 import { Button } from '../../src/ui/components/ui/button';
+import { Alert, AlertAction, AlertDescription } from '../../src/ui/components/ui/alert';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -146,7 +147,7 @@ export function App() {
     <Tooltip>
       <TooltipTrigger asChild>
         <Button variant="ghost" size="icon-sm" aria-label={label} onClick={onClick}>
-          <Icon />
+          <Icon data-icon="inline-start" />
         </Button>
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
@@ -159,10 +160,7 @@ export function App() {
         <header className="flex items-center gap-1 border-b border-border-soft bg-card px-2 py-1.5">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                className="min-w-0 flex-1 justify-start gap-1 px-2.5 text-[13px] font-medium"
-              >
+              <Button variant="ghost" size="sm" className="min-w-0 flex-1 justify-start">
                 <span className="truncate">{state.meta?.title || t('app.newChat')}</span>
                 <ChevronDown data-icon="inline-end" />
               </Button>
@@ -186,9 +184,7 @@ export function App() {
                   </DropdownMenuItem>
                 ))}
                 {threads.length === 0 && (
-                  <div className="px-2 py-2 text-[12px] text-faint-foreground">
-                    {t('app.noThreads')}
-                  </div>
+                  <DropdownMenuItem disabled>{t('app.noThreads')}</DropdownMenuItem>
                 )}
               </DropdownMenuGroup>
             </DropdownMenuContent>
@@ -201,19 +197,15 @@ export function App() {
         </header>
 
         {currentPage && !staged.some((c) => c.kind === 'page') && (
-          <div className="flex items-center gap-2 border-b border-border-soft bg-card px-3 py-1.5 text-[12px]">
-            <span className="flex min-w-0 items-center gap-1 truncate text-muted-foreground">
-              <Paperclip className="size-3 shrink-0" /> {currentPage.title}
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              className="ml-auto shrink-0"
-              onClick={() => void attachPage()}
-            >
-              {t('app.attachPage')}
-            </Button>
-          </div>
+          <Alert role="status">
+            <Paperclip />
+            <AlertDescription className="truncate">{currentPage.title}</AlertDescription>
+            <AlertAction>
+              <Button variant="outline" size="xs" onClick={() => void attachPage()}>
+                {t('app.attachPage')}
+              </Button>
+            </AlertAction>
+          </Alert>
         )}
 
         <div className="min-h-0 flex-1">

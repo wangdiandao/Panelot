@@ -4,13 +4,18 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '@/src/ui/lib/utils';
 
 const alertVariants = cva(
-  'relative grid w-full grid-cols-[0_1fr] items-start gap-y-0.5 rounded-lg border px-4 py-3 text-sm has-[>svg]:grid-cols-[calc(var(--spacing)*4)_1fr] has-[>svg]:gap-x-3 [&>svg]:size-4 [&>svg]:translate-y-0.5 [&>svg]:text-current',
+  "group/alert relative grid w-full gap-0.5 rounded-lg border px-2.5 py-2 text-left text-sm has-[>[data-slot=alert-action][data-placement=corner]]:pr-18 has-[>svg]:grid-cols-[auto_1fr] has-[>svg]:gap-x-2 *:[svg]:row-span-2 *:[svg]:translate-y-0.5 *:[svg]:text-current *:[svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {
         default: 'bg-card text-card-foreground',
         destructive:
-          'bg-card text-destructive *:data-[slot=alert-description]:text-destructive/90 [&>svg]:text-current',
+          'bg-card text-destructive *:data-[slot=alert-description]:text-destructive/90 *:[svg]:text-current',
+        success:
+          'border-success/40 bg-success/5 text-success *:data-[slot=alert-description]:text-success/90 *:[svg]:text-current',
+        warning:
+          'border-warning/40 bg-warning/5 text-warning *:data-[slot=alert-description]:text-warning/90 *:[svg]:text-current',
+        info: 'border-info/40 bg-info/5 text-info *:data-[slot=alert-description]:text-info/90 *:[svg]:text-current',
       },
     },
     defaultVariants: {
@@ -38,7 +43,10 @@ function AlertTitle({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
       data-slot="alert-title"
-      className={cn('col-start-2 line-clamp-1 min-h-4 font-medium tracking-tight', className)}
+      className={cn(
+        'font-medium group-has-[>svg]/alert:col-start-2 [&_a]:underline [&_a]:underline-offset-3 [&_a]:hover:text-foreground',
+        className,
+      )}
       {...props}
     />
   );
@@ -49,7 +57,7 @@ function AlertDescription({ className, ...props }: React.ComponentProps<'div'>) 
     <div
       data-slot="alert-description"
       className={cn(
-        'col-start-2 grid justify-items-start gap-1 text-sm text-muted-foreground [&_p]:leading-relaxed',
+        'text-balance text-sm text-muted-foreground group-has-[>svg]/alert:col-start-2 md:text-pretty [&_a]:underline [&_a]:underline-offset-3 [&_a]:hover:text-foreground [&_p:not(:last-child)]:mb-4',
         className,
       )}
       {...props}
@@ -57,4 +65,24 @@ function AlertDescription({ className, ...props }: React.ComponentProps<'div'>) 
   );
 }
 
-export { Alert, AlertTitle, AlertDescription };
+function AlertAction({
+  className,
+  placement = 'corner',
+  ...props
+}: React.ComponentProps<'div'> & { placement?: 'corner' | 'footer' }) {
+  return (
+    <div
+      data-slot="alert-action"
+      data-placement={placement}
+      className={cn(
+        placement === 'corner'
+          ? 'absolute top-2 right-2'
+          : 'col-span-full mt-2 flex flex-wrap items-center justify-end gap-2',
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+export { Alert, AlertTitle, AlertDescription, AlertAction };

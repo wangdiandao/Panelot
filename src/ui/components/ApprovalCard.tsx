@@ -10,6 +10,8 @@ import type { ApprovalDecision, PendingApproval } from '../../messaging/protocol
 import { t } from '../i18n';
 import { Button } from './ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from './ui/card';
+import { Kbd } from './ui/kbd';
+import { Alert, AlertDescription } from './ui/alert';
 
 interface Props {
   approval: PendingApproval;
@@ -73,41 +75,14 @@ export function ApprovalCard({ approval, queuePosition, onDecision }: Props) {
       aria-labelledby={titleId}
       aria-describedby={[...riskIds, paramsLabelId, paramsId].join(' ')}
       data-approval-focus-target="true"
-      className="min-w-0 animate-[slide-in_200ms_ease-out] gap-0 overflow-hidden border-warning/50 py-0 shadow-pop outline-none focus:ring-1 focus:ring-warning"
+      className="min-w-0 overflow-hidden"
     >
-      {crossScope && (
-        <div
-          id={`${id}-cross-scope`}
-          className="flex items-center gap-1.5 bg-warning/15 px-3 py-1 text-[11px] font-medium text-warning [&_svg]:size-3"
-        >
-          <TriangleAlert aria-hidden /> {t('approval.crossScope')}
-        </div>
-      )}
-      {sensitive && (
-        <div
-          id={`${id}-sensitive`}
-          className="flex items-center gap-1.5 bg-destructive/15 px-3 py-1 text-[11px] font-medium text-destructive [&_svg]:size-3"
-        >
-          <TriangleAlert aria-hidden /> {t('approval.sensitive')}
-        </div>
-      )}
-      {escalation && (
-        <div
-          id={`${id}-escalation`}
-          className="bg-info/15 px-3 py-1 text-[11px] font-medium text-info"
-        >
-          {t('approval.escalation')}
-        </div>
-      )}
-      <CardHeader className="min-w-0 gap-1 px-3 pt-3">
-        <CardTitle
-          id={titleId}
-          className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[13px]"
-        >
-          <span className="font-semibold text-warning">{t('approval.allow')}</span>
-          <span className="min-w-0 break-words font-medium">{request.label}</span>
+      <CardHeader className="min-w-0">
+        <CardTitle id={titleId} className="flex min-w-0 flex-wrap items-center gap-2">
+          <span>{t('approval.allow')}</span>
+          <span className="min-w-0 break-words">{request.label}</span>
           {queuePosition && queuePosition.total > 1 && (
-            <span className="ml-auto text-[11px] text-muted-foreground">
+            <span className="ml-auto text-muted-foreground">
               {queuePosition.index}/{queuePosition.total}
             </span>
           )}
@@ -118,7 +93,24 @@ export function ApprovalCard({ approval, queuePosition, onDecision }: Props) {
           </CardDescription>
         )}
       </CardHeader>
-      <CardContent className="flex min-w-0 flex-col gap-2 px-3 py-2">
+      <CardContent className="flex min-w-0 flex-col gap-3">
+        {crossScope && (
+          <Alert id={`${id}-cross-scope`} variant="warning">
+            <TriangleAlert aria-hidden />
+            <AlertDescription>{t('approval.crossScope')}</AlertDescription>
+          </Alert>
+        )}
+        {sensitive && (
+          <Alert id={`${id}-sensitive`} variant="destructive">
+            <TriangleAlert aria-hidden />
+            <AlertDescription>{t('approval.sensitive')}</AlertDescription>
+          </Alert>
+        )}
+        {escalation && (
+          <Alert id={`${id}-escalation`} variant="info">
+            <AlertDescription>{t('approval.escalation')}</AlertDescription>
+          </Alert>
+        )}
         {request.preview?.snapshotLine && (
           <div className="break-words rounded-md bg-muted px-2 py-1 font-mono text-[11px] text-muted-foreground">
             {request.preview.snapshotLine}
@@ -134,41 +126,41 @@ export function ApprovalCard({ approval, queuePosition, onDecision }: Props) {
           {JSON.stringify(request.params, null, 2)}
         </pre>
       </CardContent>
-      <CardFooter className="grid grid-cols-2 gap-2 px-3 pb-3 sm:grid-cols-4">
+      <CardFooter className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <Button
           type="button"
           size="sm"
-          className="h-auto min-h-8 min-w-0 whitespace-normal px-2 py-1.5"
+          className="min-w-0 whitespace-normal"
           onClick={() => decide({ kind: 'accept' })}
         >
-          {t('approval.allowOnce')} <kbd className="opacity-60">Y</kbd>
+          {t('approval.allowOnce')} <Kbd>Y</Kbd>
         </Button>
         <Button
           type="button"
           variant="secondary"
           size="sm"
-          className="h-auto min-h-8 min-w-0 whitespace-normal px-2 py-1.5"
+          className="min-w-0 whitespace-normal"
           onClick={() => decide({ kind: 'acceptForSession' })}
         >
-          {t('approval.allowSession')} <kbd className="opacity-60">S</kbd>
+          {t('approval.allowSession')} <Kbd>S</Kbd>
         </Button>
         <Button
           type="button"
           variant="secondary"
           size="sm"
-          className="h-auto min-h-8 min-w-0 whitespace-normal px-2 py-1.5"
+          className="min-w-0 whitespace-normal"
           onClick={() => decide({ kind: 'acceptForSite' })}
         >
-          {t('approval.allowSite')} <kbd className="opacity-60">A</kbd>
+          {t('approval.allowSite')} <Kbd>A</Kbd>
         </Button>
         <Button
           type="button"
           variant="destructive"
           size="sm"
-          className="h-auto min-h-8 min-w-0 whitespace-normal px-2 py-1.5"
+          className="min-w-0 whitespace-normal"
           onClick={() => decide({ kind: 'decline' })}
         >
-          {t('approval.decline')} <kbd className="opacity-60">N</kbd>
+          {t('approval.decline')} <Kbd>N</Kbd>
         </Button>
       </CardFooter>
     </Card>

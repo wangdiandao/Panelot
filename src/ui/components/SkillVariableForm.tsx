@@ -7,7 +7,7 @@
 import { useEffect, useState } from 'react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import { Label } from './ui/label';
+import { Field, FieldGroup, FieldLabel } from './ui/field';
 import {
   Dialog,
   DialogContent,
@@ -65,19 +65,19 @@ export function SkillVariableForm({ command, onClose, onSubmit }: Props) {
           <DialogTitle className="font-mono text-[15px]">{command.command}</DialogTitle>
           <DialogDescription>{command.description}</DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-3">
+        <FieldGroup>
           {(command.variables ?? []).map((v) => (
-            <div key={v.key} className="flex flex-col gap-1.5">
-              <Label htmlFor={`var-${v.key}`} className="text-[12px] text-muted-foreground">
+            <Field key={v.key}>
+              <FieldLabel htmlFor={`var-${v.key}`}>
                 {v.label}
                 {v.required && <span className="text-destructive"> *</span>}
-              </Label>
+              </FieldLabel>
               {v.type === 'select' && v.options ? (
                 <Select
                   value={values[v.key] ?? ''}
                   onValueChange={(val) => setValues((s) => ({ ...s, [v.key]: val }))}
                 >
-                  <SelectTrigger id={`var-${v.key}`} className="w-full">
+                  <SelectTrigger id={`var-${v.key}`} className="w-full" aria-required={v.required}>
                     <SelectValue placeholder="选择…" />
                   </SelectTrigger>
                   <SelectContent>
@@ -94,14 +94,15 @@ export function SkillVariableForm({ command, onClose, onSubmit }: Props) {
                 <Input
                   id={`var-${v.key}`}
                   type={v.type === 'date' ? 'date' : v.type === 'url' ? 'url' : 'text'}
+                  required={v.required}
                   value={values[v.key] ?? ''}
                   onChange={(e) => setValues((s) => ({ ...s, [v.key]: e.target.value }))}
                   onKeyDown={(e) => e.key === 'Enter' && submit()}
                 />
               )}
-            </div>
+            </Field>
           ))}
-        </div>
+        </FieldGroup>
         <DialogFooter>
           <Button variant="outline" size="sm" onClick={onClose}>
             取消

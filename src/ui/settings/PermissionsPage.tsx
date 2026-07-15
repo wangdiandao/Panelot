@@ -7,6 +7,7 @@
 
 import { useState } from 'react';
 import { toast } from 'sonner';
+import { X } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Input } from '../components/ui/input';
@@ -14,11 +15,21 @@ import {
   Field,
   FieldContent,
   FieldDescription,
+  FieldError,
+  FieldGroup,
   FieldLabel,
   FieldLegend,
   FieldSet,
   FieldTitle,
 } from '../components/ui/field';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '../components/ui/table';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '../components/ui/empty';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../components/ui/collapsible';
 import {
@@ -67,6 +78,8 @@ export function PermissionsPage() {
   const rules = useStorageValue<PermissionRule[] | null>('permission_rules', null) ?? [];
   const sensitive = useStorageValue<string[] | null>('sensitive_origins', null) ?? [];
   const [newPattern, setNewPattern] = useState('');
+  const [ruleAttempted, setRuleAttempted] = useState(false);
+  const [sensitiveAttempted, setSensitiveAttempted] = useState(false);
   const [newRule, setNewRule] = useState<{
     tool: string;
     origin: string;
@@ -85,6 +98,7 @@ export function PermissionsPage() {
   };
 
   const addRule = async () => {
+    setRuleAttempted(true);
     const tool = newRule.tool.trim();
     const origin = newRule.origin.trim() || '*';
     if (!tool) return;
@@ -95,13 +109,16 @@ export function PermissionsPage() {
       source: 'user_setting',
     });
     setNewRule({ tool: '', origin: '*', verdict: 'ask' });
+    setRuleAttempted(false);
     toast.success(t('settings.permissions.ruleAdded'));
   };
 
   const addSensitive = async () => {
+    setSensitiveAttempted(true);
     const p = newPattern.trim();
     if (!p) return;
     setNewPattern('');
+    setSensitiveAttempted(false);
     await storageUpdate<string[]>('sensitive_origins', [], (current) =>
       current.includes(p) ? current : [...current, p],
     );
@@ -161,88 +178,112 @@ export function PermissionsPage() {
             </EmptyHeader>
           </Empty>
         ) : (
-          <div className="max-w-full overflow-x-auto">
-            <table className="w-full min-w-[34rem] text-[12px]">
-              <thead>
-                <tr className="border-b border-border text-left text-muted-foreground">
-                  <th className="py-1">{t('settings.permissions.tool')}</th>
-                  <th>{t('settings.permissions.site')}</th>
-                  <th>{t('settings.permissions.verdict')}</th>
-                  <th>{t('settings.permissions.source')}</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {rules.map((r) => (
-                  <tr key={r.id} className="border-b border-border/50">
-                    <td className="py-1 font-mono">{r.tool}</td>
-                    <td className="font-mono">{r.origin}</td>
-                    <td
-                      className={
+          <Table className="min-w-[34rem]">
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t('settings.permissions.tool')}</TableHead>
+                <TableHead>{t('settings.permissions.site')}</TableHead>
+                <TableHead>{t('settings.permissions.verdict')}</TableHead>
+                <TableHead>{t('settings.permissions.source')}</TableHead>
+                <TableHead>
+                  <span className="sr-only">{t('settings.permissions.removeRule')}</span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rules.map((r) => (
+                <TableRow key={r.id}>
+                  <TableCell className="font-mono">{r.tool}</TableCell>
+                  <TableCell className="font-mono">{r.origin}</TableCell>
+                  <TableCell>
+                    <Badge
+                      variant={
                         r.verdict === 'deny'
-                          ? 'text-destructive'
+                          ? 'destructive'
                           : r.verdict === 'ask'
-                            ? 'text-warning'
-                            : 'text-success'
+                            ? 'outline'
+                            : 'default'
                       }
                     >
                       {t(`settings.permissions.verdict.${r.verdict}`)}
-                    </td>
-                    <td className="text-muted-foreground">{permissionRuleSourceLabel(r.source)}</td>
-                    <td className="text-right">
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        className="h-6 px-2 text-[12px]"
-                        onClick={() => void removeRule(r.id)}
-                      >
-                        {t('settings.permissions.removeRule')}
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {permissionRuleSourceLabel(r.source)}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button variant="destructive" size="xs" onClick={() => void removeRule(r.id)}>
+                      {t('settings.permissions.removeRule')}
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         )}
         {/* Manual rule creation: tool name, prefix wildcard, or category:xxx */}
-        <div className="flex flex-col gap-2 sm:flex-row">
-          <Input
-            value={newRule.tool}
-            onChange={(e) => setNewRule({ ...newRule, tool: e.target.value })}
-            placeholder={t('settings.permissions.toolPlaceholder')}
-            className="flex-1 font-mono"
-          />
-          <Input
-            value={newRule.origin}
-            onChange={(e) => setNewRule({ ...newRule, origin: e.target.value })}
-            placeholder={t('settings.permissions.originPlaceholder')}
-            className="font-mono sm:w-40"
-          />
-          <Select
-            value={newRule.verdict}
-            onValueChange={(v) =>
-              setNewRule({ ...newRule, verdict: v as PermissionRule['verdict'] })
-            }
-          >
-            <SelectTrigger
-              className="w-full sm:w-28"
-              aria-label={t('settings.permissions.verdict')}
+        <FieldGroup className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_10rem_7rem_auto]">
+          <Field data-invalid={ruleAttempted && !newRule.tool.trim()}>
+            <FieldLabel htmlFor="permission-tool" className="sr-only">
+              {t('settings.permissions.tool')}
+            </FieldLabel>
+            <Input
+              id="permission-tool"
+              value={newRule.tool}
+              onChange={(e) => {
+                setNewRule({ ...newRule, tool: e.target.value });
+                setRuleAttempted(false);
+              }}
+              aria-invalid={ruleAttempted && !newRule.tool.trim()}
+              placeholder={t('settings.permissions.toolPlaceholder')}
+              className="flex-1 font-mono"
+            />
+            {ruleAttempted && !newRule.tool.trim() && (
+              <FieldError>{t('settings.permissions.tool')}</FieldError>
+            )}
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="permission-origin" className="sr-only">
+              {t('settings.permissions.site')}
+            </FieldLabel>
+            <Input
+              id="permission-origin"
+              value={newRule.origin}
+              onChange={(e) => setNewRule({ ...newRule, origin: e.target.value })}
+              placeholder={t('settings.permissions.originPlaceholder')}
+              className="font-mono sm:w-40"
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="permission-verdict" className="sr-only">
+              {t('settings.permissions.verdict')}
+            </FieldLabel>
+            <Select
+              value={newRule.verdict}
+              onValueChange={(v) =>
+                setNewRule({ ...newRule, verdict: v as PermissionRule['verdict'] })
+              }
             >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                <SelectItem value="allow">{t('settings.permissions.verdict.allow')}</SelectItem>
-                <SelectItem value="ask">{t('settings.permissions.verdict.ask')}</SelectItem>
-                <SelectItem value="deny">{t('settings.permissions.verdict.deny')}</SelectItem>
-              </SelectGroup>
-            </SelectContent>
-          </Select>
+              <SelectTrigger
+                id="permission-verdict"
+                className="w-full sm:w-28"
+                aria-label={t('settings.permissions.verdict')}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="allow">{t('settings.permissions.verdict.allow')}</SelectItem>
+                  <SelectItem value="ask">{t('settings.permissions.verdict.ask')}</SelectItem>
+                  <SelectItem value="deny">{t('settings.permissions.verdict.deny')}</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </Field>
           <Button size="sm" onClick={() => void addRule()}>
             {t('settings.permissions.add')}
           </Button>
-        </div>
+        </FieldGroup>
         <div className="text-[11px] text-muted-foreground">
           {t('settings.permissions.askHint', {
             categories: Object.keys(ACTION_CATEGORIES)
@@ -257,10 +298,18 @@ export function PermissionsPage() {
         <div className="text-[13px] font-medium text-muted-foreground">
           {t('settings.permissions.sensitive')}
         </div>
-        <div className="flex flex-col gap-2 sm:flex-row">
+        <Field orientation="responsive" data-invalid={sensitiveAttempted && !newPattern.trim()}>
+          <FieldLabel htmlFor="sensitive-origin" className="sr-only">
+            {t('settings.permissions.sensitive')}
+          </FieldLabel>
           <Input
+            id="sensitive-origin"
             value={newPattern}
-            onChange={(e) => setNewPattern(e.target.value)}
+            onChange={(e) => {
+              setNewPattern(e.target.value);
+              setSensitiveAttempted(false);
+            }}
+            aria-invalid={sensitiveAttempted && !newPattern.trim()}
             onKeyDown={(e) => e.key === 'Enter' && void addSensitive()}
             placeholder="*.mybank.com"
             className="flex-1 font-mono"
@@ -268,7 +317,10 @@ export function PermissionsPage() {
           <Button size="sm" onClick={() => void addSensitive()}>
             {t('settings.permissions.add')}
           </Button>
-        </div>
+          {sensitiveAttempted && !newPattern.trim() && (
+            <FieldError>{t('settings.permissions.sensitive')}</FieldError>
+          )}
+        </Field>
         {sensitive.length > 0 && (
           <div className="flex flex-wrap gap-1">
             {sensitive.map((p) => (
@@ -280,7 +332,7 @@ export function PermissionsPage() {
                   onClick={() => void removeSensitive(p)}
                   aria-label={t('settings.permissions.removeSensitive', { pattern: p })}
                 >
-                  ×
+                  <X data-icon="inline-start" />
                 </Button>
               </Badge>
             ))}

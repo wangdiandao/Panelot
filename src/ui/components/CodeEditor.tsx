@@ -16,12 +16,24 @@ interface Props {
   onChange: (value: string) => void;
   placeholder?: string;
   minHeight?: string;
+  ariaLabel: string;
+  ariaInvalid?: boolean;
+  ariaDescribedBy?: string;
 }
 
-export function CodeEditor({ value, onChange, placeholder, minHeight = '360px' }: Props) {
+export function CodeEditor({
+  value,
+  onChange,
+  placeholder,
+  minHeight = '360px',
+  ariaLabel,
+  ariaInvalid = false,
+  ariaDescribedBy,
+}: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const themeCompartment = useRef(new Compartment());
+  const accessibilityCompartment = useRef(new Compartment());
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
 
@@ -54,6 +66,13 @@ export function CodeEditor({ value, onChange, placeholder, minHeight = '360px' }
           markdown(),
           baseTheme,
           themeCompartment.current.of(isDark() ? darkExtensions : []),
+          accessibilityCompartment.current.of(
+            EditorView.contentAttributes.of({
+              'aria-label': ariaLabel,
+              'aria-invalid': String(ariaInvalid),
+              ...(ariaDescribedBy ? { 'aria-describedby': ariaDescribedBy } : {}),
+            }),
+          ),
           ...(placeholder ? [cmPlaceholder(placeholder)] : []),
           EditorView.lineWrapping,
           EditorView.updateListener.of((update) => {
@@ -89,6 +108,20 @@ export function CodeEditor({ value, onChange, placeholder, minHeight = '360px' }
       view.dispatch({ changes: { from: 0, to: current.length, insert: value } });
     }
   }, [value]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: accessibilityCompartment.current.reconfigure(
+        EditorView.contentAttributes.of({
+          'aria-label': ariaLabel,
+          'aria-invalid': String(ariaInvalid),
+          ...(ariaDescribedBy ? { 'aria-describedby': ariaDescribedBy } : {}),
+        }),
+      ),
+    });
+  }, [ariaDescribedBy, ariaInvalid, ariaLabel]);
 
   return <div ref={hostRef} className="overflow-hidden rounded-md border border-border bg-muted" />;
 }

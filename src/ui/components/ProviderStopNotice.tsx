@@ -23,11 +23,7 @@ export function ProviderStopNotice({ stopReason }: ProviderStopNoticeProps) {
   if (!keys) return null;
 
   return (
-    <Alert
-      role="status"
-      aria-live="polite"
-      className="rounded-none border-x-0 border-t-0 px-3 py-2"
-    >
+    <Alert role="status" aria-live="polite">
       <AlertTitle>{t(keys.title)}</AlertTitle>
       <AlertDescription>{t(keys.description)}</AlertDescription>
     </Alert>

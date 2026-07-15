@@ -14,7 +14,17 @@ import { Switch } from '../components/ui/switch';
 import { CodeEditor } from '../components/CodeEditor';
 import { FilePickerButton } from '../components/FilePickerButton';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '../components/ui/empty';
-import { FieldError } from '../components/ui/field';
+import { Field, FieldError, FieldGroup, FieldLabel } from '../components/ui/field';
+import { Alert, AlertAction, AlertDescription } from '../components/ui/alert';
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemFooter,
+  ItemGroup,
+  ItemTitle,
+} from '../components/ui/item';
 import {
   Dialog,
   DialogContent,
@@ -147,22 +157,39 @@ export function SkillsPage() {
     return (
       <div className="flex max-w-2xl flex-col gap-3">
         <h2 className="text-[15px] font-semibold">{t('settings.skills.edit')}</h2>
-        <CodeEditor value={draft} onChange={setDraft} placeholder={skillTemplate()} />
+        <FieldGroup>
+          <Field data-invalid={Boolean(error)}>
+            <FieldLabel>{t('settings.skills.edit')}</FieldLabel>
+            <CodeEditor
+              value={draft}
+              onChange={setDraft}
+              placeholder={skillTemplate()}
+              ariaLabel={t('settings.skills.edit')}
+              ariaInvalid={Boolean(error)}
+              ariaDescribedBy={error ? 'skill-editor-error' : undefined}
+            />
+            {error && <FieldError id="skill-editor-error">{error}</FieldError>}
+          </Field>
+        </FieldGroup>
         {preview && (
-          <div className="text-[12px] text-success">
-            ✓ {preview.name} — {preview.description}
-          </div>
+          <Alert variant="success">
+            <AlertDescription>
+              ✓ {preview.name} — {preview.description}
+            </AlertDescription>
+          </Alert>
         )}
-        {error && <FieldError>{error}</FieldError>}
         {conflict && (
-          <div className="flex gap-2 rounded-lg border border-border p-3">
-            <Button size="sm" onClick={() => void resolveConflict('overwrite')}>
-              {t('settings.skills.overwrite')}
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => void resolveConflict('rename')}>
-              {t('settings.skills.rename')}
-            </Button>
-          </div>
+          <Alert>
+            <AlertDescription>{t('settings.skills.conflict')}</AlertDescription>
+            <AlertAction placement="footer">
+              <Button size="sm" onClick={() => void resolveConflict('overwrite')}>
+                {t('settings.skills.overwrite')}
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => void resolveConflict('rename')}>
+                {t('settings.skills.rename')}
+              </Button>
+            </AlertAction>
+          </Alert>
         )}
         <div className="flex gap-2">
           <Button size="sm" className="px-4" onClick={() => void save()}>
@@ -210,16 +237,23 @@ export function SkillsPage() {
           </Button>
         </div>
       </div>
-      {error && <FieldError>{error}</FieldError>}
+      {error && (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
       {conflict && (
-        <div className="flex gap-2 rounded-lg border border-border p-3">
-          <Button size="sm" onClick={() => void resolveConflict('overwrite')}>
-            {t('settings.skills.overwrite')}
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => void resolveConflict('rename')}>
-            {t('settings.skills.rename')}
-          </Button>
-        </div>
+        <Alert>
+          <AlertDescription>{t('settings.skills.conflict')}</AlertDescription>
+          <AlertAction placement="footer">
+            <Button size="sm" onClick={() => void resolveConflict('overwrite')}>
+              {t('settings.skills.overwrite')}
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => void resolveConflict('rename')}>
+              {t('settings.skills.rename')}
+            </Button>
+          </AlertAction>
+        </Alert>
       )}
       {skills.length === 0 ? (
         <Empty className="border border-dashed p-6 md:p-6">
@@ -229,86 +263,87 @@ export function SkillsPage() {
           </EmptyHeader>
         </Empty>
       ) : (
-        skills.map((s) => {
-          const fm = s.frontmatter as {
-            description: string;
-            panelot?: { sites?: string[]; command?: string };
-          };
-          return (
-            <div key={s.id} className="rounded-lg border border-border bg-card px-4 py-3">
-              <div className="flex items-center gap-2">
-                <Switch
-                  checked={s.enabled}
-                  disabled={s.source === 'plugin'}
-                  onCheckedChange={(on) => void manager.setEnabled(s.id, on).then(refresh)}
-                  aria-label={t('settings.skills.enable', { name: s.name })}
-                />
-                <span className="text-[13px] font-medium">{s.name}</span>
-                {fm.panelot?.command && (
-                  <Badge
-                    variant="secondary"
-                    className="font-mono text-[11px] text-muted-foreground"
-                  >
-                    {fm.panelot.command}
-                  </Badge>
-                )}
-                {fm.panelot?.sites?.length ? (
-                  <span className="text-[11px] text-muted-foreground">
-                    [{fm.panelot.sites.join(', ')}]
-                  </span>
-                ) : null}
-                <span className="ml-auto text-[11px] text-muted-foreground">{s.source}</span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-6 px-2 text-[12px] text-muted-foreground"
-                  onClick={() => {
-                    if (s.source === 'plugin') {
-                      void pluginManager.copyInstalledSkillToUser(s.id).then((copy) => {
-                        setDraft(copy.raw);
-                        setEditing(copy.id);
-                        return refresh();
-                      });
-                    } else {
-                      setDraft(s.raw);
-                      setEditing(s.id);
-                    }
-                  }}
-                >
-                  {s.source === 'plugin'
-                    ? t('settings.skills.copyEdit')
-                    : t('settings.providers.edit')}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label={t('settings.skills.export', { name: s.name })}
-                  onClick={() => {
-                    const url = URL.createObjectURL(new Blob([s.raw], { type: 'text/markdown' }));
-                    const anchor = document.createElement('a');
-                    anchor.href = url;
-                    anchor.download = `${s.name}.SKILL.md`;
-                    anchor.click();
-                    URL.revokeObjectURL(url);
-                  }}
-                >
-                  <Download />
-                </Button>
-                {s.source !== 'plugin' && (
+        <ItemGroup className="gap-2">
+          {skills.map((s) => {
+            const fm = s.frontmatter as {
+              description: string;
+              panelot?: { sites?: string[]; command?: string };
+            };
+            return (
+              <Item key={s.id} variant="outline" size="sm">
+                <ItemContent>
+                  <ItemTitle>
+                    <Switch
+                      checked={s.enabled}
+                      disabled={s.source === 'plugin'}
+                      onCheckedChange={(on) => void manager.setEnabled(s.id, on).then(refresh)}
+                      aria-label={s.name}
+                    />
+                    <span>{s.name}</span>
+                    {fm.panelot?.command && (
+                      <Badge variant="secondary" className="font-mono">
+                        {fm.panelot.command}
+                      </Badge>
+                    )}
+                  </ItemTitle>
+                  <ItemDescription>{fm.description}</ItemDescription>
+                </ItemContent>
+                <ItemActions>
                   <Button
-                    variant="destructive"
-                    size="sm"
-                    className="h-6 px-2 text-[12px]"
-                    onClick={() => void manager.remove(s.id).then(refresh)}
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => {
+                      if (s.source === 'plugin') {
+                        void pluginManager.copyInstalledSkillToUser(s.id).then((copy) => {
+                          setDraft(copy.raw);
+                          setEditing(copy.id);
+                          return refresh();
+                        });
+                      } else {
+                        setDraft(s.raw);
+                        setEditing(s.id);
+                      }
+                    }}
                   >
-                    {t('settings.skills.delete')}
+                    {s.source === 'plugin'
+                      ? t('settings.skills.copyEdit')
+                      : t('settings.providers.edit')}
                   </Button>
-                )}
-              </div>
-              <div className="mt-1 text-[12px] text-muted-foreground">{fm.description}</div>
-            </div>
-          );
-        })
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={t('settings.skills.export', { name: s.name })}
+                    onClick={() => {
+                      const url = URL.createObjectURL(new Blob([s.raw], { type: 'text/markdown' }));
+                      const anchor = document.createElement('a');
+                      anchor.href = url;
+                      anchor.download = `${s.name}.SKILL.md`;
+                      anchor.click();
+                      URL.revokeObjectURL(url);
+                    }}
+                  >
+                    <Download data-icon="inline-start" />
+                  </Button>
+                  {s.source !== 'plugin' && (
+                    <Button
+                      variant="destructive"
+                      size="xs"
+                      onClick={() => void manager.remove(s.id).then(refresh)}
+                    >
+                      {t('settings.skills.delete')}
+                    </Button>
+                  )}
+                </ItemActions>
+                <ItemFooter>
+                  <span>{s.source}</span>
+                  {fm.panelot?.sites?.length ? (
+                    <span className="ml-auto">[{fm.panelot.sites.join(', ')}]</span>
+                  ) : null}
+                </ItemFooter>
+              </Item>
+            );
+          })}
+        </ItemGroup>
       )}
 
       <Dialog open={urlDialogOpen} onOpenChange={setUrlDialogOpen}>
@@ -317,14 +352,20 @@ export function SkillsPage() {
             <DialogTitle>{t('settings.skills.urlTitle')}</DialogTitle>
             <DialogDescription>{t('settings.skills.urlHint')}</DialogDescription>
           </DialogHeader>
-          <Input
-            value={importUrl}
-            onChange={(e) => setImportUrl(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && void doImportUrl()}
-            placeholder="https://raw.githubusercontent.com/…/SKILL.md"
-            className="font-mono"
-            autoFocus
-          />
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="skill-import-url">{t('settings.skills.urlTitle')}</FieldLabel>
+              <Input
+                id="skill-import-url"
+                value={importUrl}
+                onChange={(e) => setImportUrl(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && void doImportUrl()}
+                placeholder="https://raw.githubusercontent.com/…/SKILL.md"
+                className="font-mono"
+                autoFocus
+              />
+            </Field>
+          </FieldGroup>
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setUrlDialogOpen(false)}>
               {t('app.cancel')}

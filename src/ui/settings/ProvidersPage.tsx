@@ -10,9 +10,17 @@ import { toast } from 'sonner';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
-import { Label } from '../components/ui/label';
 import { Switch } from '../components/ui/switch';
 import { Checkbox } from '../components/ui/checkbox';
+import { Badge } from '../components/ui/badge';
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemTitle,
+} from '../components/ui/item';
 import { Alert, AlertDescription } from '../components/ui/alert';
 import {
   Empty,
@@ -21,7 +29,15 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from '../components/ui/empty';
-import { FieldError } from '../components/ui/field';
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from '../components/ui/field';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../components/ui/collapsible';
 import {
   AlertDialog,
@@ -263,14 +279,12 @@ export function ProvidersPage() {
         </Empty>
       )}
       {connections.length > 0 && (
-        <div className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3">
-          <div className="min-w-0">
-            <div className="text-[13px] font-medium">{t('settings.providers.defaultModel')}</div>
-            <div className="text-[11px] text-muted-foreground">
-              {t('settings.providers.defaultModelHint')}
-            </div>
-          </div>
-          <div className="ml-auto">
+        <Item variant="outline" size="sm">
+          <ItemContent>
+            <ItemTitle>{t('settings.providers.defaultModel')}</ItemTitle>
+            <ItemDescription>{t('settings.providers.defaultModelHint')}</ItemDescription>
+          </ItemContent>
+          <ItemActions>
             <ModelSelector
               value={defaultModel}
               allowDefaultSelection={false}
@@ -282,35 +296,34 @@ export function ProvidersPage() {
                   });
               }}
             />
-          </div>
-        </div>
+          </ItemActions>
+        </Item>
       )}
-      {connections.map((c) => (
-        <div
-          key={c.id}
-          className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3"
-        >
-          <Switch
-            checked={c.enabled}
-            onCheckedChange={(on) => void setConnectionEnabled(c, on)}
-            aria-label={t('settings.providers.enable', { name: c.name || c.baseUrl })}
-          />
-          <div className="min-w-0">
-            <div className="text-[13px] font-medium">{c.name || c.baseUrl}</div>
-            <div className="truncate font-mono text-[11px] text-muted-foreground">
-              {c.kind} · {c.baseUrl} · {c.apiKeys.length} key{c.apiKeys.length === 1 ? '' : 's'}
-            </div>
-          </div>
-          <div className="ml-auto flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => setEditing(c)}>
-              {t('settings.providers.edit')}
-            </Button>
-            <Button variant="destructive" size="sm" onClick={() => setDeleting(c)}>
-              {t('settings.providers.delete')}
-            </Button>
-          </div>
-        </div>
-      ))}
+      <ItemGroup className="gap-2">
+        {connections.map((c) => (
+          <Item key={c.id} variant="outline" size="sm">
+            <Switch
+              checked={c.enabled}
+              onCheckedChange={(on) => void setConnectionEnabled(c, on)}
+              aria-label={t('settings.providers.enable', { name: c.name || c.baseUrl })}
+            />
+            <ItemContent className="min-w-0">
+              <ItemTitle>{c.name || c.baseUrl}</ItemTitle>
+              <ItemDescription className="truncate font-mono">
+                {c.kind} · {c.baseUrl} · {c.apiKeys.length} key{c.apiKeys.length === 1 ? '' : 's'}
+              </ItemDescription>
+            </ItemContent>
+            <ItemActions>
+              <Button variant="outline" size="sm" onClick={() => setEditing(c)}>
+                {t('settings.providers.edit')}
+              </Button>
+              <Button variant="destructive" size="sm" onClick={() => setDeleting(c)}>
+                {t('settings.providers.delete')}
+              </Button>
+            </ItemActions>
+          </Item>
+        ))}
+      </ItemGroup>
 
       <AlertDialog open={deleting !== null} onOpenChange={(o) => !o && setDeleting(null)}>
         <AlertDialogContent>
@@ -343,6 +356,17 @@ export function ProvidersPage() {
 }
 
 // ---------------------------------------------------------------------------
+
+type ProviderField = 'baseUrl' | 'headers' | 'modelConfig';
+
+class ProviderFieldError extends Error {
+  constructor(
+    readonly field: ProviderField,
+    message: string,
+  ) {
+    super(message);
+  }
+}
 
 function ConnectionForm({
   connection,
@@ -407,13 +431,14 @@ function ConnectionForm({
   const [verifying, setVerifying] = useState(false);
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
   const [urlHint, setUrlHint] = useState<string | undefined>();
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<ProviderField, string>>>({});
 
   const built = (): Connection => {
     let normalized: ReturnType<typeof normalizeBaseUrl>;
     try {
       normalized = normalizeBaseUrl(conn.baseUrl, conn.kind);
     } catch {
-      throw new Error(t('settings.providers.invalidEndpoint'));
+      throw new ProviderFieldError('baseUrl', t('settings.providers.invalidEndpoint'));
     }
     const { url, hint } = normalized;
     setUrlHint(hint ? t('settings.providers.baseUrlHint') : undefined);
@@ -433,23 +458,38 @@ function ConnectionForm({
       try {
         parsed = JSON.parse(modelConfigText);
       } catch {
-        throw new Error(t('settings.providers.invalidModelJson'));
+        throw new ProviderFieldError('modelConfig', t('settings.providers.invalidModelJson'));
       }
-      models = parseModelConfigs(parsed);
+      try {
+        models = parseModelConfigs(parsed);
+      } catch (error) {
+        throw new ProviderFieldError(
+          'modelConfig',
+          error instanceof Error ? error.message : String(error),
+        );
+      }
     }
-    const customHeaders = Object.fromEntries(
-      headersText
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .map((line, index) => {
-          const separator = line.indexOf(':');
-          if (separator <= 0) {
-            throw new Error(t('settings.providers.invalidHeader', { line: index + 1 }));
-          }
-          return [line.slice(0, separator).trim(), line.slice(separator + 1).trim()];
-        }),
-    );
+    let customHeaders: Record<string, string>;
+    try {
+      customHeaders = Object.fromEntries(
+        headersText
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line, index) => {
+            const separator = line.indexOf(':');
+            if (separator <= 0) {
+              throw new Error(t('settings.providers.invalidHeader', { line: index + 1 }));
+            }
+            return [line.slice(0, separator).trim(), line.slice(separator + 1).trim()];
+          }),
+      );
+    } catch (error) {
+      throw new ProviderFieldError(
+        'headers',
+        error instanceof Error ? error.message : String(error),
+      );
+    }
     return {
       ...conn,
       name,
@@ -477,10 +517,24 @@ function ConnectionForm({
     }
   };
 
+  const handleConfigurationError = (error: unknown) => {
+    if (error instanceof ProviderFieldError) {
+      setFieldErrors((current) => ({ ...current, [error.field]: error.message }));
+      setFormError(null);
+      return;
+    }
+    setFormError(
+      error instanceof Error && error.message.trim()
+        ? error.message
+        : t('settings.providers.invalidConfiguration'),
+    );
+  };
+
   const verify = async () => {
     setVerifying(true);
     setVerifyResult(null);
     setFormError(null);
+    setFieldErrors({});
     let phase: 'configuration' | 'request' = 'configuration';
     try {
       const candidate = built();
@@ -501,11 +555,7 @@ function ConnectionForm({
       setVerifyResult(result);
     } catch (error) {
       if (phase === 'configuration') {
-        setFormError(
-          error instanceof Error && error.message.trim()
-            ? error.message
-            : t('settings.providers.invalidConfiguration'),
-        );
+        handleConfigurationError(error);
       } else {
         setVerifyResult(requestVerifyFailure(error));
       }
@@ -514,7 +564,6 @@ function ConnectionForm({
     }
   };
 
-  const labelCls = 'mb-1 block text-[12px] text-muted-foreground';
   const verifyError = verifyResult ? providerErrorFromVerifyResult(verifyResult) : undefined;
 
   return (
@@ -527,218 +576,234 @@ function ConnectionForm({
 
       {/* Classified by interface type, not vendor: pick the wire protocol,
           then enter the endpoint domain + key. */}
-      <div>
-        <Label className={labelCls}>{t('settings.providers.kind')}</Label>
-        <Select
-          value={conn.kind}
-          onValueChange={(v) => setConn({ ...conn, kind: v as Connection['kind'] })}
-        >
-          <SelectTrigger className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              <SelectItem value="openai">
-                {t('settings.providers.kind.openai')} (/chat/completions)
-              </SelectItem>
-              <SelectItem value="anthropic">
-                {t('settings.providers.kind.anthropic')} (/v1/messages)
-              </SelectItem>
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-      </div>
+      <FieldGroup className="gap-4">
+        <Field>
+          <FieldLabel htmlFor="conn-kind">{t('settings.providers.kind')}</FieldLabel>
+          <Select
+            value={conn.kind}
+            onValueChange={(v) => setConn({ ...conn, kind: v as Connection['kind'] })}
+          >
+            <SelectTrigger id="conn-kind" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="openai">
+                  {t('settings.providers.kind.openai')} (/chat/completions)
+                </SelectItem>
+                <SelectItem value="anthropic">
+                  {t('settings.providers.kind.anthropic')} (/v1/messages)
+                </SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </Field>
 
-      <div>
-        <Label className={labelCls} htmlFor="conn-name">
-          {t('settings.providers.name')}
-        </Label>
-        <Input
-          id="conn-name"
-          value={conn.name}
-          onChange={(e) => setConn({ ...conn, name: e.target.value })}
-          placeholder={t('settings.providers.namePlaceholder')}
-        />
-      </div>
+        <Field>
+          <FieldLabel htmlFor="conn-name">{t('settings.providers.name')}</FieldLabel>
+          <Input
+            id="conn-name"
+            value={conn.name}
+            onChange={(e) => setConn({ ...conn, name: e.target.value })}
+            placeholder={t('settings.providers.namePlaceholder')}
+          />
+        </Field>
 
-      <div>
-        <Label className={labelCls} htmlFor="conn-url">
-          Base URL
-        </Label>
-        <Input
-          id="conn-url"
-          className="font-mono"
-          value={conn.baseUrl}
-          placeholder="https://api.example.com/v1"
-          onChange={(e) => setConn({ ...conn, baseUrl: e.target.value })}
-        />
-        {urlHint && <div className="mt-1 text-[11px] text-warning">{urlHint}</div>}
-      </div>
+        <Field data-invalid={Boolean(fieldErrors.baseUrl)}>
+          <FieldLabel htmlFor="conn-url">Base URL</FieldLabel>
+          <Input
+            id="conn-url"
+            className="font-mono"
+            value={conn.baseUrl}
+            placeholder="https://api.example.com/v1"
+            onChange={(e) => {
+              setConn({ ...conn, baseUrl: e.target.value });
+              setFieldErrors((current) => ({ ...current, baseUrl: undefined }));
+            }}
+            aria-invalid={Boolean(fieldErrors.baseUrl)}
+          />
+          {urlHint && <FieldDescription>{urlHint}</FieldDescription>}
+          {fieldErrors.baseUrl && <FieldError>{fieldErrors.baseUrl}</FieldError>}
+        </Field>
 
-      <div>
-        <Label className={labelCls} htmlFor="conn-keys">
-          {t('settings.providers.keys')}
-        </Label>
-        <Textarea
-          id="conn-keys"
-          className="font-mono"
-          rows={2}
-          value={keysText}
-          onChange={(e) => {
-            keysDirty.current = true;
-            setKeysText(e.target.value);
-          }}
-          placeholder="sk-…"
-        />
-      </div>
+        <Field>
+          <FieldLabel htmlFor="conn-keys">{t('settings.providers.keys')}</FieldLabel>
+          <Textarea
+            id="conn-keys"
+            className="font-mono"
+            rows={2}
+            value={keysText}
+            onChange={(e) => {
+              keysDirty.current = true;
+              setKeysText(e.target.value);
+            }}
+            placeholder="sk-…"
+          />
+        </Field>
 
-      <div>
-        <Label className={labelCls} htmlFor="conn-models">
-          {t('settings.providers.models')}
-        </Label>
-        <Textarea
-          id="conn-models"
-          className="font-mono"
-          rows={2}
-          value={modelsText}
-          onChange={(e) => setModelsText(e.target.value)}
-          placeholder={t('settings.providers.modelsPlaceholder')}
-        />
-      </div>
+        <Field>
+          <FieldLabel htmlFor="conn-models">{t('settings.providers.models')}</FieldLabel>
+          <Textarea
+            id="conn-models"
+            className="font-mono"
+            rows={2}
+            value={modelsText}
+            onChange={(e) => setModelsText(e.target.value)}
+            placeholder={t('settings.providers.modelsPlaceholder')}
+          />
+        </Field>
 
-      <Collapsible>
-        <CollapsibleTrigger className="text-[12px] text-muted-foreground hover:text-foreground data-[state=open]:text-foreground">
-          {t('settings.providers.quirks')}
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <div className="mt-2 flex flex-col gap-2 rounded-md border border-border p-3 text-[13px]">
-            {(
-              [
-                ['noStreamOptions', t('settings.providers.quirk.noStreamOptions')],
-                ['thinkTagReasoning', t('settings.providers.quirk.thinkTagReasoning')],
-                ['noParallelToolCalls', t('settings.providers.quirk.noParallelToolCalls')],
-                ['noSystemRole', t('settings.providers.quirk.noSystemRole')],
-              ] as [keyof QuirkFlags, string][]
-            ).map(([key, label]) => (
-              <Label
-                key={key}
-                htmlFor={`quirk-${conn.id}-${key}`}
-                className="flex items-center gap-2"
-              >
-                <Checkbox
-                  id={`quirk-${conn.id}-${key}`}
-                  checked={Boolean(conn.quirks?.[key])}
-                  onCheckedChange={(on) =>
-                    setConn({
-                      ...conn,
-                      quirks: { ...conn.quirks, [key]: on === true || undefined },
-                    })
+        <Collapsible>
+          <CollapsibleTrigger className="text-[12px] text-muted-foreground hover:text-foreground data-[state=open]:text-foreground">
+            {t('settings.providers.quirks')}
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <FieldSet className="mt-2 gap-3 rounded-md border border-border p-3">
+              <FieldLegend variant="label" className="sr-only">
+                {t('settings.providers.quirks')}
+              </FieldLegend>
+              <FieldGroup className="gap-3">
+                {(
+                  [
+                    ['noStreamOptions', t('settings.providers.quirk.noStreamOptions')],
+                    ['thinkTagReasoning', t('settings.providers.quirk.thinkTagReasoning')],
+                    ['noParallelToolCalls', t('settings.providers.quirk.noParallelToolCalls')],
+                    ['noSystemRole', t('settings.providers.quirk.noSystemRole')],
+                  ] as [keyof QuirkFlags, string][]
+                ).map(([key, label]) => (
+                  <Field key={key} orientation="horizontal">
+                    <Checkbox
+                      id={`quirk-${conn.id}-${key}`}
+                      checked={Boolean(conn.quirks?.[key])}
+                      onCheckedChange={(on) =>
+                        setConn({
+                          ...conn,
+                          quirks: { ...conn.quirks, [key]: on === true || undefined },
+                        })
+                      }
+                    />
+                    <FieldLabel htmlFor={`quirk-${conn.id}-${key}`}>{label}</FieldLabel>
+                  </Field>
+                ))}
+                <Field orientation="responsive">
+                  <FieldLabel htmlFor="conn-max-tokens-field">
+                    {t('settings.providers.maxTokensField')}
+                  </FieldLabel>
+                  <Select
+                    value={conn.quirks?.maxTokensField ?? 'max_tokens'}
+                    onValueChange={(v) =>
+                      setConn({
+                        ...conn,
+                        quirks: {
+                          ...conn.quirks,
+                          maxTokensField: v as QuirkFlags['maxTokensField'],
+                        },
+                      })
+                    }
+                  >
+                    <SelectTrigger
+                      id="conn-max-tokens-field"
+                      size="sm"
+                      className="font-mono text-[12px]"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value="max_tokens">max_tokens</SelectItem>
+                        <SelectItem value="max_completion_tokens">max_completion_tokens</SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+              </FieldGroup>
+            </FieldSet>
+          </CollapsibleContent>
+        </Collapsible>
+
+        <Collapsible>
+          <CollapsibleTrigger className="text-[12px] text-muted-foreground hover:text-foreground data-[state=open]:text-foreground">
+            {t('settings.providers.advanced')}
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <FieldGroup className="mt-2 gap-3 rounded-md border border-border p-3">
+              <Field data-invalid={Boolean(fieldErrors.headers)}>
+                <FieldLabel htmlFor="conn-headers">{t('settings.providers.headers')}</FieldLabel>
+                <Textarea
+                  id="conn-headers"
+                  className="font-mono text-[12px]"
+                  rows={3}
+                  value={headersText}
+                  onChange={(event) => {
+                    headersDirty.current = true;
+                    setHeadersText(event.target.value);
+                    setFieldErrors((current) => ({ ...current, headers: undefined }));
+                  }}
+                  aria-invalid={Boolean(fieldErrors.headers)}
+                  placeholder="X-Organization: org-id"
+                />
+                {fieldErrors.headers && <FieldError>{fieldErrors.headers}</FieldError>}
+              </Field>
+              <Field data-invalid={Boolean(fieldErrors.modelConfig)}>
+                <FieldLabel htmlFor="conn-model-config">
+                  {t('settings.providers.modelConfig')}
+                </FieldLabel>
+                <Textarea
+                  id="conn-model-config"
+                  className="font-mono text-[11px]"
+                  rows={7}
+                  value={modelConfigText}
+                  onChange={(event) => {
+                    setModelConfigText(event.target.value);
+                    setFieldErrors((current) => ({ ...current, modelConfig: undefined }));
+                  }}
+                  aria-invalid={Boolean(fieldErrors.modelConfig)}
+                  placeholder={
+                    '[{\n  "id": "model-id",\n  "capabilities": { "toolUse": true, "vision": true, "reasoning": false, "maxContext": 128000 },\n  "pricing": { "input": 1, "output": 4 }\n}]'
                   }
                 />
-                {label}
-              </Label>
-            ))}
-            <Label className="flex items-center gap-2">
-              {t('settings.providers.maxTokensField')}
-              <Select
-                value={conn.quirks?.maxTokensField ?? 'max_tokens'}
-                onValueChange={(v) =>
-                  setConn({
-                    ...conn,
-                    quirks: { ...conn.quirks, maxTokensField: v as QuirkFlags['maxTokensField'] },
-                  })
-                }
-              >
-                <SelectTrigger size="sm" className="font-mono text-[12px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem value="max_tokens">max_tokens</SelectItem>
-                    <SelectItem value="max_completion_tokens">max_completion_tokens</SelectItem>
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </Label>
-          </div>
-        </CollapsibleContent>
-      </Collapsible>
+                {fieldErrors.modelConfig && <FieldError>{fieldErrors.modelConfig}</FieldError>}
+              </Field>
+            </FieldGroup>
+          </CollapsibleContent>
+        </Collapsible>
 
-      <Collapsible>
-        <CollapsibleTrigger className="text-[12px] text-muted-foreground hover:text-foreground data-[state=open]:text-foreground">
-          {t('settings.providers.advanced')}
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <div className="mt-2 flex flex-col gap-3 rounded-md border border-border p-3">
-            <div>
-              <Label className={labelCls} htmlFor="conn-headers">
-                {t('settings.providers.headers')}
-              </Label>
-              <Textarea
-                id="conn-headers"
-                className="font-mono text-[12px]"
-                rows={3}
-                value={headersText}
-                onChange={(event) => {
-                  headersDirty.current = true;
-                  setHeadersText(event.target.value);
-                }}
-                placeholder="X-Organization: org-id"
+        {verifyResult && (
+          <>
+            {verifyError ? (
+              <ProviderErrorNotice
+                error={verifyError}
+                status={<VerifyStatus result={verifyResult} />}
               />
-            </div>
-            <div>
-              <Label className={labelCls} htmlFor="conn-model-config">
-                {t('settings.providers.modelConfig')}
-              </Label>
-              <Textarea
-                id="conn-model-config"
-                className="font-mono text-[11px]"
-                rows={7}
-                value={modelConfigText}
-                onChange={(event) => setModelConfigText(event.target.value)}
-                placeholder={
-                  '[{\n  "id": "model-id",\n  "capabilities": { "toolUse": true, "vision": true, "reasoning": false, "maxContext": 128000 },\n  "pricing": { "input": 1, "output": 4 }\n}]'
-                }
-              />
-            </div>
-          </div>
-        </CollapsibleContent>
-      </Collapsible>
-
-      {verifyResult && (
-        <>
-          {verifyError ? (
-            <ProviderErrorNotice
-              error={verifyError}
-              status={<VerifyStatus result={verifyResult} />}
-            />
-          ) : (
-            <Alert className="border-success/40 bg-success/5">
-              <AlertDescription className="text-[13px]">
-                <VerifyStatus result={verifyResult} />
-              </AlertDescription>
-            </Alert>
-          )}
-          {verifyResult.models && verifyResult.models.length > 0 && (
-            <div className="flex flex-col gap-1.5 text-[13px]">
-              <div className="text-muted-foreground">
-                {t('settings.providers.discovered', { n: verifyResult.models.length })}
+            ) : (
+              <Alert variant="success">
+                <AlertDescription>
+                  <VerifyStatus result={verifyResult} />
+                </AlertDescription>
+              </Alert>
+            )}
+            {verifyResult.models && verifyResult.models.length > 0 && (
+              <div className="flex flex-col gap-1.5 text-[13px]">
+                <div className="text-muted-foreground">
+                  {t('settings.providers.discovered', { n: verifyResult.models.length })}
+                </div>
+                <div className="flex max-h-24 flex-wrap gap-1 overflow-y-auto">
+                  {verifyResult.models.map((m) => (
+                    <Badge key={m} variant="secondary" className="font-mono">
+                      {m}
+                    </Badge>
+                  ))}
+                </div>
               </div>
-              <div className="flex max-h-24 flex-wrap gap-1 overflow-y-auto">
-                {verifyResult.models.map((m) => (
-                  <span
-                    key={m}
-                    className="rounded-full bg-muted px-2 py-0.5 font-mono text-[11px] text-muted-foreground"
-                  >
-                    {m}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-        </>
-      )}
-      {formError && <FieldError>{formError}</FieldError>}
+            )}
+          </>
+        )}
+        {formError && (
+          <Alert variant="destructive">
+            <AlertDescription>{formError}</AlertDescription>
+          </Alert>
+        )}
+      </FieldGroup>
 
       <div className="flex gap-2">
         <Button
@@ -756,9 +821,10 @@ function ConnectionForm({
           onClick={() => {
             try {
               setFormError(null);
+              setFieldErrors({});
               onSave(built());
             } catch (error) {
-              setFormError(error instanceof Error ? error.message : String(error));
+              handleConfigurationError(error);
             }
           }}
         >

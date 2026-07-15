@@ -640,6 +640,56 @@ describe('gatekeeper integration', () => {
     });
   });
 
+  it('does not transfer an approval to a target that changed before dispatch', async () => {
+    const executed = vi.fn();
+    let targetOrigin = 'https://before.example';
+    tools.register(
+      makeEchoTool({
+        effects: 'write',
+        resolveTarget: async () => ({ tabId: 7, origin: targetOrigin }),
+        execute: async () => {
+          executed();
+          return { content: [{ type: 'text', text: 'must not run' }] };
+        },
+      }),
+    );
+    const gatekeeper: GatekeeperCheck = {
+      check: async (call) => ({
+        verdict: 'ask',
+        request: {
+          tool: call.toolName,
+          label: 'Echo',
+          params: call.params,
+          targetOrigin: call.target?.origin ?? '',
+          flags: [],
+        },
+      }),
+    };
+    const thread = await tree.createThread({});
+    provider.queue(
+      { toolCalls: [{ id: 'c1', name: 'echo', params: { text: 'x' } }] },
+      { streamText: ['target changed'] },
+    );
+
+    await runTurn(
+      makeEnv({
+        gatekeeper,
+        requestApproval: async () => {
+          targetOrigin = 'https://after.example';
+          return { kind: 'accept' };
+        },
+      }),
+      thread.id,
+      { text: 'go' },
+    ).done;
+
+    expect(executed).not.toHaveBeenCalled();
+    const resultMsg = provider.requests[1]!.messages.find((message) => message.role === 'tool_result');
+    expect((resultMsg?.content[0] as { text?: string }).text).toContain(
+      'target changed after the permission check',
+    );
+  });
+
   it('ask → declined with note → note reaches the model, tool NOT executed', async () => {
     const executed = vi.fn();
     tools.register(

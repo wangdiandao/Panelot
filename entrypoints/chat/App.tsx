@@ -4,8 +4,16 @@
  * stays inside each assistant message instead of a detached activity panel.
  */
 
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { PanelLeft } from 'lucide-react';
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties,
+} from 'react';
 import type { ContextBlock } from '../../src/messaging/protocol';
 import { EngineSession } from '../../src/ui/engineClient';
 import { ThreadView, useEngineState } from '../../src/ui/components/ThreadView';
@@ -15,17 +23,8 @@ import { CommandPalette } from '../../src/ui/components/CommandPalette';
 import { ModelSelector } from '../../src/ui/components/ModelSelector';
 import { ShortcutHelp } from '../../src/ui/components/ShortcutHelp';
 import { LazyToaster } from '../../src/ui/components/LazyToaster';
-import { Button } from '../../src/ui/components/ui/button';
 import { Skeleton } from '../../src/ui/components/ui/skeleton';
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from '../../src/ui/components/ui/sheet';
-import { TooltipProvider } from '../../src/ui/components/ui/tooltip';
+import { SidebarInset, SidebarProvider, SidebarTrigger } from '../../src/ui/components/ui/sidebar';
 import { useTheme } from '../../src/ui/useTheme';
 import { t, useLanguage } from '../../src/ui/i18n';
 import { SettingsStore, type GlobalSettings } from '../../src/settings/store';
@@ -63,7 +62,6 @@ export function App() {
   const [threads, setThreads] = useState<ThreadMeta[]>([]);
   const [staged, setStaged] = useState<ContextBlock[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSectionId | undefined>(undefined);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT);
@@ -143,15 +141,6 @@ export function App() {
     setCollapsedGroups(globalSettings.sidebarGroupsCollapsed ?? []);
   }, [globalSettings]);
 
-  useEffect(() => {
-    const desktop = matchMedia('(min-width: 1024px)');
-    const closeMobileNav = (event: MediaQueryListEvent) => {
-      if (event.matches) setMobileNavOpen(false);
-    };
-    desktop.addEventListener('change', closeMobileNav);
-    return () => desktop.removeEventListener('change', closeMobileNav);
-  }, []);
-
   useEffect(() => void refreshThreads(), [state.meta?.title, state.meta?.updatedAt]);
   // Keep the open thread's seen timestamp fresh while it advances on-screen.
   useEffect(() => {
@@ -169,7 +158,7 @@ export function App() {
       if (mod && e.shiftKey && e.key.toLowerCase() === 's') {
         e.preventDefault();
         if (!matchMedia('(min-width: 1024px)').matches) {
-          setMobileNavOpen((current) => !current);
+          document.querySelector<HTMLElement>('[data-sidebar="trigger"]')?.click();
           return;
         }
         setSidebarCollapsed((v) => {
@@ -201,165 +190,140 @@ export function App() {
     setSettingsOpen(true);
   };
 
-  const renderThreadSidebar = (variant: 'desktop' | 'mobile') => {
-    const closeMobile = () => {
-      if (variant === 'mobile') setMobileNavOpen(false);
-    };
+  const renderThreadSidebar = () => (
+    <ThreadSidebar
+      threads={threads}
+      activeThreadId={state.threadId}
+      seen={seen}
+      activity={activity}
+      collapsed={sidebarCollapsed}
+      width={sidebarWidth}
+      onWidthChange={setSidebarWidth}
+      onWidthCommit={(px) => persistGlobal({ sidebarWidth: px })}
+      onOpenThread={(id) => {
+        session.openThread(id);
+        markSeen(id);
+      }}
+      onNewThread={() => {
+        session.startDraft();
+      }}
+      onTogglePin={(thread) =>
+        void tree.updateThread(thread.id, { pinned: !thread.pinned }).then(refreshThreads)
+      }
+      onRename={(thread, title) =>
+        void tree.updateThread(thread.id, { title }).then(refreshThreads)
+      }
+      onDelete={(thread) =>
+        void tree.deleteThread(thread.id).then(async () => {
+          try {
+            await clearThreadRuntimeState(thread.id);
+          } finally {
+            await refreshThreads();
+            if (state.threadId === thread.id) session.startDraft();
+          }
+        })
+      }
+      collapsedGroups={collapsedGroups}
+      onToggleGroup={(groupId) =>
+        setCollapsedGroups((current) => {
+          const next = current.includes(groupId)
+            ? current.filter((candidate) => candidate !== groupId)
+            : [...current, groupId];
+          void SettingsStore.global.patch({ sidebarGroupsCollapsed: next });
+          return next;
+        })
+      }
+      onOpenSettings={() => {
+        openSettingsAt(undefined);
+      }}
+      searchInputRef={searchRef}
+    />
+  );
 
-    return (
-      <ThreadSidebar
-        variant={variant}
-        threads={threads}
-        activeThreadId={state.threadId}
-        seen={seen}
-        activity={activity}
-        collapsed={sidebarCollapsed}
-        width={sidebarWidth}
-        onWidthChange={setSidebarWidth}
-        onWidthCommit={(px) => persistGlobal({ sidebarWidth: px })}
-        onToggleCollapsed={() =>
-          setSidebarCollapsed((current) => {
-            persistGlobal({ sidebarCollapsed: !current });
-            return !current;
-          })
-        }
+  return (
+    <SidebarProvider
+      open={!sidebarCollapsed}
+      onOpenChange={(open) => {
+        setSidebarCollapsed(!open);
+        persistGlobal({ sidebarCollapsed: !open });
+      }}
+      style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}
+      className="h-screen bg-background text-foreground"
+    >
+      {renderThreadSidebar()}
+
+      <SidebarInset className="min-w-0">
+        <header className="border-b border-border-soft">
+          <div className="grid h-11 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center px-3">
+            <div className="flex min-w-0 items-center gap-1">
+              <SidebarTrigger
+                className="shrink-0"
+                aria-label={sidebarCollapsed ? t('app.expandSidebar') : t('app.collapseSidebar')}
+              />
+              <ModelSelector
+                variant="header"
+                value={state.pendingOverrides.model ?? null}
+                onSelect={(choice) =>
+                  session.setOverrides({
+                    model: choice
+                      ? { connectionId: choice.connectionId, modelId: choice.modelId }
+                      : undefined,
+                  })
+                }
+                onOpenSettings={() => openSettingsAt('providers')}
+              />
+            </div>
+            <div className="max-w-[42vw] truncate px-2 text-center text-[13px] text-muted-foreground">
+              {state.loading ? (
+                <Skeleton className="mx-auto h-4 w-32" />
+              ) : (
+                state.meta?.title || t('app.newChat')
+              )}
+            </div>
+            <div aria-hidden="true" />
+          </div>
+        </header>
+        {/* No max-width wrapper here: the stream's scroll container spans the
+            full center column so the scrollbar hugs the right edge (OpenWebUI
+            layout); row content + composer are capped individually. */}
+        <ThreadView
+          session={session}
+          providerConfigured={providerConfigured}
+          onOpenSettings={() => openSettingsAt('providers')}
+          stagedContext={staged}
+          onRemoveStagedContext={(i) => setStaged((s) => s.filter((_, idx) => idx !== i))}
+          onAttachContext={(block) => setStaged((s) => [...s, block])}
+          modelSelectorInComposer={false}
+          contentMaxWidth={STREAM_MAX_W}
+        />
+      </SidebarInset>
+
+      {settingsOpen && (
+        <Suspense fallback={null}>
+          <SettingsModal
+            open={settingsOpen}
+            onClose={() => {
+              setSettingsOpen(false);
+              setSettingsSection(undefined);
+            }}
+            initialSection={settingsSection}
+          />
+        </Suspense>
+      )}
+
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
         onOpenThread={(id) => {
-          closeMobile();
           session.openThread(id);
           markSeen(id);
         }}
-        onNewThread={() => {
-          closeMobile();
-          session.startDraft();
-        }}
-        onTogglePin={(thread) =>
-          void tree.updateThread(thread.id, { pinned: !thread.pinned }).then(refreshThreads)
-        }
-        onRename={(thread, title) =>
-          void tree.updateThread(thread.id, { title }).then(refreshThreads)
-        }
-        onDelete={(thread) =>
-          void tree.deleteThread(thread.id).then(async () => {
-            try {
-              await clearThreadRuntimeState(thread.id);
-            } finally {
-              await refreshThreads();
-              if (state.threadId === thread.id) session.startDraft();
-            }
-          })
-        }
-        collapsedGroups={collapsedGroups}
-        onToggleGroup={(groupId) =>
-          setCollapsedGroups((current) => {
-            const next = current.includes(groupId)
-              ? current.filter((candidate) => candidate !== groupId)
-              : [...current, groupId];
-            void SettingsStore.global.patch({ sidebarGroupsCollapsed: next });
-            return next;
-          })
-        }
-        onOpenSettings={() => {
-          closeMobile();
-          openSettingsAt(undefined);
-        }}
-        searchInputRef={searchRef}
+        onNewThread={() => session.startDraft()}
+        onOpenSettings={() => openSettingsAt(undefined)}
       />
-    );
-  };
 
-  return (
-    <TooltipProvider delayDuration={300}>
-      <div className="flex h-screen bg-background text-foreground">
-        {renderThreadSidebar('desktop')}
-
-        <main className="flex min-w-0 flex-1 flex-col">
-          <header className="border-b border-border-soft">
-            <div className="grid h-11 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center px-3">
-              <div className="flex min-w-0 items-center gap-1">
-                <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
-                  <SheetTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      className="shrink-0 lg:hidden"
-                      aria-label={t('app.expandSidebar')}
-                    >
-                      <PanelLeft />
-                    </Button>
-                  </SheetTrigger>
-                  <SheetContent side="left" className="w-[min(88vw,320px)] gap-0 p-0 sm:max-w-xs">
-                    <SheetHeader className="sr-only">
-                      <SheetTitle>{t('app.recentThreads')}</SheetTitle>
-                      <SheetDescription>{t('app.searchThreads')}</SheetDescription>
-                    </SheetHeader>
-                    {renderThreadSidebar('mobile')}
-                  </SheetContent>
-                </Sheet>
-                <ModelSelector
-                  variant="header"
-                  value={state.pendingOverrides.model ?? null}
-                  onSelect={(choice) =>
-                    session.setOverrides({
-                      model: choice
-                        ? { connectionId: choice.connectionId, modelId: choice.modelId }
-                        : undefined,
-                    })
-                  }
-                  onOpenSettings={() => openSettingsAt('providers')}
-                />
-              </div>
-              <div className="max-w-[42vw] truncate px-2 text-center text-[13px] text-muted-foreground">
-                {state.loading ? (
-                  <Skeleton className="mx-auto h-4 w-32" />
-                ) : (
-                  state.meta?.title || t('app.newChat')
-                )}
-              </div>
-              <div aria-hidden="true" />
-            </div>
-          </header>
-          {/* No max-width wrapper here: the stream's scroll container spans the
-            full center column so the scrollbar hugs the right edge (OpenWebUI
-            layout); row content + composer are capped individually. */}
-          <ThreadView
-            session={session}
-            providerConfigured={providerConfigured}
-            onOpenSettings={() => openSettingsAt('providers')}
-            stagedContext={staged}
-            onRemoveStagedContext={(i) => setStaged((s) => s.filter((_, idx) => idx !== i))}
-            onAttachContext={(block) => setStaged((s) => [...s, block])}
-            modelSelectorInComposer={false}
-            contentMaxWidth={STREAM_MAX_W}
-          />
-        </main>
-
-        {settingsOpen && (
-          <Suspense fallback={null}>
-            <SettingsModal
-              open={settingsOpen}
-              onClose={() => {
-                setSettingsOpen(false);
-                setSettingsSection(undefined);
-              }}
-              initialSection={settingsSection}
-            />
-          </Suspense>
-        )}
-
-        <CommandPalette
-          open={paletteOpen}
-          onOpenChange={setPaletteOpen}
-          onOpenThread={(id) => {
-            session.openThread(id);
-            markSeen(id);
-          }}
-          onNewThread={() => session.startDraft()}
-          onOpenSettings={() => openSettingsAt(undefined)}
-        />
-
-        <ShortcutHelp />
-        <LazyToaster />
-      </div>
-    </TooltipProvider>
+      <ShortcutHelp />
+      <LazyToaster />
+    </SidebarProvider>
   );
 }

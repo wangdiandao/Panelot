@@ -127,13 +127,13 @@ export function CommandPalette({
           <CommandGroup heading={t('palette.actions')}>
             {actionMatch(t('app.newChat')) && (
               <CommandItem value="__new__" onSelect={runAndClose(onNewThread)}>
-                <Plus /> {t('app.newChat')}
+                <Plus data-icon="inline-start" /> {t('app.newChat')}
                 <span className="ml-auto text-[11px] text-faint-foreground">Ctrl+N</span>
               </CommandItem>
             )}
             {actionMatch(t('app.settings')) && (
               <CommandItem value="__settings__" onSelect={runAndClose(() => onOpenSettings())}>
-                <Settings /> {t('app.settings')}
+                <Settings data-icon="inline-start" /> {t('app.settings')}
                 <span className="ml-auto text-[11px] text-faint-foreground">Ctrl+,</span>
               </CommandItem>
             )}
@@ -157,7 +157,7 @@ export function CommandPalette({
               value={thread.id}
               onSelect={runAndClose(() => onOpenThread(thread.id))}
             >
-              <MessageSquare />
+              <MessageSquare data-icon="inline-start" />
               <div className="flex min-w-0 flex-col">
                 <span className="truncate">
                   <Highlight text={thread.title || t('app.untitled')} query={query} />

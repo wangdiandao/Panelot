@@ -47,7 +47,7 @@ export function BranchSwitcher({ threadId, nodeId, branch, onSelectBranch }: Pro
         aria-label="上一分支"
         onClick={() => void go(-1)}
       >
-        <ChevronLeft />
+        <ChevronLeft data-icon="inline-start" />
       </Button>
       <span className="tabular-nums">
         {branch.index}/{branch.count}
@@ -59,7 +59,7 @@ export function BranchSwitcher({ threadId, nodeId, branch, onSelectBranch }: Pro
         aria-label="下一分支"
         onClick={() => void go(1)}
       >
-        <ChevronRight />
+        <ChevronRight data-icon="inline-start" />
       </Button>
     </div>
   );

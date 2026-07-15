@@ -231,6 +231,13 @@ function objectSchema<const T extends Shape>(
         return invalid(path, 'Expected object');
       }
       const source = input as Record<string, unknown>;
+      if (!loose) {
+        for (const key of Object.keys(source)) {
+          if (!Object.prototype.hasOwnProperty.call(shape, key)) {
+            return invalid([...path, key], 'Unknown field');
+          }
+        }
+      }
       const output: Record<string, unknown> = loose ? { ...source } : {};
       for (const [key, value] of Object.entries(shape)) {
         const present = Object.prototype.hasOwnProperty.call(source, key);

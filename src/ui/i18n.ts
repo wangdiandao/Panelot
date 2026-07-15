@@ -607,6 +607,10 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   'settings.skills.new': { 'zh-CN': '新建', en: 'New' },
   'settings.skills.overwrite': { 'zh-CN': '覆盖同名 Skill', en: 'Overwrite matching Skill' },
   'settings.skills.rename': { 'zh-CN': '自动改名', en: 'Rename automatically' },
+  'settings.skills.conflict': {
+    'zh-CN': '已存在同名 Skill，请选择处理方式。',
+    en: 'A Skill with this name already exists. Choose how to proceed.',
+  },
   'settings.skills.emptyTitle': { 'zh-CN': '还没有 Skill', en: 'No Skills yet' },
   'settings.skills.emptyHint': {
     'zh-CN': '新建一个，或从社区导入兼容 Claude Code 的 SKILL.md。',

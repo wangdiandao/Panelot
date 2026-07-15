@@ -97,6 +97,38 @@ test('new Chat and Side Panel drafts explain why file upload is unavailable', as
   }
 });
 
+test('collapsed Chat sidebar keeps a visible expand trigger', async () => {
+  const testInfo = test.info();
+  const context = await chromium.launchPersistentContext(testInfo.outputPath('sidebar-profile'), {
+    channel: 'chromium',
+    headless: true,
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`],
+  });
+
+  try {
+    const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent('serviceworker'));
+    const extensionId = new URL(worker.url()).host;
+    await worker.evaluate(async () => {
+      await chrome.storage.local.set({
+        global_settings: { language: 'en', sidebarCollapsed: false },
+      });
+    });
+
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/chat.html`);
+
+    await page.getByRole('button', { name: 'Collapse sidebar' }).click();
+    await expect(page.getByRole('button', { name: 'Expand sidebar' })).toBeVisible();
+    await expect(page.locator('[data-slot="sidebar"][data-state="collapsed"]')).toBeAttached();
+
+    await page.getByRole('button', { name: 'Expand sidebar' }).click();
+    await expect(page.getByRole('button', { name: 'Collapse sidebar' })).toBeVisible();
+    await expect(page.locator('[data-slot="sidebar"][data-state="expanded"]')).toBeAttached();
+  } finally {
+    await context.close();
+  }
+});
+
 async function countAttachments(page: import('@playwright/test').Page): Promise<number> {
   return page.evaluate(
     () =>

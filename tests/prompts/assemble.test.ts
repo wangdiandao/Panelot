@@ -49,6 +49,8 @@ describe('assembleSystemPrompt (docs/10 §1 layering)', () => {
     expect(KERNEL_PROMPT).toContain('Do not invent tools');
     expect(KERNEL_PROMPT).toContain('MCP resources are referenced context, not tools');
     expect(KERNEL_PROMPT).toContain('[Panelot context: ...]');
+    expect(KERNEL_PROMPT).toMatch(/does\s+not replace the submission default/);
+    expect(KERNEL_PROMPT).toContain('tabs_list always covers every browser window');
   });
 });
 

@@ -20,7 +20,7 @@ export function SettingsModal({ open, onClose, initialSection }: Props) {
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent
         aria-describedby={undefined}
-        className="block h-[min(720px,92vh)] w-[min(940px,94vw)] max-w-none gap-0 overflow-hidden rounded-2xl p-0 shadow-pop sm:max-w-none"
+        className="block h-[min(720px,92vh)] w-[min(940px,94vw)] max-w-none gap-0 overflow-hidden p-0 sm:max-w-none"
       >
         <DialogTitle className="sr-only">{t('settings.title')}</DialogTitle>
         <SettingsPanel initialSection={initialSection} />

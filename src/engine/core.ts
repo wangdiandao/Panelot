@@ -112,6 +112,7 @@ export interface EngineCoreOptions {
 interface PendingApprovalWaiter {
   threadId: string;
   turnId: string;
+  targetTabId?: number;
   request: ApprovalRequestPayload;
   requestedAt: number;
   settle: (decision: ApprovalDecision) => Promise<ApprovalDecision>;
@@ -1671,6 +1672,13 @@ export class RealEngineCore {
     return this.recoveredApprovalsByThread.get(threadId)?.targetTabId === tabId;
   }
 
+  pendingApprovalTargetsTab(threadId: string, tabId: number): boolean {
+    for (const waiter of this.pendingApprovals.values()) {
+      if (waiter.threadId === threadId && waiter.targetTabId === tabId) return true;
+    }
+    return false;
+  }
+
   async waitForAdmissionIdle(): Promise<void> {
     while (
       this.activeTurns.size > 0 ||
@@ -1792,6 +1800,7 @@ export class RealEngineCore {
       const waiter: PendingApprovalWaiter = {
         threadId,
         turnId,
+        targetTabId: pendingTool.target?.tabId,
         request,
         requestedAt: record.requestedAt,
         cleanup,

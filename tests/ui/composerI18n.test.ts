@@ -57,7 +57,7 @@ describe('composer i18n contract', () => {
       ),
     );
 
-    expect(container.textContent).toContain('No results');
+    expect(document.body.textContent).toContain('No results');
   });
 
   it('renders the attachment actions in Chinese', async () => {

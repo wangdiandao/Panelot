@@ -6,6 +6,9 @@
 
 import { useEffect, useState } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
+import { Kbd } from './ui/kbd';
+import { ScrollArea } from './ui/scroll-area';
+import { Table, TableBody, TableCell, TableRow } from './ui/table';
 import { shortcutsByScope } from '../shortcuts';
 import { t } from '../i18n';
 
@@ -34,33 +37,38 @@ export function ShortcutHelp() {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent
-        className="max-h-[85vh] overflow-y-auto sm:max-w-md"
+        className="max-h-[85vh] overflow-hidden sm:max-w-md"
         aria-describedby={undefined}
       >
         <DialogHeader>
           <DialogTitle>{t('keys.title')}</DialogTitle>
         </DialogHeader>
-        {[...groups.entries()].map(([scope, defs]) => (
-          <div key={scope}>
-            <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-faint-foreground">
-              {t(`keys.scope.${scope}`)}
-            </div>
-            <table className="w-full text-[13px]">
-              <tbody>
-                {defs.map((s) => (
-                  <tr key={s.id} className="border-b border-border/40 last:border-0">
-                    <td className="w-40 py-1.5">
-                      <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">
-                        {s.keys}
-                      </kbd>
-                    </td>
-                    <td>{t(s.labelKey)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        <ScrollArea className="min-h-0 pr-3">
+          <div className="flex flex-col gap-4">
+            {[...groups.entries()].map(([scope, defs]) => (
+              <section key={scope} aria-labelledby={`shortcut-scope-${scope}`}>
+                <h3
+                  id={`shortcut-scope-${scope}`}
+                  className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                >
+                  {t(`keys.scope.${scope}`)}
+                </h3>
+                <Table>
+                  <TableBody>
+                    {defs.map((shortcut) => (
+                      <TableRow key={shortcut.id}>
+                        <TableCell className="w-40">
+                          <Kbd>{shortcut.keys}</Kbd>
+                        </TableCell>
+                        <TableCell>{t(shortcut.labelKey)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </section>
+            ))}
           </div>
-        ))}
+        </ScrollArea>
       </DialogContent>
     </Dialog>
   );

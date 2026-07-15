@@ -193,17 +193,17 @@ export function createL0Tools(
       name: 'tabs_list',
       label: '列出标签页',
       description:
-        'List open tabs in the current window (all:true = every window). Returns tab ids for direct use by every page tool and marks the tab the user is looking at.',
-      parameters: schema.object({ all: schema.optional(schema.boolean()) }),
+        'List every open tab across all browser windows. Returns tab ids for direct use by every page tool and marks the tab the user is looking at.',
+      parameters: schema.object({}),
       level: 'L0',
       effects: 'read',
-      execute: async (_id, params: { all?: boolean }, signal) => {
-        const deadlineAt = deadlineForTool('tabs_list', params);
+      execute: async (_id, _params: Record<string, never>, signal) => {
+        const deadlineAt = deadlineForTool('tabs_list', {});
         throwIfToolDone(signal, deadlineAt);
         // The tab the USER is looking at (active in the focused window) — the
         // model must be able to identify the default when tabId is omitted.
         const userTab = await gateway.getUserActiveTab();
-        const tabs = await chrome.tabs.query(params.all ? {} : { currentWindow: true });
+        const tabs = await chrome.tabs.query({});
         const rows = tabs.map((t) => {
           const marks = [t.id === userTab?.id ? '用户正在看' : t.active ? '窗口活跃' : '']
             .filter(Boolean)
@@ -218,7 +218,7 @@ export function createL0Tools(
       name: 'tab_open',
       label: '打开标签页',
       description:
-        'Navigate to a URL. Reuses an existing tab if the URL is already open; otherwise opens a new one. Returns the tab id.',
+        'Open a URL in a background tab, or reuse an already-open exact URL without changing focus. Returns the tab id and states whether the user-visible page changed.',
       parameters: schema.object({ url: schema.string({ url: true }) }),
       level: 'L0',
       effects: 'write',
@@ -241,11 +241,16 @@ export function createL0Tools(
         if (existing?.id !== undefined) {
           await gateway.getOperationTab(threadId(), existing.id);
           await waitForTabLoad(existing.id, 15_000, signal, deadlineAt);
+          const userTab = await gateway.getUserActiveTab();
+          const visibility =
+            userTab?.id === existing.id
+              ? '它就是用户当前正在看的标签页；未打开新标签页，也未改变前台页面。'
+              : '未切换前台，用户当前看到的页面没有变化。';
           return {
             content: [
               {
                 type: 'text',
-                text: `已复用 URL 完全相同的后台标签页 [${existing.id}] ${targetHref}。后续工具可直接传 tabId=${existing.id}，用户看到的页面没有变化。`,
+                text: `已复用 URL 完全相同的已打开标签页 [${existing.id}] ${targetHref}。${visibility}后续工具可直接传 tabId=${existing.id}。`,
               },
             ],
           };
@@ -293,7 +298,7 @@ export function createL0Tools(
       label: '显示标签页',
       description:
         'Bring an already-open tab to the foreground. Use only when the user explicitly asks to see it; other browser tools operate background tabs directly via tabId.',
-      parameters: schema.object({ tabId: schema.number() }),
+      parameters: schema.object({ tabId: schema.number({ integer: true, min: 0 }) }),
       level: 'L0',
       effects: 'write',
       resolveTarget: async (params: { tabId: number }) => tabTarget(params.tabId),
@@ -333,7 +338,7 @@ export function createL0Tools(
       label: '关闭标签页',
       description:
         "Close a tab by id (from tabs_list). Closing a background tab does not change what the user sees — the result states whether the user's visible tab changed.",
-      parameters: schema.object({ tabId: schema.number() }),
+      parameters: schema.object({ tabId: schema.number({ integer: true, min: 0 }) }),
       level: 'L0',
       effects: 'write',
       resolveTarget: async (params: { tabId: number }) => tabTarget(params.tabId),
@@ -379,7 +384,7 @@ export function createL0Tools(
       description:
         'Navigate a tab to a URL. Pass tabId from tabs_list to operate it in the background. Returns a fresh snapshot; old refs are void.',
       parameters: schema.object({
-        tabId: schema.optional(schema.number()),
+        tabId: schema.optional(schema.number({ integer: true, min: 0 })),
         url: schema.string({ url: true }),
       }),
       level: 'L0',
@@ -435,7 +440,9 @@ export function createL0Tools(
       label: '后退',
       description:
         'Go back in a tab history. Pass tabId from tabs_list to operate it in the background. Returns a fresh snapshot.',
-      parameters: schema.object({ tabId: schema.optional(schema.number()) }),
+      parameters: schema.object({
+        tabId: schema.optional(schema.number({ integer: true, min: 0 })),
+      }),
       level: 'L0',
       effects: 'write',
       resolveTarget: (params: { tabId?: number }) =>
@@ -454,7 +461,9 @@ export function createL0Tools(
       label: '前进',
       description:
         'Go forward in a tab history. Pass tabId from tabs_list to operate it in the background. Returns a fresh snapshot.',
-      parameters: schema.object({ tabId: schema.optional(schema.number()) }),
+      parameters: schema.object({
+        tabId: schema.optional(schema.number({ integer: true, min: 0 })),
+      }),
       level: 'L0',
       effects: 'write',
       resolveTarget: (params: { tabId?: number }) =>
@@ -548,7 +557,9 @@ export function createL1Tools(
     tabId: schema.optional(
       schema.number({
         integer: true,
-        description: 'Target tab id from tabs_list; omitted = the user-visible web tab',
+        min: 0,
+        description:
+          'Target tab id from tabs_list; omitted = the web tab captured when the user submitted',
       }),
     ),
   };

@@ -59,16 +59,14 @@ export async function captureSubmissionBrowserContext(
     ).values(),
   ];
   let active: chrome.tabs.Tab | null = null;
-  if (referencedTabs.length === 0) {
-    try {
-      active = await getActiveTab();
-    } catch {
-      // Non-extension render/test environments have no tabs API.
-    }
+  try {
+    active = await getActiveTab();
+  } catch {
+    // Non-extension render/test environments have no tabs API.
   }
   return {
     capturedAt: Date.now(),
-    defaultTab: referencedTabs[0] ?? (active ? tabIdentity(active) : undefined),
+    defaultTab: active ? tabIdentity(active) : undefined,
     referencedTabs,
   };
 }

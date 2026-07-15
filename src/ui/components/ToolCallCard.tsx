@@ -24,6 +24,8 @@ export interface ToolCardData {
   toolName: string;
   label: string;
   status: 'pending' | 'running' | 'ok' | 'fail';
+  /** The card still belongs to the live overlay even if this tool step has completed. */
+  live?: boolean;
   progressText?: string;
   paramsSummary?: string;
   params?: unknown;
@@ -33,15 +35,10 @@ export interface ToolCardData {
 }
 
 export function ToolCallCard({ card }: { card: ToolCardData }) {
-  const [expanded, setExpanded] = useState(false);
   return (
-    <Collapsible open={expanded} onOpenChange={setExpanded} className="text-[13px]">
+    <Collapsible className="group/collapsible text-[13px]">
       <CollapsibleTrigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-auto w-full justify-start px-0 py-1.5 text-left text-muted-foreground hover:bg-transparent hover:text-foreground"
-        >
+        <Button variant="ghost" size="sm" className="w-full justify-start text-left">
           {card.status === 'running' ? (
             <Spinner data-icon="inline-start" />
           ) : card.status === 'ok' ? (
@@ -72,12 +69,12 @@ export function ToolCallCard({ card }: { card: ToolCardData }) {
             )}
             <ChevronRight
               data-icon="inline-end"
-              className={cn('opacity-50 transition-transform', expanded && 'rotate-90')}
+              className="opacity-50 transition-transform group-data-[state=open]/collapsible:rotate-90"
             />
           </span>
         </Button>
       </CollapsibleTrigger>
-      <CollapsibleContent>
+      <CollapsibleContent className="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
         <div className="ml-5 flex flex-col gap-3 border-l border-border-soft py-2 pl-4">
           {card.params !== undefined && (
             <section>
@@ -152,46 +149,49 @@ export function ToolCallGroup({
 
   const okCount = cards.filter((c) => c.status === 'ok').length;
   const failCount = cards.filter((c) => c.status === 'fail').length;
-  const running = cards.some((c) => c.status === 'running' || c.status === 'pending');
+  const running = cards.some((c) => c.live || c.status === 'running' || c.status === 'pending');
   const tail = cards[cards.length - 1]!;
   const totalMs = cards.reduce((sum, c) => sum + (c.durationMs ?? 0), 0);
 
   return (
-    <div className="flex flex-col gap-1">
-      <Button
-        variant="ghost"
-        size="sm"
-        type="button"
-        onClick={() => setExpanded((e) => !e)}
-        className="h-auto w-full justify-start px-0 py-1.5 text-muted-foreground hover:bg-transparent hover:text-foreground"
-        aria-expanded={expanded}
-      >
-        <ChevronRight
-          data-icon="inline-start"
-          className={cn('opacity-60 transition-transform', expanded && 'rotate-90')}
-        />
-        <span className="flex items-center gap-1.5">
-          {t('stream.steps', { n: cards.length })}
-          <span className="flex items-center gap-0.5 text-success">
-            <Check data-icon="inline-start" />
-            {okCount}
+    <Collapsible
+      open={expanded}
+      onOpenChange={setExpanded}
+      className="group/collapsible flex flex-col gap-1"
+    >
+      <CollapsibleTrigger asChild>
+        <Button variant="ghost" size="sm" type="button" className="w-full justify-start">
+          <ChevronRight
+            data-icon="inline-start"
+            className="opacity-60 transition-transform group-data-[state=open]/collapsible:rotate-90"
+          />
+          <span className="flex items-center gap-1.5">
+            {t('stream.steps', { n: cards.length })}
+            <span className="flex items-center gap-0.5 text-success">
+              <Check data-icon="inline-start" />
+              {okCount}
+            </span>
+            {failCount > 0 && (
+              <span className="flex items-center gap-0.5 text-destructive">
+                <X data-icon="inline-start" />
+                {failCount}
+              </span>
+            )}
+            {running && <Spinner />}
+            {historical && totalMs > 0 && (
+              <span className="text-[11px] text-faint-foreground">
+                · {(totalMs / 1000).toFixed(1)}s
+              </span>
+            )}
           </span>
-          {failCount > 0 && (
-            <span className="flex items-center gap-0.5 text-destructive">
-              <X data-icon="inline-start" />
-              {failCount}
-            </span>
-          )}
-          {running && <Spinner className="text-info" />}
-          {historical && totalMs > 0 && (
-            <span className="text-[11px] text-faint-foreground">
-              · {(totalMs / 1000).toFixed(1)}s
-            </span>
-          )}
-        </span>
-      </Button>
-      {expanded && cards.map((c) => <ToolCallCard key={c.itemId} card={c} />)}
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="flex flex-col gap-1 overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
+        {cards.map((c) => (
+          <ToolCallCard key={c.itemId} card={c} />
+        ))}
+      </CollapsibleContent>
       {!expanded && running && <ToolCallCard card={tail} />}
-    </div>
+    </Collapsible>
   );
 }

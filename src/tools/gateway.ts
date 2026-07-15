@@ -279,8 +279,9 @@ export class BrowserToolGateway {
    * Browser-level control model (2026-07-06): the agent may target ANY tab —
    * the safety gates are write approvals + the sensitive-origin blacklist
    * (docs/06), not tab membership. Per thread we keep:
-   *  - fallback target: the user-visible web tab selected when a call omits
-   *    tabId. It stays fixed during one turn, then follows the user again.
+   *  - fallback target: the submission-captured web tab used when a call omits
+   *    tabId. It stays fixed during one turn; a legacy call without captured
+   *    context resolves the most recently visible web tab once.
    *  - touched: audit trail of tabs the agent has operated on — drives the
    *    task-panel display, never a permission boundary.
    */

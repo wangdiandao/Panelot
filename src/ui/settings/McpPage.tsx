@@ -10,9 +10,26 @@ import { toast } from 'sonner';
 import { Button } from '../components/ui/button';
 import { Switch } from '../components/ui/switch';
 import { Textarea } from '../components/ui/textarea';
-import { Label } from '../components/ui/label';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '../components/ui/empty';
-import { FieldError } from '../components/ui/field';
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+} from '../components/ui/field';
+import { Alert, AlertAction, AlertDescription, AlertTitle } from '../components/ui/alert';
+import { Badge } from '../components/ui/badge';
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemFooter,
+  ItemGroup,
+  ItemTitle,
+} from '../components/ui/item';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../components/ui/collapsible';
 import {
   AlertDialog,
@@ -31,7 +48,6 @@ import {
 } from '../../mcp/types';
 import { listMcpServers, saveMcpServers } from '../../mcp/store';
 import { hostPermissionBroker } from '../../permissions/hostPermissionBroker';
-import { cn } from '../lib/utils';
 import { t } from '../i18n';
 
 export function McpPage() {
@@ -157,22 +173,30 @@ export function McpPage() {
           {t('settings.mcp.importConfig')}
         </CollapsibleTrigger>
         <CollapsibleContent>
-          <div className="flex flex-col gap-2 rounded-lg border border-border p-3">
-            <Textarea
-              value={importText}
-              onChange={(e) => setImportText(e.target.value)}
-              rows={6}
-              placeholder={
-                '{\n  "mcpServers": {\n    "github": { "url": "https://…/mcp", "headers": { "Authorization": "Bearer …" } }\n  }\n}'
-              }
-              className="font-mono text-[12px]"
-            />
-            <div className="text-[11px] text-muted-foreground">{t('settings.mcp.compatHint')}</div>
-            {error && <FieldError>{error}</FieldError>}
+          <FieldGroup className="gap-2 rounded-lg border border-border p-3">
+            <Field data-invalid={Boolean(error)}>
+              <FieldLabel htmlFor="mcp-import-json">{t('settings.mcp.importConfig')}</FieldLabel>
+              <Textarea
+                id="mcp-import-json"
+                value={importText}
+                onChange={(e) => {
+                  setImportText(e.target.value);
+                  setError(null);
+                }}
+                aria-invalid={Boolean(error)}
+                rows={6}
+                placeholder={
+                  '{\n  "mcpServers": {\n    "github": { "url": "https://…/mcp", "headers": { "Authorization": "Bearer …" } }\n  }\n}'
+                }
+                className="font-mono text-[12px]"
+              />
+              <FieldDescription>{t('settings.mcp.compatHint')}</FieldDescription>
+              {error && <FieldError>{error}</FieldError>}
+            </Field>
             <Button variant="outline" size="sm" onClick={() => void doImport()}>
               {t('settings.mcp.parseAdd')}
             </Button>
-          </div>
+          </FieldGroup>
         </CollapsibleContent>
       </Collapsible>
 
@@ -184,43 +208,41 @@ export function McpPage() {
           </EmptyHeader>
         </Empty>
       ) : (
-        servers.map((s) => {
-          const description = descriptions[s.id];
-          const permissionPlan = permissionPlans[s.id];
-          return (
-            <div key={s.id} className="rounded-lg border border-border bg-card px-4 py-3">
-              <div className="flex items-center gap-3">
-                <Switch
-                  checked={s.enabled}
-                  onCheckedChange={(on) =>
-                    void save(servers.map((x) => (x.id === s.id ? { ...x, enabled: on } : x))).then(
-                      () => refresh(),
-                    )
-                  }
-                  aria-label={t('settings.mcp.enable', { name: s.name })}
-                />
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 text-[13px] font-medium">
-                    {s.name}
-                    <span
-                      className={cn(
-                        'size-1.5 rounded-full',
-                        description?.state.status === 'ready'
-                          ? 'bg-success'
-                          : description?.state.status === 'error'
-                            ? 'bg-destructive'
-                            : 'bg-muted-foreground',
-                      )}
+        <ItemGroup className="gap-2">
+          {servers.map((s) => {
+            const description = descriptions[s.id];
+            const permissionPlan = permissionPlans[s.id];
+            return (
+              <Item key={s.id} variant="outline">
+                <ItemContent>
+                  <ItemTitle>
+                    <Switch
+                      checked={s.enabled}
+                      onCheckedChange={(on) =>
+                        void save(
+                          servers.map((x) => (x.id === s.id ? { ...x, enabled: on } : x)),
+                        ).then(() => refresh())
+                      }
+                      aria-label={s.name}
                     />
-                    <span className="text-[10px] font-normal text-faint-foreground">
+                    {s.name}
+                    <Badge
+                      variant={
+                        description?.state.status === 'error'
+                          ? 'destructive'
+                          : description?.state.status === 'ready'
+                            ? 'default'
+                            : 'secondary'
+                      }
+                    >
                       {t(`settings.mcp.status.${description?.state.status ?? 'disconnected'}`)}
-                    </span>
-                  </div>
-                  <div className="truncate font-mono text-[11px] text-muted-foreground">
+                    </Badge>
+                  </ItemTitle>
+                  <ItemDescription className="font-mono">
                     {s.url} · {t(`settings.mcp.auth.${s.auth.kind}`)}
-                  </div>
-                </div>
-                <div className="ml-auto flex gap-2">
+                  </ItemDescription>
+                </ItemContent>
+                <ItemActions>
                   <Button
                     variant="outline"
                     size="sm"
@@ -244,110 +266,119 @@ export function McpPage() {
                   <Button variant="destructive" size="sm" onClick={() => setDeleting(s)}>
                     {t('settings.mcp.delete')}
                   </Button>
-                </div>
-              </div>
-              {description?.state.status === 'error' && (
-                <div className="mt-2 rounded bg-destructive/10 px-2 py-1 text-[11px] text-destructive">
-                  {description.state.reason}
-                </div>
-              )}
-              {permissionPlan && (
-                <div className="mt-2 flex flex-col gap-2 rounded-md border border-warning/40 bg-warning/10 p-3 text-[11px]">
-                  <div className="font-medium text-foreground">
-                    {t('settings.mcp.permissionTitle')}
-                  </div>
-                  <div className="break-all text-muted-foreground">
-                    {t('settings.mcp.permissionResource', {
-                      resource: permissionPlan.summary.resource,
-                    })}
-                  </div>
-                  {permissionPlan.summary.issuer && (
-                    <div className="break-all text-muted-foreground">
-                      {t('settings.mcp.permissionIssuer', {
-                        issuer: permissionPlan.summary.issuer,
-                      })}
-                    </div>
-                  )}
-                  {permissionPlan.originReasons.length > 0 ? (
-                    <ul className="flex list-disc flex-col gap-1 pl-4">
-                      {permissionPlan.originReasons.map(({ origin, reason }) => (
-                        <li key={origin}>
-                          <code className="break-all">{origin}</code>
-                          <span className="text-muted-foreground"> — {reason}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <div className="text-muted-foreground">
-                      {t(
-                        permissionPlan.reason === 'plan_expired'
-                          ? 'settings.mcp.permissionPlanExpired'
-                          : 'settings.mcp.permissionPlanChanged',
-                      )}
-                    </div>
-                  )}
-                  <div className="flex gap-2">
-                    <Button size="sm" onClick={() => void runOAuth(s, permissionPlan)}>
-                      {t('settings.mcp.permissionContinue')}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => setPermissionPlans((current) => withoutKey(current, s.id))}
-                    >
-                      {t('app.cancel')}
-                    </Button>
-                  </div>
-                </div>
-              )}
-              {description && (
-                <Collapsible>
-                  <CollapsibleTrigger className="mt-2 text-[11px] text-muted-foreground hover:text-foreground">
-                    {t('settings.mcp.inventory', {
-                      tools: description.tools.length,
-                      prompts: description.promptCount,
-                      resources: description.resourceCount,
-                    })}
-                  </CollapsibleTrigger>
-                  <CollapsibleContent className="mt-1 flex flex-col gap-1 pt-2">
-                    {description.tools.map((tool) => (
-                      <Label
-                        key={tool.name}
-                        htmlFor={`mcp-tool-${s.id}-${tool.name}`}
-                        className="flex items-start gap-2"
-                      >
-                        <Switch
-                          id={`mcp-tool-${s.id}-${tool.name}`}
-                          checked={!s.disabledTools.includes(tool.name)}
-                          aria-label={t('settings.mcp.enableTool', { name: tool.name })}
-                          onCheckedChange={(enabled) => {
-                            const disabledTools = enabled
-                              ? s.disabledTools.filter((name) => name !== tool.name)
-                              : [...new Set([...s.disabledTools, tool.name])];
-                            void save(
-                              servers.map((server) =>
-                                server.id === s.id ? { ...server, disabledTools } : server,
-                              ),
-                            ).then(() => refresh());
-                          }}
-                        />
-                        <span>
-                          <span className="font-mono text-foreground">{tool.name}</span>
-                          {tool.description ? ` — ${tool.description}` : ''}
-                        </span>
-                      </Label>
-                    ))}
-                    {description.tools.length === 0 && (
-                      <div className="text-[11px] text-faint-foreground">
-                        {t('settings.mcp.toolsAfterConnect')}
-                      </div>
+                </ItemActions>
+                {(description?.state.status === 'error' || permissionPlan || description) && (
+                  <ItemFooter className="flex-col items-stretch">
+                    {description?.state.status === 'error' && (
+                      <Alert variant="destructive">
+                        <AlertDescription>{description.state.reason}</AlertDescription>
+                      </Alert>
                     )}
-                  </CollapsibleContent>
-                </Collapsible>
-              )}
-            </div>
-          );
-        })
+                    {permissionPlan && (
+                      <Alert variant="warning">
+                        <AlertTitle>{t('settings.mcp.permissionTitle')}</AlertTitle>
+                        <AlertDescription className="break-all">
+                          {t('settings.mcp.permissionResource', {
+                            resource: permissionPlan.summary.resource,
+                          })}
+                          {permissionPlan.summary.issuer && (
+                            <div className="break-all text-muted-foreground">
+                              {t('settings.mcp.permissionIssuer', {
+                                issuer: permissionPlan.summary.issuer,
+                              })}
+                            </div>
+                          )}
+                          {permissionPlan.originReasons.length > 0 ? (
+                            <ul className="flex list-disc flex-col gap-1 pl-4">
+                              {permissionPlan.originReasons.map(({ origin, reason }) => (
+                                <li key={origin}>
+                                  <code className="break-all">{origin}</code>
+                                  <span className="text-muted-foreground"> — {reason}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <div className="text-muted-foreground">
+                              {t(
+                                permissionPlan.reason === 'plan_expired'
+                                  ? 'settings.mcp.permissionPlanExpired'
+                                  : 'settings.mcp.permissionPlanChanged',
+                              )}
+                            </div>
+                          )}
+                        </AlertDescription>
+                        <AlertAction placement="footer">
+                          <Button size="sm" onClick={() => void runOAuth(s, permissionPlan)}>
+                            {t('settings.mcp.permissionContinue')}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() =>
+                              setPermissionPlans((current) => withoutKey(current, s.id))
+                            }
+                          >
+                            {t('app.cancel')}
+                          </Button>
+                        </AlertAction>
+                      </Alert>
+                    )}
+                    {description && (
+                      <Collapsible>
+                        <CollapsibleTrigger className="mt-2 text-[11px] text-muted-foreground hover:text-foreground">
+                          {t('settings.mcp.inventory', {
+                            tools: description.tools.length,
+                            prompts: description.promptCount,
+                            resources: description.resourceCount,
+                          })}
+                        </CollapsibleTrigger>
+                        <CollapsibleContent className="mt-1 pt-2">
+                          <FieldGroup className="gap-1">
+                            {description.tools.map((tool) => (
+                              <Field key={tool.name} orientation="horizontal">
+                                <Switch
+                                  id={`mcp-tool-${s.id}-${tool.name}`}
+                                  checked={!s.disabledTools.includes(tool.name)}
+                                  aria-label={t('settings.mcp.enableTool', { name: tool.name })}
+                                  onCheckedChange={(enabled) => {
+                                    const disabledTools = enabled
+                                      ? s.disabledTools.filter((name) => name !== tool.name)
+                                      : [...new Set([...s.disabledTools, tool.name])];
+                                    void save(
+                                      servers.map((server) =>
+                                        server.id === s.id ? { ...server, disabledTools } : server,
+                                      ),
+                                    ).then(() => refresh());
+                                  }}
+                                />
+                                <FieldContent>
+                                  <FieldLabel
+                                    htmlFor={`mcp-tool-${s.id}-${tool.name}`}
+                                    className="font-mono"
+                                  >
+                                    {tool.name}
+                                  </FieldLabel>
+                                  {tool.description && (
+                                    <FieldDescription>{tool.description}</FieldDescription>
+                                  )}
+                                </FieldContent>
+                              </Field>
+                            ))}
+                            {description.tools.length === 0 && (
+                              <FieldDescription>
+                                {t('settings.mcp.toolsAfterConnect')}
+                              </FieldDescription>
+                            )}
+                          </FieldGroup>
+                        </CollapsibleContent>
+                      </Collapsible>
+                    )}
+                  </ItemFooter>
+                )}
+              </Item>
+            );
+          })}
+        </ItemGroup>
       )}
 
       <AlertDialog open={deleting !== null} onOpenChange={(o) => !o && setDeleting(null)}>

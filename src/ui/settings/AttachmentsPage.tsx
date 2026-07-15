@@ -15,15 +15,16 @@ import {
   AlertDialogTitle,
 } from '../components/ui/alert-dialog';
 import { Badge } from '../components/ui/badge';
-import { Button } from '../components/ui/button';
 import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '../components/ui/card';
+  Attachment as AttachmentItem,
+  AttachmentAction,
+  AttachmentActions,
+  AttachmentContent,
+  AttachmentDescription,
+  AttachmentGroup,
+  AttachmentMedia,
+  AttachmentTitle,
+} from '../components/ui/attachment';
 import {
   Empty,
   EmptyDescription,
@@ -78,48 +79,51 @@ export function AttachmentsPage() {
           </EmptyHeader>
         </Empty>
       ) : (
-        <div className="flex flex-col gap-3">
+        <AttachmentGroup className="flex-col items-stretch overflow-visible py-0">
           {attachments.map((attachment) => (
-            <Card key={attachment.id}>
-              <CardHeader>
-                <CardTitle className="truncate text-sm">
+            <AttachmentItem key={attachment.id} className="w-full">
+              <AttachmentMedia>
+                <FileArchive />
+              </AttachmentMedia>
+              <AttachmentContent>
+                <AttachmentTitle>
                   {attachment.meta?.title ?? attachment.sourceRef ?? attachment.id}
-                </CardTitle>
-                <CardDescription>
+                </AttachmentTitle>
+                <AttachmentDescription>
                   {attachment.mime} · {formatBytes(attachment.bytes.size)} ·{' '}
                   {new Date(attachment.createdAt).toLocaleString(getLang())}
-                </CardDescription>
-                <CardAction>
-                  <Button
-                    variant="destructive"
-                    size="icon-sm"
-                    aria-label={t('settings.attachments.delete')}
-                    onClick={() => setDeleting(attachment)}
-                  >
-                    <Trash2 />
-                  </Button>
-                </CardAction>
-              </CardHeader>
-              <CardContent className="flex flex-wrap gap-2">
-                <Badge variant="secondary">{attachment.kind}</Badge>
-                <Badge variant={attachment.trust === 'untrusted' ? 'outline' : 'secondary'}>
-                  {attachment.trust ?? t('settings.attachments.unclassified')}
-                </Badge>
-                <Badge variant="outline">
-                  {attachment.provenance ?? t('settings.attachments.unknownSource')}
-                </Badge>
-                <Badge variant="outline">{attachment.threadId}</Badge>
-                {(attachment.refs?.nodeIds?.length ?? 0) > 0 && (
-                  <Badge variant="outline">
-                    {t('settings.attachments.nodeRefs', {
-                      count: attachment.refs!.nodeIds!.length,
-                    })}
+                </AttachmentDescription>
+                <AttachmentDescription className="flex flex-wrap gap-2 overflow-visible whitespace-normal">
+                  <Badge variant="secondary">{attachment.kind}</Badge>
+                  <Badge variant={attachment.trust === 'untrusted' ? 'outline' : 'secondary'}>
+                    {attachment.trust ?? t('settings.attachments.unclassified')}
                   </Badge>
-                )}
-              </CardContent>
-            </Card>
+                  <Badge variant="outline">
+                    {attachment.provenance ?? t('settings.attachments.unknownSource')}
+                  </Badge>
+                  <Badge variant="outline">{attachment.threadId}</Badge>
+                  {(attachment.refs?.nodeIds?.length ?? 0) > 0 && (
+                    <Badge variant="outline">
+                      {t('settings.attachments.nodeRefs', {
+                        count: attachment.refs!.nodeIds!.length,
+                      })}
+                    </Badge>
+                  )}
+                </AttachmentDescription>
+              </AttachmentContent>
+              <AttachmentActions>
+                <AttachmentAction
+                  variant="destructive"
+                  size="icon-sm"
+                  aria-label={t('settings.attachments.delete')}
+                  onClick={() => setDeleting(attachment)}
+                >
+                  <Trash2 data-icon="inline-start" />
+                </AttachmentAction>
+              </AttachmentActions>
+            </AttachmentItem>
           ))}
-        </div>
+        </AttachmentGroup>
       )}
 
       <AlertDialog open={deleting !== null} onOpenChange={(open) => !open && setDeleting(null)}>

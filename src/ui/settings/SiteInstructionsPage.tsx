@@ -21,6 +21,7 @@ import {
 } from '../components/ui/alert-dialog';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
+import { Alert, AlertDescription } from '../components/ui/alert';
 import {
   Card,
   CardAction,
@@ -38,13 +39,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from '../components/ui/empty';
-import {
-  Field,
-  FieldDescription,
-  FieldError,
-  FieldGroup,
-  FieldLabel,
-} from '../components/ui/field';
+import { Field, FieldDescription, FieldGroup, FieldLabel } from '../components/ui/field';
 import { InputGroup, InputGroupAddon, InputGroupInput } from '../components/ui/input-group';
 import { Textarea } from '../components/ui/textarea';
 import { t } from '../i18n';
@@ -257,7 +252,11 @@ function InstructionForm({
               onChange={(event) => setDraft({ ...draft, prompt: event.target.value })}
             />
           </Field>
-          {error && <FieldError>{error}</FieldError>}
+          {error && (
+            <Alert variant="destructive">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
         </FieldGroup>
       </CardContent>
       <CardFooter className="gap-2">

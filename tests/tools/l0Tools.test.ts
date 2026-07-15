@@ -168,6 +168,13 @@ describe('tab_focus foreground-only behavior', () => {
 });
 
 describe('tabs_list user-view marking', () => {
+  it('has no window-scope parameter', () => {
+    const { tool } = toolset();
+
+    expect(tool('tabs_list').parameters.safeParse({}).success).toBe(true);
+    expect(tool('tabs_list').parameters.safeParse({ all: true }).success).toBe(false);
+  });
+
   it("marks the user's visible tab without declaring a global agent target", async () => {
     tabs = [
       { id: 1, url: 'https://a.com/', title: 'A', active: true, lastFocused: true },
@@ -180,7 +187,7 @@ describe('tabs_list user-view marking', () => {
     expect(text(result)).not.toContain('当前操作目标');
   });
 
-  it('lists ALL tabs in the window — the whole browser is in scope', async () => {
+  it('always lists tabs across the whole browser', async () => {
     tabs = [
       { id: 1, url: 'https://a.com/', title: 'A', active: true, lastFocused: true },
       { id: 2, url: 'https://b.com/', title: 'B', active: false },
@@ -189,6 +196,7 @@ describe('tabs_list user-view marking', () => {
     const { tool } = toolset();
     // No tab ever touched — every open tab still shows up.
     const result = await tool('tabs_list').execute('c1', {} as never, abort(), undefined);
+    expect(chrome.tabs.query).toHaveBeenCalledWith({});
     expect(text(result)).toContain('[1]');
     expect(text(result)).toContain('[2]');
     expect(text(result)).toContain('[3]');
@@ -224,6 +232,30 @@ describe('tab_open stays in the background', () => {
     expect(updated).toEqual([]); // never touches active state
     expect(text(result)).toContain('复用');
     expect(text(result)).toContain('没有变化');
+  });
+
+  it('describes an exact-url reuse honestly when it is already the visible tab', async () => {
+    tabs = [
+      {
+        id: 3,
+        url: 'https://shop.com/cart',
+        title: '购物车',
+        active: true,
+        lastFocused: true,
+      },
+    ];
+    const { tool } = toolset();
+
+    const result = await tool('tab_open').execute(
+      'c1',
+      { url: 'https://shop.com/cart' } as never,
+      abort(),
+      undefined,
+    );
+
+    expect(chrome.tabs.create).not.toHaveBeenCalled();
+    expect(text(result)).toContain('用户当前正在看的标签页');
+    expect(text(result)).not.toContain('后台标签页');
   });
 
   it('does not reuse a same-path tab when query or hash differs', async () => {

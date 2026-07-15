@@ -83,6 +83,27 @@ describe('browser data tools', () => {
     });
   });
 
+  it('always lists tab groups across all browser windows', async () => {
+    groupsQuery.mockResolvedValue([
+      { id: 5, title: 'Research', color: 'blue', collapsed: false },
+    ]);
+
+    const result = await tool('tab_groups_list').execute(
+      'call',
+      {} as never,
+      signal(),
+      undefined,
+    );
+
+    expect(groupsQuery).toHaveBeenCalledWith({});
+    expect(output(result)).toContain('Research');
+  });
+
+  it('does not expose a window-scope parameter for tab groups', () => {
+    expect(tool('tab_groups_list').parameters.safeParse({}).success).toBe(true);
+    expect(tool('tab_groups_list').parameters.safeParse({ all: true }).success).toBe(false);
+  });
+
   it('restores by session id and reports the restored kind', async () => {
     restore.mockResolvedValue({ tab: { sessionId: 's1', title: 'Restored tab' } });
     const result = await tool('session_restore').execute(

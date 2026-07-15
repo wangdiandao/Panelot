@@ -27,6 +27,7 @@ import { RecoveryCard } from './RecoveryCard';
 import { Onboarding } from './Onboarding';
 import { Button } from './ui/button';
 import { Skeleton } from './ui/skeleton';
+import { Marker, MarkerContent } from './ui/marker';
 import { t } from '../i18n';
 import { buildProviderErrorPresentation } from '../providerErrorPresentation';
 import { ProviderErrorNotice } from './ProviderErrorNotice';
@@ -279,14 +280,13 @@ export function ThreadView({
   return (
     <div className="flex h-full flex-col bg-background text-foreground">
       {showDisconnected && (
-        <div className="border-b border-border-soft bg-card px-3 py-1 text-center text-[11px] text-muted-foreground">
-          {t('reconnecting')}
-        </div>
+        <Marker variant="border" role="status" className="justify-center px-3 py-1">
+          <MarkerContent>{t('reconnecting')}</MarkerContent>
+        </Marker>
       )}
       {state.lastError && (
         <ProviderErrorNotice
           error={state.lastError}
-          className="rounded-none border-x-0 border-t-0 px-3 py-2"
           actions={
             canOpenErrorSettings || canRetryError ? (
               <>

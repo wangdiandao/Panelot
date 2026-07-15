@@ -4,7 +4,11 @@
  * (they used to vanish on item.complete for the rest of a multi-step turn).
  */
 import { describe, expect, it } from 'vitest';
-import { buildRows, partitionAssistantSegments } from '../../src/ui/components/MessageStream';
+import {
+  buildRows,
+  isAssistantRowRunning,
+  partitionAssistantSegments,
+} from '../../src/ui/components/MessageStream';
 import type { LiveItem } from '../../src/ui/engineClient';
 
 const live = (over: Partial<LiveItem>): LiveItem => ({
@@ -60,6 +64,82 @@ describe('buildRows live overlay', () => {
       kind: 'message',
       streaming: true,
     });
+  });
+
+  it.each([
+    ['ok', 'ok'],
+    ['fail', 'fail'],
+  ] as const)('keeps a completed live tool visible with %s status', (status, expected) => {
+    const rows = buildRows(
+      [],
+      [
+        live({
+          kind: 'tool_call',
+          itemId: `tool-${status}`,
+          meta: { toolName: 'click', label: 'Click' },
+          status,
+        }),
+      ],
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      kind: 'assistant',
+      segments: [
+        {
+          kind: 'tools',
+          cards: [{ itemId: `tool-${status}`, status: expected, live: true }],
+        },
+      ],
+    });
+  });
+
+  it('merges a live tool completion over a pending snapshot card', () => {
+    const persistedCall = item('tool_call', {
+      itemId: 'shared-tool',
+      toolName: 'click',
+      params: { ref: 's1_1' },
+      level: 'L1',
+    });
+    const rows = buildRows(
+      [persistedCall],
+      [
+        live({
+          kind: 'tool_call',
+          itemId: 'shared-tool',
+          meta: { toolName: 'click' },
+          status: 'ok',
+        }),
+      ],
+    );
+
+    expect(rows[0]).toMatchObject({
+      kind: 'assistant',
+      segments: [
+        {
+          kind: 'tools',
+          cards: [{ itemId: 'shared-tool', status: 'ok', live: true, params: { ref: 's1_1' } }],
+        },
+      ],
+    });
+  });
+
+  it('keeps the process running after a live browser step completes', () => {
+    const rows = buildRows(
+      [],
+      [
+        live({
+          kind: 'tool_call',
+          itemId: 'completed-live-tool',
+          meta: { toolName: 'click' },
+          status: 'ok',
+        }),
+      ],
+    );
+    const row = rows[0];
+    if (!row || row.kind !== 'assistant') throw new Error('expected assistant row');
+
+    expect(isAssistantRowRunning(row, false, 'another-row')).toBe(true);
   });
 
   it('skips empty live items (no text yet)', () => {

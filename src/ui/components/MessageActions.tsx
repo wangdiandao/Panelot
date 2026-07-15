@@ -71,16 +71,16 @@ export function MessageActions({
       )}
     >
       <ActionButton label={copied ? t('actions.copied') : t('actions.copy')} onClick={copy}>
-        {copied ? <Check /> : <Copy />}
+        {copied ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />}
       </ActionButton>
       {role === 'assistant' && onRegenerate && (
         <ActionButton label={t('actions.regenerate')} onClick={onRegenerate}>
-          <RefreshCw />
+          <RefreshCw data-icon="inline-start" />
         </ActionButton>
       )}
       {role === 'user' && onEdit && (
         <ActionButton label={t('actions.edit')} onClick={onEdit}>
-          <Pencil />
+          <Pencil data-icon="inline-start" />
         </ActionButton>
       )}
       {role === 'assistant' && usage && (
@@ -94,7 +94,7 @@ export function MessageActions({
                   type="button"
                   aria-label={t('actions.usage')}
                 >
-                  <Info />
+                  <Info data-icon="inline-start" />
                 </Button>
               </PopoverTrigger>
             </TooltipTrigger>

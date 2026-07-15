@@ -4,7 +4,7 @@ import {
   type ProviderErrorViewInput,
 } from '../providerErrorPresentation';
 import { t } from '../i18n';
-import { Alert, AlertDescription, AlertTitle } from './ui/alert';
+import { Alert, AlertAction, AlertDescription, AlertTitle } from './ui/alert';
 
 interface ProviderErrorNoticeProps {
   error: ProviderErrorViewInput;
@@ -30,8 +30,8 @@ export function ProviderErrorNotice({
       <AlertDescription className="min-w-0">
         {view.detail && <p className="max-w-full break-words whitespace-pre-wrap">{view.detail}</p>}
         {view.guidanceKey && <p>{t(view.guidanceKey)}</p>}
-        {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
       </AlertDescription>
+      {actions && <AlertAction placement="footer">{actions}</AlertAction>}
     </Alert>
   );
 }

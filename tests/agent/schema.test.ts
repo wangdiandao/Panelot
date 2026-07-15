@@ -88,6 +88,23 @@ describe('zod/mini validateParams diagnostics', () => {
     expect(diagnostic(parameters, inherited)).toMatch(/label: .*required field/i);
   });
 
+  it('rejects unknown fields in strict objects', () => {
+    const parameters = schema.object({ label: schema.string() });
+
+    expect(diagnostic(parameters, { label: 'ok', extra: true })).toMatch(
+      /extra: .*unknown field/i,
+    );
+  });
+
+  it('preserves unknown fields in loose objects', () => {
+    const parameters = schema.looseObject({ label: schema.string() });
+
+    expect(validate(parameters, { label: 'ok', extra: true })).toEqual({
+      ok: true,
+      params: { label: 'ok', extra: true },
+    });
+  });
+
   it('preserves the JSON Schema contract used for provider tool declarations', () => {
     const parameters = schema.object({
       url: schema.string({ url: true, description: 'Target URL' }),

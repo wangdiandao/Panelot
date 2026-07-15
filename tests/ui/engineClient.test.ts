@@ -269,6 +269,86 @@ describe('EngineSession lifecycle', () => {
     }
   });
 
+  it('preserves a live tool when a reconnect snapshot has only persisted its call', async () => {
+    vi.useFakeTimers();
+    const transports: FakeTransport[] = [];
+    const session = new EngineSession(() => {
+      const transport = new FakeTransport();
+      transports.push(transport);
+      return transport;
+    });
+    session.start();
+    try {
+      const first = transports[0]!;
+      first.emit({
+        type: 'initialized',
+        submissionId: first.sent[0]!.submissionId,
+        protocol: ENGINE_PROTOCOL,
+        schemaHash: ENGINE_SCHEMA_HASH,
+      });
+      session.openThread('thread-a');
+      const subscribe = first.sent.find(
+        (op) => op.type === 'thread.subscribe' && op.threadId === 'thread-a',
+      )!;
+      const initial = snapshot('thread-a', 20, 1);
+      first.emit({
+        type: 'initialized',
+        submissionId: subscribe.submissionId,
+        protocol: ENGINE_PROTOCOL,
+        schemaHash: ENGINE_SCHEMA_HASH,
+        snapshot: initial,
+        stream: initial.stream,
+      });
+      first.emit({
+        type: 'turn.start',
+        threadId: 'thread-a',
+        turnId: 'turn-a',
+        turnKind: 'user',
+        steerable: true,
+        stream: { threadId: 'thread-a', epoch: 20, sequence: 2 },
+      });
+      first.emit({
+        type: 'item.start',
+        threadId: 'thread-a',
+        turnId: 'turn-a',
+        itemId: 'tool-a',
+        kind: 'tool_call',
+        meta: { toolName: 'click' },
+        stream: { threadId: 'thread-a', epoch: 20, sequence: 3 },
+      });
+
+      first.disconnect();
+      await vi.advanceTimersByTimeAsync(500);
+      const second = transports[1]!;
+      const reconnect = second.sent[0]!;
+      const staleSnapshot = snapshot('thread-a', 21, 1);
+      staleSnapshot.items = [
+        {
+          nodeId: 'call-node',
+          kind: 'tool_call',
+          ts: 2,
+          payload: { itemId: 'tool-a', toolName: 'click', params: {}, level: 'L1' },
+        },
+      ];
+      second.emit({
+        type: 'initialized',
+        submissionId: reconnect.submissionId,
+        protocol: ENGINE_PROTOCOL,
+        schemaHash: ENGINE_SCHEMA_HASH,
+        snapshot: staleSnapshot,
+        stream: staleSnapshot.stream,
+      });
+
+      expect(session.store.getState()).toMatchObject({
+        activeTurn: { turnId: 'turn-a' },
+        liveItems: [{ itemId: 'tool-a', kind: 'tool_call', status: 'streaming' }],
+      });
+    } finally {
+      session.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it('does not connect when session restore completes after stop', async () => {
     let resolveGet!: (value: Record<string, unknown>) => void;
     const pendingGet = new Promise<Record<string, unknown>>((resolve) => {

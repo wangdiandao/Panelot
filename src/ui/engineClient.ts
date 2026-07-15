@@ -873,12 +873,13 @@ export class EngineSession {
       //    N live copies, so a queued duplicate ("继续" twice) keeps its bubble.
       //  - other live items exist only while a turn is live; with no active
       //    turn nothing can still be feeding them (SW-crash ghosts) → drop.
-      //  - tool cards persist with the SAME itemId → exact dedup.
+      //  - tool cards persist with the SAME itemId; the result, not merely
+      //    the call, is the boundary where the snapshot fully replaces them.
       //  - assistant text has no shared id → dedup by text; keep completed
       //    live text the snapshot hasn't caught up to (mid-turn resubscribe).
       const userCounts = new Map<string, number>();
       const assistantTexts = new Set<string>();
-      const toolItemIds = new Set<string>();
+      const toolResultItemIds = new Set<string>();
       for (const item of snap.items) {
         if (item.kind === 'user_message') {
           const text =
@@ -892,12 +893,21 @@ export class EngineSession {
               ?.map((c) => (c.type === 'text' ? (c.text ?? '') : ''))
               .join('') ?? '';
           if (text) assistantTexts.add(text);
-        } else if (item.kind === 'tool_call') {
+        } else if (item.kind === 'tool_result') {
           const id = (item.payload as { itemId?: string }).itemId;
-          if (id) toolItemIds.add(id);
+          if (id) toolResultItemIds.add(id);
         }
       }
-      const turnLive = snap.activeTurn !== null && !snap.activeTurn.wasInterrupted;
+      const snapshotActiveTurn =
+        snap.activeTurn && !snap.activeTurn.wasInterrupted
+          ? { turnId: snap.activeTurn.turnId, steerable: snap.activeTurn.steerable }
+          : null;
+      const snapshotTurnLive = snapshotActiveTurn !== null;
+      // A subscription snapshot can be built before a concurrently delivered
+      // turn.start event and arrive after it. Preserve that newer live state;
+      // an interrupted snapshot remains authoritative after worker recovery.
+      const currentTurnLive = st.activeTurn !== null && !snap.activeTurn?.wasInterrupted;
+      const turnLive = snapshotTurnLive || currentTurnLive;
       const persistedStopReason = (() => {
         for (let i = snap.items.length - 1; i >= 0; i--) {
           const item = snap.items[i]!;
@@ -920,7 +930,7 @@ export class EngineSession {
           return true;
         }
         if (it.local || !turnLive) return false;
-        if (it.kind === 'tool_call') return !toolItemIds.has(it.itemId);
+        if (it.kind === 'tool_call') return !toolResultItemIds.has(it.itemId);
         if (it.kind === 'assistant_message')
           return it.status === 'streaming' || !assistantTexts.has(it.text);
         return it.status === 'streaming';
@@ -931,10 +941,7 @@ export class EngineSession {
         meta: metaPatch ? { ...snap.meta, ...metaPatch } : snap.meta,
         items: snap.items,
         liveItems,
-        activeTurn:
-          snap.activeTurn && !snap.activeTurn.wasInterrupted
-            ? { turnId: snap.activeTurn.turnId, steerable: snap.activeTurn.steerable }
-            : null,
+        activeTurn: snapshotActiveTurn ?? (currentTurnLive ? st.activeTurn : null),
         wasInterrupted: snap.activeTurn?.wasInterrupted ?? false,
         lastStopReason: turnLive ? st.lastStopReason : persistedStopReason,
         pendingApprovals: snap.pendingApprovals,

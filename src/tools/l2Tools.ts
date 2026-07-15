@@ -59,7 +59,9 @@ export function createL2Tools(
     tabId: schema.optional(
       schema.number({
         integer: true,
-        description: 'Target tab id from tabs_list; omitted = the user-visible web tab',
+        min: 0,
+        description:
+          'Target tab id from tabs_list; omitted = the web tab captured when the user submitted',
       }),
     ),
   };

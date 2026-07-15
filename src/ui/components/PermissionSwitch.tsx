@@ -2,16 +2,15 @@
  * The composer's autonomy selector. Each option maps directly to an approval policy.
  */
 
-import { Check, ChevronDown, Eye, ShieldCheck, Zap } from 'lucide-react';
+import { ChevronDown, Eye, ShieldCheck, Zap } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
 import { Button } from './ui/button';
-import { cn } from '../lib/utils';
 import { t } from '../i18n';
 import type { PermissionPolicy } from '../../messaging/protocol';
 
@@ -52,20 +51,20 @@ export function PermissionSwitch({ value, onSelect }: Props) {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" side="top" className="w-64">
-        <DropdownMenuGroup>
+        <DropdownMenuRadioGroup
+          value={active.id}
+          onValueChange={(value) => onSelect(value as PermissionTier)}
+        >
           {TIERS.map((tier) => (
-            <DropdownMenuItem key={tier.id} onClick={() => onSelect(tier.id)}>
-              <Check
-                className={cn('size-4', tier.id === active.id ? 'opacity-100' : 'opacity-0')}
-              />
-              <tier.Icon />
+            <DropdownMenuRadioItem key={tier.id} value={tier.id}>
+              <tier.Icon data-icon="inline-start" />
               <div className="flex min-w-0 flex-col">
                 <span>{t(tier.labelKey)}</span>
                 <span className="text-[11px] text-faint-foreground">{t(tier.hintKey)}</span>
               </div>
-            </DropdownMenuItem>
+            </DropdownMenuRadioItem>
           ))}
-        </DropdownMenuGroup>
+        </DropdownMenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>
   );

@@ -15,6 +15,7 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from 'r
 import { AppWindow, AtSign, Braces, Camera, FileText, Slash, TextCursor } from 'lucide-react';
 import { t } from '../i18n';
 import { Command, CommandEmpty, CommandGroup, CommandItem, CommandList } from './ui/command';
+import { Popover, PopoverAnchor, PopoverContent } from './ui/popover';
 
 // ---------------------------------------------------------------------------
 // Trigger detection
@@ -143,8 +144,6 @@ export const TriggerMenu = forwardRef<TriggerMenuHandle, Props>(function Trigger
     [open, filtered, selected, onClose],
   );
 
-  if (!open) return null;
-
   const groups = new Map<string, TriggerItem[]>();
   for (const item of filtered) {
     const g = groups.get(item.group) ?? [];
@@ -153,38 +152,50 @@ export const TriggerMenu = forwardRef<TriggerMenuHandle, Props>(function Trigger
   }
 
   return (
-    <div className="absolute bottom-full left-0 right-0 z-40 mb-2 overflow-hidden rounded-xl border border-border bg-popover shadow-pop">
-      <Command shouldFilter={false} value={selected} onValueChange={setSelected}>
-        <CommandList className="max-h-56">
-          <CommandEmpty>{t('palette.noResults')}</CommandEmpty>
-          {[...groups.entries()].map(([group, groupItems]) => (
-            <CommandGroup key={group} heading={group}>
-              {groupItems.map((item) => {
-                const Icon = item.icon ? ICONS[item.icon] : AtSign;
-                return (
-                  <CommandItem
-                    key={item.id}
-                    value={item.id}
-                    onSelect={() => {
-                      void item.action();
-                      onClose();
-                    }}
-                    onMouseDown={(e) => e.preventDefault() /* keep textarea focus */}
-                  >
-                    <Icon className="size-3.5 text-muted-foreground" />
-                    <span className="truncate">{item.label}</span>
-                    {item.hint && (
-                      <span className="ml-auto truncate text-[11px] text-faint-foreground">
-                        {item.hint}
-                      </span>
-                    )}
-                  </CommandItem>
-                );
-              })}
-            </CommandGroup>
-          ))}
-        </CommandList>
-      </Command>
-    </div>
+    <Popover open={open} onOpenChange={(next) => !next && onClose()}>
+      <PopoverAnchor asChild>
+        <span className="pointer-events-none absolute inset-x-0 bottom-0" />
+      </PopoverAnchor>
+      <PopoverContent
+        side="top"
+        align="start"
+        sideOffset={8}
+        className="w-[var(--radix-popover-trigger-width)] overflow-hidden p-0"
+        onOpenAutoFocus={(event) => event.preventDefault()}
+        onCloseAutoFocus={(event) => event.preventDefault()}
+      >
+        <Command shouldFilter={false} value={selected} onValueChange={setSelected}>
+          <CommandList className="max-h-56">
+            <CommandEmpty>{t('palette.noResults')}</CommandEmpty>
+            {[...groups.entries()].map(([group, groupItems]) => (
+              <CommandGroup key={group} heading={group}>
+                {groupItems.map((item) => {
+                  const Icon = item.icon ? ICONS[item.icon] : AtSign;
+                  return (
+                    <CommandItem
+                      key={item.id}
+                      value={item.id}
+                      onSelect={() => {
+                        void item.action();
+                        onClose();
+                      }}
+                      onMouseDown={(event) => event.preventDefault()}
+                    >
+                      <Icon />
+                      <span className="truncate">{item.label}</span>
+                      {item.hint && (
+                        <span className="ml-auto truncate text-xs text-muted-foreground">
+                          {item.hint}
+                        </span>
+                      )}
+                    </CommandItem>
+                  );
+                })}
+              </CommandGroup>
+            ))}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 });

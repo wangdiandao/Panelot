@@ -8,7 +8,16 @@ import { toast } from 'sonner';
 import { Button } from '../components/ui/button';
 import { Checkbox } from '../components/ui/checkbox';
 import { Input } from '../components/ui/input';
-import { Label } from '../components/ui/label';
+import { Progress } from '../components/ui/progress';
+import { Alert, AlertAction, AlertDescription, AlertTitle } from '../components/ui/alert';
+import {
+  Field,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from '../components/ui/field';
 import { FilePickerButton } from '../components/FilePickerButton';
 import {
   AlertDialog,
@@ -37,7 +46,6 @@ import {
   type DataImportMaintenanceStatus,
 } from '../../data/maintenanceRpc';
 import { getQuotaStatus, type QuotaStatus } from '../../data/quota';
-import { cn } from '../lib/utils';
 import { t } from '../i18n';
 
 const db = new PanelotDB();
@@ -48,6 +56,7 @@ export function DataPage() {
   const [quota, setQuota] = useState<QuotaStatus | null>(null);
   const [includeKeys, setIncludeKeys] = useState(false);
   const [backupPassphrase, setBackupPassphrase] = useState('');
+  const [exportAttempted, setExportAttempted] = useState(false);
   const [importPassphrase, setImportPassphrase] = useState('');
   const [pendingImport, setPendingImport] = useState<ExportBundle | null>(null);
   const [importReport, setImportReport] = useState<ImportValidationResult | null>(null);
@@ -67,6 +76,7 @@ export function DataPage() {
   }, []);
 
   const doExport = async () => {
+    setExportAttempted(true);
     if (includeKeys && !backupPassphrase) {
       toast.error(t('settings.data.passphraseRequired'));
       return;
@@ -81,6 +91,7 @@ export function DataPage() {
     a.download = `panelot-export-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
+    setExportAttempted(false);
     toast.success(t('settings.data.exported'));
   };
 
@@ -179,27 +190,25 @@ export function DataPage() {
       <h2 className="text-[15px] font-semibold">{t('settings.section.data')}</h2>
 
       {(reloadRequired || maintenance?.blocked) && (
-        <div
-          role="status"
-          aria-live="polite"
-          className="flex flex-col gap-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-[12px]"
-        >
-          <div className="font-medium">{t('settings.data.reloadRequired')}</div>
-          <div className="text-muted-foreground">{t('settings.data.reloadRequiredHint')}</div>
-          <Button size="sm" variant="destructive" onClick={() => chrome.runtime.reload()}>
-            {t('settings.data.reloadNow')}
-          </Button>
-        </div>
+        <Alert variant="destructive" aria-live="polite">
+          <AlertTitle>{t('settings.data.reloadRequired')}</AlertTitle>
+          <AlertDescription>{t('settings.data.reloadRequiredHint')}</AlertDescription>
+          <AlertAction>
+            <Button size="sm" variant="destructive" onClick={() => chrome.runtime.reload()}>
+              {t('settings.data.reloadNow')}
+            </Button>
+          </AlertAction>
+        </Alert>
       )}
       {!maintenance?.blocked && maintenance?.reconciliation === 'rolled_back' && (
-        <div role="status" className="rounded-lg border p-3 text-[12px] text-muted-foreground">
-          {t('settings.data.rollbackRecovered')}
-        </div>
+        <Alert>
+          <AlertDescription>{t('settings.data.rollbackRecovered')}</AlertDescription>
+        </Alert>
       )}
       {!maintenance?.blocked && maintenance?.reconciliation === 'rolled_forward' && (
-        <div role="status" className="rounded-lg border p-3 text-[12px] text-muted-foreground">
-          {t('settings.data.commitRecovered')}
-        </div>
+        <Alert>
+          <AlertDescription>{t('settings.data.commitRecovered')}</AlertDescription>
+        </Alert>
       )}
 
       {quota && (
@@ -211,54 +220,70 @@ export function DataPage() {
               MB（{Math.round(quota.pct * 100)}%）
             </span>
           </div>
-          <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-            <div
-              className={cn('h-full', quota.warn ? 'bg-destructive' : 'bg-primary')}
-              style={{ width: `${Math.round(quota.pct * 100)}%` }}
-            />
-          </div>
+          <Progress
+            value={Math.round(quota.pct * 100)}
+            aria-label={t('settings.data.usage')}
+            aria-invalid={quota.warn || undefined}
+            variant={quota.warn ? 'destructive' : 'default'}
+          />
           {quota.warn && (
             <div className="text-[11px] text-destructive">{t('settings.data.nearLimit')}</div>
           )}
         </div>
       )}
 
-      <div className="flex flex-col gap-2">
-        <div className="text-[13px] font-medium">{t('settings.data.export')}</div>
-        <Label htmlFor="include-secret-keys" className="flex items-center gap-2">
-          <Checkbox
-            id="include-secret-keys"
-            checked={includeKeys}
-            onCheckedChange={(on) => setIncludeKeys(on === true)}
-          />
-          {t('settings.data.includeSecrets')}
-        </Label>
-        {includeKeys && (
-          <Input
-            type="password"
-            value={backupPassphrase}
-            onChange={(event) => setBackupPassphrase(event.target.value)}
-            placeholder={t('settings.data.passphrase')}
-            aria-label={t('settings.data.passphrase')}
-            autoComplete="new-password"
-          />
-        )}
-        <Button size="sm" className="px-4" onClick={() => void doExport()}>
-          {t('settings.data.exportAll')}
-        </Button>
-      </div>
+      <FieldSet>
+        <FieldLegend variant="label">{t('settings.data.export')}</FieldLegend>
+        <FieldGroup className="gap-3">
+          <Field orientation="horizontal">
+            <Checkbox
+              id="include-secret-keys"
+              checked={includeKeys}
+              onCheckedChange={(on) => setIncludeKeys(on === true)}
+            />
+            <FieldLabel htmlFor="include-secret-keys">
+              {t('settings.data.includeSecrets')}
+            </FieldLabel>
+          </Field>
+          {includeKeys && (
+            <Field data-invalid={exportAttempted && !backupPassphrase}>
+              <FieldLabel htmlFor="backup-passphrase">{t('settings.data.passphrase')}</FieldLabel>
+              <Input
+                id="backup-passphrase"
+                type="password"
+                value={backupPassphrase}
+                onChange={(event) => setBackupPassphrase(event.target.value)}
+                aria-invalid={exportAttempted && !backupPassphrase}
+                placeholder={t('settings.data.passphrase')}
+                aria-label={t('settings.data.passphrase')}
+                autoComplete="new-password"
+              />
+              {exportAttempted && !backupPassphrase && (
+                <FieldError>{t('settings.data.passphraseRequired')}</FieldError>
+              )}
+            </Field>
+          )}
+          <Button size="sm" className="w-fit" onClick={() => void doExport()}>
+            {t('settings.data.exportAll')}
+          </Button>
+        </FieldGroup>
+      </FieldSet>
 
-      <div className="flex flex-col gap-2">
-        <div className="text-[13px] font-medium">{t('settings.data.import')}</div>
-        <FilePickerButton
-          id="data-json-import"
-          label={t('settings.data.chooseJsonLabel')}
-          accept=".json"
-          onFile={(file) => void stageImport(file)}
-        >
-          {t('settings.data.chooseJson')}
-        </FilePickerButton>
-      </div>
+      <FieldSet>
+        <FieldLegend variant="label">{t('settings.data.import')}</FieldLegend>
+        <FieldGroup>
+          <Field>
+            <FilePickerButton
+              id="data-json-import"
+              label={t('settings.data.chooseJsonLabel')}
+              accept=".json"
+              onFile={(file) => void stageImport(file)}
+            >
+              {t('settings.data.chooseJson')}
+            </FilePickerButton>
+          </Field>
+        </FieldGroup>
+      </FieldSet>
 
       <AlertDialog
         open={pendingImport !== null}
@@ -279,45 +304,52 @@ export function DataPage() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           {pendingImport?.encryptedSecrets && (
-            <Input
-              type="password"
-              value={importPassphrase}
-              onChange={(event) => {
-                setImportPassphrase(event.target.value);
-                setPreparedImport(null);
-                setPreview(null);
-                setConfirmDormant(false);
-              }}
-              placeholder={t('settings.data.enterPassphrase')}
-              aria-label={t('settings.data.enterPassphrase')}
-              autoComplete="current-password"
-            />
+            <Field>
+              <FieldLabel htmlFor="import-passphrase">
+                {t('settings.data.enterPassphrase')}
+              </FieldLabel>
+              <Input
+                id="import-passphrase"
+                type="password"
+                value={importPassphrase}
+                onChange={(event) => {
+                  setImportPassphrase(event.target.value);
+                  setPreparedImport(null);
+                  setPreview(null);
+                  setConfirmDormant(false);
+                }}
+                placeholder={t('settings.data.enterPassphrase')}
+                aria-label={t('settings.data.enterPassphrase')}
+                autoComplete="current-password"
+              />
+            </Field>
           )}
           {blockerCounts && (
-            <div
-              role="status"
+            <Alert
+              variant={preview?.blockers.hardBlocked ? 'destructive' : 'default'}
               aria-live="polite"
-              className="flex flex-col gap-2 rounded-md border p-3 text-[12px]"
             >
-              <div className="font-medium">
+              <AlertTitle>
                 {preview?.blockers.hardBlocked
                   ? t('settings.data.previewBlocked')
                   : t('settings.data.previewReady')}
-              </div>
-              <div className="text-muted-foreground">
+              </AlertTitle>
+              <AlertDescription>
                 {t('settings.data.blockerSummary', blockerCounts)}
-              </div>
+              </AlertDescription>
               {preview?.blockers.requiresDormantConfirmation && !preview.blockers.hardBlocked && (
-                <Label htmlFor="confirm-dormant-import" className="items-start gap-2 leading-5">
+                <Field orientation="horizontal">
                   <Checkbox
                     id="confirm-dormant-import"
                     checked={confirmDormant}
                     onCheckedChange={(checked) => setConfirmDormant(checked === true)}
                   />
-                  {t('settings.data.confirmDormant')}
-                </Label>
+                  <FieldLabel htmlFor="confirm-dormant-import">
+                    {t('settings.data.confirmDormant')}
+                  </FieldLabel>
+                </Field>
               )}
-            </div>
+            </Alert>
           )}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={busy}>{t('app.cancel')}</AlertDialogCancel>

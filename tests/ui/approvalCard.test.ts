@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PendingApproval } from '../../src/messaging/protocol';
 import { ApprovalCard } from '../../src/ui/components/ApprovalCard';
 import { ThreadSidebar } from '../../src/ui/components/ThreadSidebar';
-import { TooltipProvider } from '../../src/ui/components/ui/tooltip';
+import { SidebarProvider } from '../../src/ui/components/ui/sidebar';
 import { handoffMenuCloseToApproval } from '../../src/ui/focusHandoff';
 import { setLang } from '../../src/ui/i18n';
 import type { ThreadMeta } from '../../src/db/types';
@@ -115,7 +115,7 @@ describe('thread menu focus handoff', () => {
     await act(async () =>
       root.render(
         createElement(
-          TooltipProvider,
+          SidebarProvider,
           null,
           createElement(ThreadSidebar, {
             threads: [thread],

@@ -390,19 +390,27 @@ function startBackground(
   const core = new RealEngineCore(db, registryFor, gatekeeper, resolver, async (browserContext) => {
     const settings = await SettingsStore.global.get();
     const submittedTab = browserContext?.defaultTab;
-    const url = submittedTab?.url;
+    const contextUrls = [
+      submittedTab?.url,
+      ...(browserContext?.referencedTabs.map((tab) => tab.url) ?? []),
+    ].filter((url, index, urls): url is string => !!url && urls.indexOf(url) === index);
     const [sitePrompts, pluginSitePrompts] = await Promise.all([
       SettingsStore.sitePrompts.get(),
       listEnabledPluginSiteInstructions(db),
     ]);
+    const skillIndexes = await Promise.all(
+      (contextUrls.length > 0 ? contextUrls : [undefined]).map((url) => skills.buildIndex(url)),
+    );
     return {
       userGlobalPrompt: settings.userGlobalPrompt,
-      sitePrompts: url
+      sitePrompts: contextUrls.length
         ? [...sitePrompts, ...pluginSitePrompts].filter((entry) =>
-            siteInstructionMatches(entry.pattern, url),
+            contextUrls.some((url) => siteInstructionMatches(entry.pattern, url)),
           )
         : [],
-      skillsIndex: await skills.buildIndex(url),
+      skillsIndex: [
+        ...new Map(skillIndexes.flat().map((entry) => [entry.name, entry] as const)).values(),
+      ],
       environment: {
         date: new Date().toISOString().slice(0, 10),
         language: settings.language ?? 'zh-CN',
@@ -611,12 +619,13 @@ function startBackground(
 
   // Manual operation → pause, but ONLY when a real human-vs-agent conflict
   // exists (docs/05 §5): the agent has written to that tab this turn, or a
-  // recovered approval is waiting to write to that exact tab. Read-only turns
+  // pending or recovered approval is waiting on that exact tab. Read-only turns
   // never pause — the user scrolling their own page is not a conflict.
   gateway.onManualOperation = (tabId) => {
     for (const threadId of core.activeThreadIds()) {
       if (
         gateway.droveThisTurn(threadId, tabId) ||
+        core.pendingApprovalTargetsTab(threadId, tabId) ||
         core.recoveredApprovalTargetsTab(threadId, tabId)
       ) {
         void core.pauseThread(

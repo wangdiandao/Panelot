@@ -13,7 +13,7 @@ function text(value: string) {
 }
 
 function timestamp(value?: number): string {
-  return value ? new Date(value).toISOString() : 'unknown time';
+  return value ? new Date(value).toISOString() : '时间未知';
 }
 
 function sessionUrl(entry: chrome.sessions.Session): string | undefined {
@@ -58,9 +58,9 @@ export function createBrowserDataTools(): AnyAgentTool[] {
           rows
             .map(
               (item) =>
-                `${timestamp(item.lastVisitTime)} · ${item.title || '(untitled)'}\n${item.url ?? ''}`,
+                `${timestamp(item.lastVisitTime)} · ${item.title || '（无标题）'}\n${item.url ?? ''}`,
             )
-            .join('\n\n') || '(no matching history entries)',
+            .join('\n\n') || '（没有匹配的浏览历史）',
         );
       },
     },
@@ -80,8 +80,8 @@ export function createBrowserDataTools(): AnyAgentTool[] {
         return text(
           rows
             .slice(0, limit(params.maxResults))
-            .map((item) => `[${item.id}] ${item.title || '(untitled)'}\n${item.url}`)
-            .join('\n\n') || '(no matching bookmarks)',
+            .map((item) => `[${item.id}] ${item.title || '（无标题）'}\n${item.url}`)
+            .join('\n\n') || '（没有匹配的书签）',
         );
       },
     },
@@ -100,8 +100,8 @@ export function createBrowserDataTools(): AnyAgentTool[] {
         return text(
           rows
             .slice(0, limit(params.maxResults))
-            .map((item) => `${item.title || '(untitled)'}\n${item.url}`)
-            .join('\n\n') || '(no top sites)',
+            .map((item) => `${item.title || '（无标题）'}\n${item.url}`)
+            .join('\n\n') || '（没有常用站点）',
         );
       },
     },
@@ -122,11 +122,11 @@ export function createBrowserDataTools(): AnyAgentTool[] {
         return text(
           rows
             .map((entry) => {
-              const kind = entry.tab ? 'tab' : 'window';
-              const title = entry.tab?.title ?? entry.window?.tabs?.[0]?.title ?? '(untitled)';
+              const kind = entry.tab ? '标签页' : '窗口';
+              const title = entry.tab?.title ?? entry.window?.tabs?.[0]?.title ?? '（无标题）';
               return `[${entry.tab?.sessionId ?? entry.window?.sessionId ?? 'unavailable'}] ${kind} · ${title}\n${sessionUrl(entry) ?? ''}`;
             })
-            .join('\n\n') || '(no recently closed tabs or windows)',
+            .join('\n\n') || '（没有最近关闭的标签页或窗口）',
         );
       },
     },
@@ -149,31 +149,29 @@ export function createBrowserDataTools(): AnyAgentTool[] {
       },
       execute: async (_id, params: { sessionId: string }) => {
         const restored = await chrome.sessions.restore(params.sessionId);
-        if (!restored) throw new Error('The recently closed item is no longer available.');
-        const kind = restored.tab ? 'tab' : 'window';
+        if (!restored) throw new Error('最近关闭项已不可恢复。');
+        const kind = restored.tab ? '标签页' : '窗口';
         return text(
-          `Restored ${kind}: ${restored.tab?.title ?? restored.window?.tabs?.[0]?.title ?? params.sessionId}`,
+          `已恢复${kind}：${restored.tab?.title ?? restored.window?.tabs?.[0]?.title ?? params.sessionId}`,
         );
       },
     },
     {
       name: 'tab_groups_list',
       label: '列出标签组',
-      description: 'List tab groups in the current window, or every window when all is true.',
-      parameters: schema.object({ all: schema.optional(schema.boolean()) }),
+      description: 'List every tab group across all browser windows.',
+      parameters: schema.object({}),
       level: 'L0',
       effects: 'read',
-      execute: async (_id, params: { all?: boolean }) => {
-        const groups = await chrome.tabGroups.query(
-          params.all ? {} : { windowId: chrome.windows.WINDOW_ID_CURRENT },
-        );
+      execute: async () => {
+        const groups = await chrome.tabGroups.query({});
         return text(
           groups
             .map(
               (group) =>
-                `[${group.id}] ${group.title || '(untitled)'} · ${group.color} · ${group.collapsed ? 'collapsed' : 'expanded'}`,
+                `[${group.id}] ${group.title || '（无标题）'} · ${group.color} · ${group.collapsed ? '已折叠' : '已展开'}`,
             )
-            .join('\n') || '(no tab groups)',
+            .join('\n') || '（没有标签组）',
         );
       },
     },
@@ -183,8 +181,8 @@ export function createBrowserDataTools(): AnyAgentTool[] {
       description:
         'Group existing tabs by id, optionally into an existing group; this reorganizes the browser and requires write approval.',
       parameters: schema.object({
-        tabIds: schema.array(schema.number({ integer: true }), { min: 1 }),
-        groupId: schema.optional(schema.number({ integer: true })),
+        tabIds: schema.array(schema.number({ integer: true, min: 0 }), { min: 1 }),
+        groupId: schema.optional(schema.number({ integer: true, min: 0 })),
       }),
       level: 'L0',
       effects: 'write',
@@ -194,7 +192,7 @@ export function createBrowserDataTools(): AnyAgentTool[] {
           tabIds,
           ...(params.groupId === undefined ? {} : { groupId: params.groupId }),
         });
-        return text(`Grouped ${params.tabIds.length} tab(s) into group [${groupId}].`);
+        return text(`已将 ${params.tabIds.length} 个标签页整理到标签组 [${groupId}]。`);
       },
     },
     {
@@ -203,7 +201,7 @@ export function createBrowserDataTools(): AnyAgentTool[] {
       description:
         'Rename, recolor, or collapse a tab group; this changes browser organization and requires write approval.',
       parameters: schema.object({
-        groupId: schema.number({ integer: true }),
+        groupId: schema.number({ integer: true, min: 0 }),
         title: schema.optional(schema.string({ max: 100 })),
         color: schema.optional(
           schema.enum([
@@ -234,10 +232,10 @@ export function createBrowserDataTools(): AnyAgentTool[] {
       ) => {
         const { groupId, ...changes } = params;
         if (Object.keys(changes).length === 0)
-          throw new Error('Provide a title, color, or collapsed state to update.');
+          throw new Error('请至少提供标题、颜色或折叠状态中的一项。');
         const group = await chrome.tabGroups.update(groupId, changes);
-        if (!group) throw new Error(`Tab group [${groupId}] is no longer available.`);
-        return text(`Updated tab group [${group.id}] ${group.title || '(untitled)'}.`);
+        if (!group) throw new Error(`标签组 [${groupId}] 已不可用。`);
+        return text(`已更新标签组 [${group.id}] ${group.title || '（无标题）'}。`);
       },
     },
   ];
