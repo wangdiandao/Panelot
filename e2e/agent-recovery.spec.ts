@@ -427,7 +427,22 @@ test('recovers an approved browser action through a production module service wo
     const stopWorker = internalsPage.locator('cr-button[data-command="stop"]');
     await expect(stopWorker).toHaveCount(1);
     await stopWorker.click();
-    await expect(internalsPage.locator('body')).toContainText('Running Status: STOPPED');
+    await expect
+      .poll(
+        async () => {
+          try {
+            await worker.evaluate(() => true);
+            return false;
+          } catch {
+            return true;
+          }
+        },
+        {
+          message: 'the original extension service worker must stop accepting evaluations',
+          timeout: 15_000,
+        },
+      )
+      .toBe(true);
     await internalsPage.close();
 
     const recoveredPage = await context.newPage();
