@@ -1,4 +1,3 @@
-# Panelot — Microsoft Edge 浏览器原生 AI Agent
+# Panelot — Microsoft Edge AI Agent
 
-使用你自己的模型端点，在本地优先的 Edge 扩展中读取并操作网页。Panelot 提供可恢复任务、明确审批、Skills、Plugin、MCP、本机加密凭据和按需网站权限；无需账户，不含遥测或云同步。
-
+连接你自己的模型端点，在 Edge 中读取网页并完成浏览器任务。Panelot 支持可恢复 Run、三种权限模式、Skills、数据型 Plugin、远端 MCP、本机加密凭据和按 origin 申请的网站权限。它不需要 Panelot 账户，也没有遥测或云同步。

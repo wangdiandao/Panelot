@@ -1,6 +1,6 @@
-# 07 — 远端 MCP 支持
+# 07 — 远端 MCP
 
-> 文档索引：[README.md](../README.md) · 关联：[04 Agent 引擎](./04-agent-engine.md) · [06 权限](./06-permissions.md) · [09 界面](./09-ui.md)
+> 文档入口：[文档目录](./README.md) · 关联：[04 Agent 引擎](./04-agent-engine.md) · [06 权限](./06-permissions.md) · [09 界面](./09-ui.md)
 
 ---
 
@@ -48,7 +48,11 @@ interface McpServerConfig {
 
 ## 3. OAuth 2.1 时序
 
-实现以 MCP Authorization `2025-06-18` 为兼容底线，并采用 `2025-11-25` 已明确的 discovery、OIDC fallback、scope challenge 与 PKCE 能力校验规则。当前固定使用仓库已安装的 `@modelcontextprotocol/sdk` `1.29.0`，复用其 `WWW-Authenticate` 解析；PRM 与授权服务器 discovery 按 SDK 的端点顺序最小实现于后台，因为直接引入 SDK auth discovery 会使 MV3 `background.js` 超过仓库 350 KiB 预算。该最小实现不包含 SDK 的 CORS 去除请求头重试，但保留 `redirect: 'error'`，并额外执行同源 PRM、resource、issuer、远程 HTTPS 与 `S256` 校验。当前没有可公开托管的 Client ID Metadata Document，因此仍使用预配置 client ID 或 DCR，不声明 CIMD 支持。
+实现以 MCP Authorization `2025-06-18` 为兼容底线，并采用 `2025-11-25` 中明确的 discovery、OIDC fallback、scope challenge 和 PKCE 能力校验规则。仓库固定使用 `@modelcontextprotocol/sdk` `1.29.0`，并复用它的 `WWW-Authenticate` 解析。
+
+PRM 与授权服务器 discovery 按 SDK 的端点顺序在后台实现。没有直接引入 SDK auth discovery，因为这会让 MV3 `background.js` 超过 350 KiB 预算。当前实现不包含 SDK 的 CORS 去除请求头重试，但保留 `redirect: 'error'`，并检查同源 PRM、resource、issuer、远程 HTTPS 和 `S256`。
+
+项目目前没有公开托管的 Client ID Metadata Document，因此使用预配置 client ID 或 DCR，不声明 CIMD 支持。
 
 ```mermaid
 sequenceDiagram

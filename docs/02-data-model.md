@@ -1,15 +1,15 @@
 # 02 — 数据模型与存储
 
-> 文档索引：[README.md](../README.md) · 关联：[01 架构](./01-architecture.md) · [04 Agent 引擎](./04-agent-engine.md)
-> 借鉴来源：OpenWebUI 消息树（及其双份存储的反面教训）、Pi Agent 会话树、Codex rollout（SessionMeta 头 + 重放式恢复）
+> 文档入口：[文档目录](./README.md) · 关联：[01 架构](./01-architecture.md) · [04 Agent 引擎](./04-agent-engine.md)
+> 相关调研：OpenWebUI 和 Pi Agent 的会话树，以及 Codex rollout 的 SessionMeta 与重放式恢复。来源见 [11 参考项目](./11-references.md)。
 
 ---
 
-## 1. 设计决策
+## 1. 存储规则
 
-1. **会话是一棵树，且只存树**。节点 `{id, parentId}`，编辑重发/重新生成/分叉全部表达为「追加兄弟节点 + 移动游标」。不维护任何平行的扁平消息数组（OpenWebUI 因双份存储产生孤儿节点与渲染死锁，引以为戒）。
-2. **Append-only**。流式 delta 不建节点；Provider stream 完成后一次写入 assistant 终稿。节点写入后不修改，墓碑删除只更新 `deleted` 标记（见 §3.3）。恢复 = 回放，不是快照反序列化。
-3. **给 LLM 的历史是派生视图**：`buildSessionContext(leafId)` 从叶子回溯到根产出线性消息序列。
+1. 会话只保存树结构。节点使用 `{id, parentId}`；编辑重发、重新生成和分叉都通过追加兄弟节点并移动游标表示，不再维护一份平行的扁平消息数组。
+2. 节点以追加为主。流式 delta 不建节点；Provider stream 完成后一次写入 assistant 终稿。墓碑删除只更新 `deleted` 标记（见 §3.3）。恢复依赖回放，不反序列化一份独立快照。
+3. 给模型的历史是派生视图。`buildSessionContext(leafId)` 从叶子回溯到根，生成线性消息序列。
 
 ## 2. Dexie Schema
 
@@ -51,7 +51,7 @@ class PanelotDB extends Dexie {
 
 ### 2.1 threads —— 轻量索引表
 
-UI 会话列表只读这张表，永不扫 nodes：
+UI 会话列表只读这张表，不扫描 nodes：
 
 ```ts
 interface ThreadMeta {
@@ -71,7 +71,7 @@ interface ThreadMeta {
 }
 ```
 
-### 2.2 nodes —— 会话树节点（核心表）
+### 2.2 nodes —— 会话树节点
 
 ```ts
 interface ThreadNode {
@@ -145,7 +145,7 @@ appendNode(threadId, parentId = thread.leafId, node)
 
 ### 3.4 完整性校验
 
-写入前校验：`parentId` 必须存在于同 thread（或为 null 根）；加载时校验 `leafId` 可回溯到根，失败则回退到 seq 最大的可达叶子并记 `system_notice`。**任何情况下渲染层不因坏数据死循环**——回溯步数上限 = 节点总数。
+写入前要求 `parentId` 存在于同一 Thread，或为根节点的 `null`。加载时会确认 `leafId` 能回溯到根；失败时回退到 `seq` 最大的可达叶子并写入 `system_notice`。回溯步数不超过节点总数，避免损坏数据让渲染层循环。
 
 ## 4. buildSessionContext —— LLM 上下文派生
 
@@ -163,7 +163,13 @@ async function buildSessionContext(
 
 `buildSessionContext` 服务 LLM 请求组装，从当前 `leafId` 派生统一消息序列。UI snapshot 和会话导出复用同一棵 `parentId` 树及相同的回溯约束，但分别生成适合 UI/Markdown 的载荷，不共享这一函数的返回类型。
 
-`runTurn` 在进入 `preparing` 前把规范化输入与 `RunEnvironmentSnapshot` 同事务写入。快照带格式版本和 SHA-256 完整性摘要，固化实际 connection/model/参数、完整 system prompt、Skill 目录与正文、Provider-facing tool schemas、工具执行绑定、审批策略、能力域、浏览器提交上下文和价格/能力元数据。Provider 与 MCP 秘密不进入快照，只记录 credential reference；恢复要求当前非秘密 transport 与引用形状仍完全一致，只允许同一引用的密文值轮换。已开始但没有快照的旧 Run、摘要不匹配、执行绑定漂移或超过结构/体积上限均 fail closed，不重新解析可变设置。
+`runTurn` 在进入 `preparing` 前，把规范化输入与 `RunEnvironmentSnapshot` 放进同一事务。快照带格式版本和 SHA-256 完整性摘要，并固定以下内容：
+
+- 实际 connection、model、参数和完整 system prompt；
+- Skill 目录与正文、Provider-facing tool schemas 和工具执行绑定；
+- 审批策略、能力域、浏览器提交上下文，以及价格和能力元数据。
+
+Provider 与 MCP 秘密不进入快照，只保存 credential reference。恢复时，非秘密 transport 和引用形状必须与快照一致；同一引用所指向的密文值可以轮换。已经开始但没有快照的旧 Run、摘要不匹配、执行绑定漂移或超过结构与体积上限的快照都会被拒绝，不会重新解析可变设置。
 
 ## 5. 存储配额与清理
 
@@ -171,7 +177,7 @@ async function buildSessionContext(
 - 附件总量超过 200MB 后按 `createdAt` 删除最旧附件并跳过活跃 Thread；删除事务先把引用节点标记为 `evicted`，再物理删除附件。启动时清理遗留的半删除记录。
 - “归档 N 天后删除 nodes、保留 ThreadMeta/Markdown 摘要”与删除前 `deleting` 两阶段流程尚未接入设置页或定时任务，属于目标策略。
 
-## 6. 已定事项
+## 6. 当前约束
 
 - nodes 表不加 `[threadId+parentId]` 复合索引：siblings 查询走单列 `parentId` 索引后内存过滤，兄弟分支数量级是个位数，复合索引没有可测收益。
 - 附件存 IndexedDB Blob，不用 OPFS：大截图场景的性能差距抵不过 API 兼容成本。

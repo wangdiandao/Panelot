@@ -1,16 +1,15 @@
-# Panelot — browser-native AI agent
+# Panelot — AI agent for Chrome
 
-Panelot turns Chrome into a local-first AI workspace. Bring your own OpenAI-compatible or Anthropic-compatible endpoint, ask questions about pages, and let the agent operate websites with explicit safety boundaries.
+Connect an OpenAI-compatible or Anthropic endpoint, ask questions about pages, and let Panelot carry out browser tasks under the permission mode and rules you choose.
 
-Highlights:
+Panelot supports:
 
 - Local conversation tree, attachments, Skills, presets, and plugins
 - Optional website access requested only when an action needs it
 - Read, click, type, navigate, capture screenshots, and upload user-selected files
 - MCP tools, prompts, and resources over Streamable HTTP
-- Per-action approvals, sensitive-site protection, and recoverable task runs
+- Three permission modes, saved rules, sensitive-site protection, and recoverable task runs
 - Encrypted local credentials and passphrase-encrypted secret backups
 - No account, cloud sync, advertising, or telemetry
 
-Panelot sends content only to the model endpoint, MCP server, or website chosen by the user. Provider and MCP credentials remain encrypted in browser-local storage.
-
+Panelot sends selected content to the model endpoint or MCP server configured by the user. Browser actions communicate with the website being operated. Provider and MCP credentials are encrypted in extension-local storage.

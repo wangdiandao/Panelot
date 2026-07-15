@@ -1,16 +1,16 @@
-# 04 — Agent 核心引擎
+# 04 — Agent 引擎
 
-> 文档索引：[README.md](../README.md) · 关联：[01 架构](./01-architecture.md) · [02 数据模型](./02-data-model.md) · [06 权限](./06-permissions.md) · [10 提示词](./10-prompts.md)
-> 借鉴来源：Pi Agent 的极简 loop / AgentTool 双通道；Codex 的 steering-queueing-interrupt 三通路与 turnKind
+> 文档入口：[文档目录](./README.md) · 关联：[01 架构](./01-architecture.md) · [02 数据模型](./02-data-model.md) · [06 权限](./06-permissions.md) · [10 提示词](./10-prompts.md)
+> 相关调研：Pi Agent 的 loop 与 AgentTool 双通道，以及 Codex 的 steering、queueing、interrupt 和 turnKind。
 
 ---
 
-## 1. 设计哲学
+## 1. 运行方式
 
-**Pi 的极简内核 + Codex 的安全外壳。** loop 本身保持最小——循环到模型不再调工具为止；复杂度全部推到外层（Gatekeeper、能力域、UI）。工具调用次数没有软提醒或硬上限，不以预设步骤数替 Agent 决定任务何时结束。
+Agent loop 会一直运行到模型不再请求工具。审批、工具范围和界面状态由 loop 外的 Gatekeeper、运行环境和 UI 处理。工具调用没有按次数设置的提醒或上限；token 预算仍可暂停本轮任务。
 
 - **token 预算**（可选配置）：超预算时 `turn.complete{stopReason:'budget_pause'}`，可继续；这是资源配置，不是步数限制；
-- **连续失败熔断**：3 次连续工具失败时提醒模型换路；5 次连续失败后停止工具执行，再给模型一次禁用工具的收尾回复，明确已验证结果、错误与下一步。成功调用会重置计数，用户拒绝和策略拒绝不计为工具故障。
+- 连续 3 次工具失败时，loop 会提醒模型更换路径；连续 5 次失败后停止工具执行，并让模型在禁用工具的情况下给出一次收尾回复。成功调用会重置计数，用户拒绝和策略拒绝不计为工具故障。
 
 ## 2. Agent Loop
 
@@ -58,10 +58,10 @@ async function runTurn(thread: Thread, input: UserInput, overrides?: TurnOverrid
 
 行为规范：
 
-- **错误靠 throw**：工具失败抛异常，引擎捕获后以 `isError` 语义回填给模型，loop 继续——模型自己重试或换路（元素找不到→重新快照，是 05 章工具的标准自纠路径）。
-- **中断（interrupt）**：abort `signal` → 当前 fetch 与工具执行终止（L2 工具安全 detach）→ 已落库节点保留 → `turn.complete{stopReason:'interrupted'}`。
-- **Provider 停止原因**：每个 `assistant_message` 持久化实际 `providerStopReason`；中间 `tool_use` 执行工具后继续 loop，不作为 turn 终态；最终 `end`、`max_tokens`、`content_filter` 原样进入 Run 与 `turn.complete`，后两者由 UI 明示回复可能不完整。
-- **结束的定义**：`turn.complete` 在所有落库写入 ack 之后才发出（Pi 的 "await 所有订阅者" 语义）——防 SW 在持久化前被挂起。
+- 工具失败时抛出异常。引擎把错误作为 `isError` tool result 返回模型，loop 继续；模型可以重新读取页面或换一种方法。
+- interrupt 会 abort 当前 fetch 和工具执行，L2 工具随后 detach。已经落库的节点保留，终态为 `turn.complete{stopReason:'interrupted'}`。
+- 每个 `assistant_message` 保存实际 `providerStopReason`。中间的 `tool_use` 会继续执行工具，不作为 turn 终态；最终的 `end`、`max_tokens` 和 `content_filter` 会进入 Run 与 `turn.complete`。后两种情况由 UI 提示回复可能不完整。
+- `turn.complete` 只在本轮所有落库写入得到 ack 后发出，避免 SW 在持久化完成前挂起。
 
 ## 3. Steering / Queueing / Interrupt 三通路
 
@@ -73,9 +73,13 @@ async function runTurn(thread: Thread, input: UserInput, overrides?: TurnOverrid
 
 UI 交互映射（见 09）：Agent 运行中输入框可继续打字，`Enter` = steer（不可插话时自动降级为 enqueue 并提示），`Shift+Alt+Enter` = 显式排队，`Esc` = interrupt。
 
-Steer 的 ACK 是持久化边界，不是内存入队边界：`RunRepository` 在同一 Dexie 事务中写入带 admission sequence 的 Run pending steer 记录并链接用户附件的 `nodeIds/runIds`，但不移动 Thread leaf；事务失败则整笔回滚。下一次 provider 请求开始时，loop 同步截取已发起的 admission，等待这些事务完成，再按持久化的接收顺序把 cutoff 内的 pending steer 物化到当前 leaf。这样不会因事务完成顺序或 SW 重启改变消息顺序，也不会把 user message 插进 `tool_call` 与 `tool_result` 之间，或放到未读取该 steer 的 assistant response 之前。
+Steer 的 ACK 表示数据已经持久化，不只是进入内存队列。`RunRepository` 会在同一 Dexie 事务中写入带 admission sequence 的 pending steer，并链接用户附件的 `nodeIds/runIds`，但不移动 Thread leaf；事务失败时整笔回滚。
 
-每次 provider 请求只截取一次 cutoff 并构建一次 session context；cutoff 之后到达的 steer 属于再下一次请求，不循环重建 context，也不会因持续输入饿死 provider。最终回复返回时，loop 会先关闭新的 admission，再等待已经发起的持久化：成功的 steer 会触发下一次请求，失败的 steer 不会 ACK。若 provider error/abort/interrupt 使 turn 在下一次请求前终止，已 ACK 的 pending steer 会先在安全 leaf 物化后再写终态。SW 重启时 Run 中的 pending 集合会随恢复路径重新进入首个请求，因而不依赖内存 overlay。
+下一次 Provider 请求开始时，loop 截取已经发起的 admission，等待相关事务完成，再按持久化的接收顺序把 cutoff 内的 pending steer 物化到当前 leaf。事务完成顺序或 SW 重启不会改变消息顺序，user message 也不会插进 `tool_call` 与 `tool_result` 之间，或出现在尚未读取该 steer 的 assistant response 之前。
+
+每次 Provider 请求只截取一次 cutoff 并构建一次 session context。cutoff 之后到达的 steer 留给下一次请求，不会反复重建 context，也不会因为用户持续输入而阻塞 Provider 请求。
+
+最终回复返回时，loop 先停止接收新的 admission，再等待已经发起的持久化。成功的 steer 会触发下一次请求，失败的 steer 不会 ACK。如果 Provider error、abort 或 interrupt 让 turn 提前结束，已 ACK 的 pending steer 会先在安全 leaf 物化，再写入终态。SW 重启时，Run 中的 pending 集合通过恢复路径进入首个请求，不依赖内存 overlay。
 
 ## 4. AgentTool 接口
 
@@ -105,15 +109,24 @@ interface ToolResult<D> {
 }
 ```
 
-- **content/details 双通道是硬规范**：任何工具不得把 UI 富信息塞进 content（污染上下文），也不得把 LLM 需要的关键结论只放 details。
+- 工具必须区分 `content` 和 `details`：前者只放模型需要的信息，后者承载 UI 详情。模型需要的结论不能只出现在 `details` 中。
 - 参数校验：LLM 给的原始参数先过 zod；失败不 throw 给用户，而是把校验错误作为 tool_result 回给模型自纠。
 - `onUpdate`：长工具（等待页面加载、滚动抓取）推进度 → `item.delta{toolProgress}`。
 
 ## 5. 恢复语义
 
-每个 Thread 由 `ThreadActor` 串行调度，Run 使用固定状态机并持久化环境、步骤游标与 `PreparedToolCall`。SW 重启时：从未开始且仍为 queued 的 Run 可首次解析环境；已开始的 Run 必须通过 `RunEnvironmentSnapshot` 的版本、输入摘要、嵌套摘要与总摘要校验。waiting_approval 从 approvals 表恢复；只读或 retry-safe 工具可重放；已开始且结果不明的写操作进入 `paused_uncertain`，只能由用户选择 retry / mark_done / fail；模型流中断进入 `interrupted`。恢复使用快照中的完整 prompt、Skill 内容、模型参数和 tool catalog；Provider transport、credential reference 形状、MCP endpoint/auth binding 或本地工具 schema/安全元数据漂移时拒绝恢复，只有同一 credential reference 指向的密文值可以轮换。快照在 clone、摘要与落库前受总字节数、目录项数、单项体积和嵌套深度上限约束。
+每个 Thread 由 `ThreadActor` 串行调度。Run 使用固定状态机，并持久化运行环境、步骤游标与 `PreparedToolCall`。
 
-## 6. 关键时序图
+SW 重启后的处理分为四类：
+
+- 尚未开始且仍为 queued 的 Run 可以首次解析环境；
+- 已开始的 Run 必须通过 `RunEnvironmentSnapshot` 的版本与摘要校验；
+- waiting_approval 从 approvals 表恢复，只读或 retry-safe 工具可以重放；
+- 结果不明的写操作进入 `paused_uncertain`，由用户选择 retry、mark_done 或 fail。模型流中断则进入 `interrupted`。
+
+恢复使用快照中的完整 prompt、Skill 内容、模型参数和 tool catalog。Provider transport、credential reference 形状、MCP endpoint/auth binding，或本地工具 schema 与安全元数据发生漂移时，恢复会被拒绝。同一 credential reference 指向的密文值可以轮换。快照在 clone、摘要和落库前还受总字节数、目录项数、单项体积和嵌套深度限制。
+
+## 6. 时序图
 
 ### 6.1 一轮 turn（含审批与工具）
 
@@ -175,9 +188,9 @@ interface EngineTransport {
 // 实现2：DirectTransport（单测/Node 集成测试，直连引擎实例，不依赖 chrome API）
 ```
 
-引擎与 UI 组件对 transport 无感——这使 Agent loop 可在 Vitest 里用 mock provider + DirectTransport 完整回归，不开浏览器。
+引擎和 UI 组件不依赖具体 transport。Vitest 因此可以用 mock Provider 与 DirectTransport 测试 Agent loop，而不启动浏览器。
 
-## 8. 已定事项
+## 8. 当前约束
 
 - steer 注入点固定在「LLM 调用间隙」，不做工具执行间隙注入：工具执行通常在秒级完成，中途注入的收益小，而中断/恢复工具执行的复杂度高。等不及的场景用 `interrupt`。
 - 不做子代理（spawn_subagent）：单 loop + 好快照的收益先于多 Agent 编排；Thread 的 `parentThreadId` 字段由 fork 使用。

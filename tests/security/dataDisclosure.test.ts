@@ -13,14 +13,14 @@ describe('store data disclosure contract', () => {
       expect(disclosure).toContain(token);
     }
     expect(disclosure).toContain(
-      'Under `always`, browser reads ask first; under `untrusted` and `auto`, browser reads run without a separate approval prompt.',
+      '**Ask for everything** (`always`) asks before reads; **Ask before acting** (`untrusted`) and **Act automatically** (`auto`) allow reads without a separate prompt.',
     );
     expect(disclosure).toContain(
-      '`auto` can run them without a per-call prompt unless a permission rule or safety check forces ASK or DENY.',
+      '**Act automatically** can run them without a per-call prompt unless a rule or safety check forces ASK or DENY.',
     );
-    expect(disclosure).toContain('Permission rules remain mandatory in all three policies.');
+    expect(disclosure).toContain('Saved rules apply in all three modes.');
     expect(disclosure).toContain(
-      '`always` 会在读取前询问；`untrusted` 和 `auto` 下，浏览器读取不会另行弹出审批。',
+      '“全程询问”（`always`）会在读取前询问；“操作询问”（`untrusted`）和“自动操作”（`auto`）下，读取不会另行弹出审批。',
     );
   });
 

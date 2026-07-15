@@ -1,9 +1,9 @@
-# 08 — Skills 与 Plugin 体系
+# 08 — Skills 与 Plugins
 
-> 文档索引：[README.md](../README.md) · 关联：[04 Agent 引擎](./04-agent-engine.md) · [09 界面](./09-ui.md) · [10 提示词](./10-prompts.md)
-> 格式决策：兼容 Claude Code 的 SKILL.md（社区生态可直接导入）；斜杠命令的变量表单借鉴 OpenWebUI
+> 文档入口：[文档目录](./README.md) · 关联：[04 Agent 引擎](./04-agent-engine.md) · [09 界面](./09-ui.md) · [10 提示词](./10-prompts.md)
+> 格式：单文件 Skill 兼容 Claude Code 的 `SKILL.md`；斜杠命令的变量表单参考 OpenWebUI。
 
-> **实现状态**：单文件 SKILL.md 的解析、编辑、文件/URL 导入、冲突处理、导出、渐进披露和 Skill 斜杠命令已接入。数据型 Plugin 支持本地 ZIP/普通 GitHub 仓库或 archive URL 安装、整体启停与卸载；精选索引随构建内置但当前为空。
+> 当前支持单文件 `SKILL.md` 的解析、编辑、文件或 URL 导入、冲突处理、导出、渐进披露和斜杠命令。数据型 Plugin 可以从本地 ZIP、普通 GitHub 仓库或 archive URL 安装，并支持整体启停和卸载。精选索引已接入，但当前没有内置条目。
 
 ---
 
@@ -53,18 +53,18 @@ interface SkillRecord {
 }
 ```
 
-## 2. 渐进披露（与 Claude Code 行为一致）
+## 2. 渐进披露
 
-1. **索引常驻**：所有 enabled Skill 的 `name + description` 拼入 system prompt 的 Skills 区块（10 §6）；有 `sites` 作用域的 Skill 仅在当前默认网页 tab 匹配时进入索引（省 prompt 空间）；显式 `tabId` 工具调用仍由工具与权限层按实际目标裁决；
-2. **按需加载**：模型判断相关时调用内置工具 `load_skill{name}` → 返回完整 body 作为 tool_result 进入上下文；
+1. 所有 enabled Skill 的 `name + description` 会进入 system prompt 的 Skills 区块（10 §6）。带 `sites` 的 Skill 只在当前默认网页 tab 匹配时进入索引；显式 `tabId` 工具调用仍按实际目标经过工具与权限层裁决；
+2. 模型判断 Skill 与任务相关时调用 `load_skill{name}`，完整 body 作为 tool_result 进入上下文；
 3. `load_skill` effects:'read'、默认 allow；同一 Skill 每 Thread 只完整加载一次（重复调用返回「已加载」提示）；
 4. `auto_suggest`：`SkillManager.suggestionsFor(url)` 已实现并有单测，但 content script URL 变化 → 侧边栏建议胶囊的 UI 链路尚未接入。
 
 ## 3. 管理与导入
 
-- **编辑器**：设置页内置 SKILL.md 编辑器（CodeMirror，frontmatter 实时校验 + 模板起步）；
-- **导入**：设置页可选择 `.md` 文件、填写直接返回 SKILL.md 的 URL，或在编辑器中粘贴。使用完整 YAML parser；若正文引用 scripts/references 等伴随文件，会在单文件导入前提示依赖不会随同导入；同名 Skill 必须选择覆盖或自动改名；
-- **导出**：每个 Skill 可下载为单文件 `<name>.SKILL.md`。多文件 Skill 仍不打包，导入提示只负责暴露限制。
+设置页使用 CodeMirror 编辑 `SKILL.md`，并实时校验 frontmatter。导入支持 `.md` 文件、直接返回 `SKILL.md` 的 URL 和粘贴内容。正文引用 scripts/references 等伴随文件时，界面会提示这些依赖不会随单文件导入；同名 Skill 需要选择覆盖或自动改名。
+
+每个 Skill 都可以导出为 `<name>.SKILL.md`。当前不会打包多文件 Skill。
 
 ## 4. 斜杠命令体系
 
@@ -91,7 +91,9 @@ my-plugin/
 
 安装器接受本地 ZIP、普通 GitHub 仓库 URL、tree/archive/release ZIP URL；普通仓库先读取 default branch，再从 codeload 下载。GitHub archive 的单一顶层目录会安全剥离。所有文件必须在 manifest 中声明，完整解析/冲突检查后才在单个 Dexie 事务中写入；设置页显示已安装资产清单并支持整体启停/卸载。
 
-**信任边界**：Plugin 是数据不是代码。压缩包限制 10 MB，实际解压输出按流逐块累计并限制 50 MB，文件数限制 1000；超限立即中止分析，不信任 ZIP 声明的未压缩大小。拒绝路径穿越、symlink、Unix executable bit 和常见可执行扩展名；资产只读，编辑前复制为用户资产。当前格式不导入 MCP 配置或权限规则。
+Plugin 只包含数据，不执行代码。压缩包最多 10 MB，实际解压输出最多 50 MB，文件数最多 1000。解压时按流累计实际大小，不采用 ZIP 声明的未压缩大小。
+
+安装器会拒绝路径穿越、symlink、Unix executable bit 和常见可执行扩展名。资产以只读方式安装，编辑前需要复制为用户资产。当前格式不导入 MCP 配置或权限规则。
 
 精选索引接口随构建内置，当前返回空列表；不做自动更新、市场评分或远程可执行内容。
 
@@ -99,7 +101,7 @@ my-plugin/
 
 独立于 Skill 的轻量机制（类似 per-domain CLAUDE.md）：设置页维护 `{ pattern, prompt }[]`，支持 exact host 与 `*.domain`，后台按目标 tab 匹配并拼入 system prompt。启用 Plugin 的 site-instruction 只读资产参与合并，可复制为用户指令后编辑。
 
-## 7. 已定事项
+## 7. 当前约束
 
-- Claude Code frontmatter 的 `allowed-tools` 不映射到 Panelot 权限：解析时 passthrough 保留、不生效也不报错。权限只认 Gatekeeper 一个闸口——Skill 自带的工具声明是能力提示而非安全边界，让它影响裁决反而制造第二套权限来源。
+- Claude Code frontmatter 中的 `allowed-tools` 会被 passthrough 保留，但不映射到 Panelot 权限。Skill 自带的工具声明只作能力提示；权限仍由 Gatekeeper 裁决。
 - 不做 Skill 更新检查：imported 记录存有 `sourceRef` 供手动溯源，无自动更新通道（Skill 是用户资产，静默变更反而危险）。

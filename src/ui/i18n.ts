@@ -52,8 +52,8 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
 
   // Composer
   'input.placeholder': {
-    'zh-CN': '给 Panelot 发消息… (@ 引用 / 命令)',
-    en: 'Message Panelot… (@ mention / command)',
+    'zh-CN': '给 Panelot 发消息…（@ 引用，/ 命令）',
+    en: 'Message Panelot… (@ references, / commands)',
   },
   'input.running': { 'zh-CN': '输入以插话，Esc 停止…', en: 'Type to steer, Esc to stop…' },
   'input.noProvider': { 'zh-CN': '先在设置中添加模型 →', en: 'Add a model in settings first →' },
@@ -100,7 +100,7 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   // Approval
   'approval.allow': { 'zh-CN': '允许', en: 'Allow' },
   'approval.allowOnce': { 'zh-CN': '允许一次', en: 'Allow once' },
-  'approval.allowSession': { 'zh-CN': '本轮会话', en: 'This session' },
+  'approval.allowSession': { 'zh-CN': '本次会话', en: 'This chat' },
   'approval.allowSite': { 'zh-CN': '本站始终', en: 'Always on this site' },
   'approval.decline': { 'zh-CN': '拒绝', en: 'Decline' },
   'approval.crossScope': {
@@ -343,8 +343,8 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   'settings.general.theme.light': { 'zh-CN': '亮色', en: 'Light' },
   'settings.about.title': { 'zh-CN': '关于 Panelot', en: 'About Panelot' },
   'settings.about.summary': {
-    'zh-CN': '一款浏览器自动化AI Agent插件',
-    en: 'A browser automation AI agent extension.',
+    'zh-CN': '连接自己的模型，在浏览器里阅读页面和执行操作。',
+    en: 'Connect your own model to read and operate pages in the browser.',
   },
   'settings.about.github': { 'zh-CN': '查看 GitHub', en: 'View on GitHub' },
 
@@ -353,8 +353,8 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   'settings.providers.add': { 'zh-CN': '添加连接', en: 'Add connection' },
   'settings.providers.emptyTitle': { 'zh-CN': '还没有模型连接', en: 'No model connections yet' },
   'settings.providers.emptyHint': {
-    'zh-CN': '添加连接、选择接口类型并填入 API Key，即可开始对话。',
-    en: 'Add a connection, choose its API type, and enter an API key to start chatting.',
+    'zh-CN': '添加 OpenAI 兼容或 Anthropic 连接，验证后即可开始对话。',
+    en: 'Add an OpenAI-compatible or Anthropic connection, then verify it to start chatting.',
   },
   'settings.providers.defaultModel': { 'zh-CN': '默认模型', en: 'Default model' },
   'settings.providers.defaultModelHint': {
@@ -505,7 +505,7 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
     'zh-CN': '自动放行只读操作，点击、输入等写操作先审批（推荐）。',
     en: 'Allow reads; ask before clicks, typing, and other writes (recommended).',
   },
-  'settings.permissions.policy.auto.label': { 'zh-CN': '无需审批', en: 'Act without asking' },
+  'settings.permissions.policy.auto.label': { 'zh-CN': '自动操作', en: 'Act automatically' },
   'settings.permissions.policy.auto.desc': {
     'zh-CN': '自动执行写操作；敏感站点、敏感信息与权限规则仍必须遵守。',
     en: 'Execute writes automatically; sensitive sites, sensitive data, and permission rules still apply.',
@@ -541,13 +541,13 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
     en: 'ask forces confirmation even when the default policy would allow it. Categories: {categories}',
   },
   'settings.permissions.sensitive': {
-    'zh-CN': '敏感站点黑名单（硬拒绝，不可被规则覆盖）',
-    en: 'Sensitive-site blocklist (hard deny; rules cannot override it)',
+    'zh-CN': '敏感站点（写操作始终拒绝）',
+    en: 'Sensitive sites (writes are always denied)',
   },
   'settings.permissions.removeSensitive': { 'zh-CN': '移除 {pattern}', en: 'Remove {pattern}' },
   'settings.permissions.showBuiltIn': {
-    'zh-CN': '查看 {n} 条预置黑名单',
-    en: 'Show {n} built-in blocklist entries',
+    'zh-CN': '查看 {n} 个预置站点',
+    en: 'Show {n} built-in sites',
   },
 
   // Onboarding
@@ -585,7 +585,10 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
     en: 'You can change this later in Settings → Browser permissions.',
   },
   'onboarding.finish': { 'zh-CN': '完成', en: 'Finish' },
-  'onboarding.ready': { 'zh-CN': '就绪！试试第一条指令', en: 'Ready! Try your first request' },
+  'onboarding.ready': {
+    'zh-CN': '配置完成。试试第一条指令',
+    en: 'Setup complete. Try your first request',
+  },
   'onboarding.demo': { 'zh-CN': '总结当前页面的要点', en: 'Summarize the key points on this page' },
   'onboarding.demoHint': {
     'zh-CN': '也可以直接提问；用 @ 引用页面，用 / 调用命令。',
@@ -668,8 +671,8 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   },
   'settings.plugins.emptyTitle': { 'zh-CN': '尚未安装 Plugin', en: 'No Plugins installed' },
   'settings.plugins.emptyHint': {
-    'zh-CN': '从 GitHub 或本地 ZIP 安装受信任的 Plugin。',
-    en: 'Install a trusted Plugin from GitHub or a local ZIP.',
+    'zh-CN': '可从 GitHub 或本地 ZIP 安装。安装前请核对来源和内容。',
+    en: 'Install from GitHub or a local ZIP. Review the source and contents first.',
   },
   'settings.plugins.enable': { 'zh-CN': '启用 {name}', en: 'Enable {name}' },
   'settings.plugins.disable': { 'zh-CN': '停用 {name}', en: 'Disable {name}' },
@@ -837,8 +840,8 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   'settings.mcp.parseAdd': { 'zh-CN': '解析并添加', en: 'Parse and add' },
   'settings.mcp.emptyTitle': { 'zh-CN': '还没有 MCP 服务器', en: 'No MCP servers yet' },
   'settings.mcp.emptyHint': {
-    'zh-CN': '粘贴配置片段即可接入远端工具。',
-    en: 'Paste a configuration snippet to connect remote tools.',
+    'zh-CN': '粘贴兼容配置，连接远端 Tool、Prompt 和 Resource。',
+    en: 'Paste a compatible configuration to connect remote tools, prompts, and resources.',
   },
   'settings.mcp.enable': { 'zh-CN': '启用 {name}', en: 'Enable {name}' },
   'settings.mcp.reconnect': { 'zh-CN': '重新连接', en: 'Reconnect' },
@@ -957,8 +960,8 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
 
   'settings.presets.title': { 'zh-CN': '模型预设', en: 'Model presets' },
   'settings.presets.summary': {
-    'zh-CN': '把模型、提示词、工具和审批策略固定为可审计的 Agent 配置。',
-    en: 'Pin model, prompt, tools, and approval policy into an auditable agent profile.',
+    'zh-CN': '保存一组模型、提示词、工具和审批策略，供新会话复用。',
+    en: 'Save a model, prompt, tools, and approval policy for reuse in new chats.',
   },
   'settings.presets.new': { 'zh-CN': '新建预设', en: 'New preset' },
   'settings.presets.taskModel': { 'zh-CN': '后台任务模型', en: 'Task model' },
@@ -973,8 +976,8 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   },
   'settings.presets.emptyTitle': { 'zh-CN': '还没有模型预设', en: 'No model presets yet' },
   'settings.presets.emptyHint': {
-    'zh-CN': '创建预设，让新会话拥有一致的模型、参数与能力边界。',
-    en: 'Create one to give new chats a consistent model, parameters, and capability boundary.',
+    'zh-CN': '创建预设，为新会话复用同一组模型、参数和工具。',
+    en: 'Create a preset to reuse the same model, parameters, and tools in new chats.',
   },
   'settings.presets.saved': { 'zh-CN': '预设已保存', en: 'Preset saved' },
   'settings.presets.edit': { 'zh-CN': '编辑', en: 'Edit' },
@@ -990,8 +993,8 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   'settings.presets.editTitle': { 'zh-CN': '编辑预设', en: 'Edit preset' },
   'settings.presets.createTitle': { 'zh-CN': '创建模型预设', en: 'Create model preset' },
   'settings.presets.formHint': {
-    'zh-CN': '每个字段都会写入最终解析的运行环境。',
-    en: 'Every field is persisted into the resolved run environment.',
+    'zh-CN': '开始任务时，Panelot 会把这些设置写入本次运行环境。',
+    en: 'Panelot applies these settings to the run environment when a task starts.',
   },
   'settings.presets.name': { 'zh-CN': '名称', en: 'Name' },
   'settings.presets.icon': { 'zh-CN': '图标或 Emoji', en: 'Icon or emoji' },
@@ -1031,15 +1034,15 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   'perm.switch': { 'zh-CN': '权限模式', en: 'Permission mode' },
   'perm.always': { 'zh-CN': '全程询问', en: 'Ask for everything' },
   'perm.alwaysHint': {
-    'zh-CN': '每一步都先征求同意，包括读取页面',
-    en: 'Every step asks first, reading included',
+    'zh-CN': '所有浏览器和 MCP 工具调用都先询问，包括读取',
+    en: 'Ask before every browser and MCP tool call, including reads',
   },
   'perm.balanced': { 'zh-CN': '操作询问', en: 'Ask before acting' },
   'perm.balancedHint': {
     'zh-CN': '自由读取；点击/输入等写操作先询问（默认）',
     en: 'Reads freely; clicks/typing ask first (default)',
   },
-  'perm.auto': { 'zh-CN': '无需审批', en: 'Act without asking' },
+  'perm.auto': { 'zh-CN': '自动操作', en: 'Act automatically' },
   'perm.autoHint': {
     'zh-CN': '自动执行操作；敏感站点与敏感信息仍会拦截',
     en: 'Acts autonomously; sensitive sites & payloads still guarded',
@@ -1078,18 +1081,18 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   },
   'empty.sugCompare': { 'zh-CN': '跨标签页比价/比参数', en: 'Compare across open tabs' },
   'empty.sugCompareHint': {
-    'zh-CN': '让 Panelot 逐个读取打开的标签页',
-    en: 'Panelot reads each open tab for you',
+    'zh-CN': '读取多个已打开的标签页后整理差异',
+    en: 'Read several open tabs and summarize the differences',
   },
   'empty.sugForm': { 'zh-CN': '帮我填这个表单', en: 'Fill this form for me' },
   'empty.sugFormHint': {
-    'zh-CN': '每步写操作都会先征求批准',
-    en: 'Every write action asks for approval first',
+    'zh-CN': '写操作遵守当前权限模式和规则',
+    en: 'Writes follow the current permission mode and rules',
   },
   'empty.sugExtract': { 'zh-CN': '提取页面数据为表格', en: 'Extract page data as a table' },
   'empty.sugExtractHint': {
-    'zh-CN': '结构化抽取正文/列表/表格',
-    en: 'Structured extraction of content/lists/tables',
+    'zh-CN': '把正文、列表或表格整理成结构化结果',
+    en: 'Turn page content, lists, or tables into structured results',
   },
   // Page-type-aware suggestions (side panel)
   'empty.sugVideo': { 'zh-CN': '总结这个视频', en: 'Summarize this video' },

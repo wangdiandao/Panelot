@@ -3,79 +3,80 @@
 
 # Panelot
 
-Browser-native AI agent for Chrome and Edge. Bring your own model, operate the web with
-auditable tools, and extend the agent with Skills, data-only Plugins, and remote MCP.
+An AI agent extension for Chrome and Edge. Connect a model provider you already use, give the
+agent page context, and review browser actions as they happen.
 
-[中文文档](./README.zh-CN.md) · [Documentation](./docs/01-architecture.md) ·
+[简体中文](./README.zh-CN.md) · [Documentation](./docs/README.md) ·
 [Development guide](./docs/development.md) · [Changelog](./CHANGELOG.md)
 
 </div>
 
-## Highlights
+## What Panelot does
 
-- **BYOK providers:** OpenAI-compatible and Anthropic APIs, streaming tool calls, endpoint
-  verification, custom headers, multiple-key failover, request diagnostics, and bounded retry.
-- **Browser operation:** multi-tab workflows, accessibility snapshots, DOM actions, downloads,
-  screenshots, and on-demand CDP fallbacks with structured action evidence.
-- **Safety boundaries:** approval policies, capability scopes, sensitive-origin blocking,
-  untrusted-content fencing, stale-reference rejection, and explicit recovery for uncertain writes.
-- **Extensibility:** editable `SKILL.md` instructions, validated data-only Plugin archives, and
-  remote MCP tools, prompts, resources, OAuth, and encrypted bearer-token storage.
-- **Local-first state:** conversations, queues, approvals, settings, Skills, memories, and
-  attachments live in extension storage. Selected context is sent only to endpoints the user
-  configures; Panelot has no application backend or telemetry.
+Panelot runs in the browser rather than on a Panelot server. Conversations, settings, approvals,
+Skills, Plugins, memories, and attachments are stored in the extension profile.
 
-## How it works
+- It connects to OpenAI-compatible and Anthropic APIs with your own keys. Connections support
+  endpoint verification, custom headers, multiple-key failover, and request diagnostics.
+- It can work across open tabs, read accessibility snapshots, click and type in pages, download
+  files, take screenshots, and use CDP when an in-page action is not enough.
+- It can load `SKILL.md` instructions, install validated data-only Plugins, and connect to remote
+  MCP tools, prompts, and resources over Streamable HTTP.
+- Runs, queues, and approvals are persisted. After a service-worker restart, read-only or
+  retry-safe work can resume; writes with an unknown outcome wait for the user.
 
-Panelot runs its engine in the MV3 background service worker. The side panel and full-page chat
-are views over the same typed protocol and durable conversation tree. The agent loops until the
-model stops requesting tools; every registered action passes through the Gatekeeper before the
-browser tool gateway executes it.
+Browser actions pass through the permission policy and saved rules. Sensitive origins remain
+blocked for writes, and advanced CDP actions are identified before execution. Chrome also shows
+its debugger banner while CDP is attached.
 
-```text
-Side panel / Full-page chat
-            │ typed Op / AgentEvent protocol
-            ▼
-Background Service Worker
-  ├─ durable run, queue, approval, and recovery state
-  ├─ OpenAI-compatible / Anthropic provider adapters
-  ├─ Skills and remote MCP
-  └─ Gatekeeper → tabs / content scripts / on-demand CDP
-            │
-            ▼
-      Extension-local storage
-```
+## Install and set up
 
-Architecture, provider, browser-tool, permission, MCP, Skill, UI, and prompt contracts are under
-[`docs/`](./docs). Those documents describe both implemented constraints and explicit targets;
-source and tests remain the authority for current behavior.
-
-## Install a release
-
-1. Download `panelot-<version>-chrome.zip` or `panelot-<version>-edge.zip` from
+1. Download the Chrome or Edge ZIP from
    [GitHub Releases](https://github.com/wangdiandao/Panelot/releases).
-2. Extract the archive to a permanent directory.
+2. Extract it to a directory you plan to keep.
 3. Open `chrome://extensions` or `edge://extensions`, enable **Developer mode**, choose
    **Load unpacked**, and select the extracted directory.
-4. Open Panelot, add an OpenAI-compatible or Anthropic connection under **Settings → Models**,
-   run **Verify**, and select a default model.
+4. In **Settings → Models**, add an OpenAI-compatible or Anthropic connection, run **Verify**, and
+   choose a default model.
 
-Use `+` to attach the current page, `@` to reference an open tab or MCP resource, and `/` to invoke
-a Skill. Browser writes follow the configured approval policy and site rules.
+Use `+` to add the current page or a file, `@` to reference an open tab or MCP resource, and `/` to
+run a Skill or MCP prompt. The task model used for titles can be selected separately under
+**Settings → Presets**.
 
-## Current boundaries
+## Data and network access
 
-- Chrome/Edge MV3, Chrome 116 or newer; Firefox and Safari are not build targets.
-- Remote Streamable HTTP MCP is supported; local stdio MCP is not.
-- Plugins contain validated read-only data assets, not remote executable code.
-- Endpoint compatibility is established by **Verify** and a real request, not by the provider
-  label alone.
-- Engine changes require reloading the extension at `chrome://extensions`; reloading a web page
-  does not restart the service worker.
+Panelot has no account service, application backend, cloud sync, advertising, or telemetry.
+Selected conversation context is sent directly to the model provider you configure. MCP arguments
+and results are exchanged with the MCP server you enable. Website access is requested per origin
+when it is needed and can be revoked in the browser.
+
+Credentials are encrypted in extension-local storage. This protects them from casual inspection
+and accidental export; it is not a security boundary against an attacker who can read the browser
+profile or run code as the user. See the [privacy policy](./docs/privacy-policy.md) and
+[permission rationale](./store/permissions.md) for the complete data flow.
+
+## Current limits
+
+- The build targets Chrome and Edge MV3 on Chrome 116 or newer. Firefox and Safari are not build
+  targets.
+- MCP uses remote Streamable HTTP. Local stdio servers are not supported.
+- Plugins contain validated, read-only data assets. They cannot run remote code.
+- Skills are imported as one `SKILL.md` file; companion `scripts/` and `references/` directories
+  are not imported.
+- There is no built-in `web_search` or separate `ask_user` tool. The model can still ask a normal
+  question in chat.
+- A provider label does not guarantee compatibility. Use **Verify**, then test the selected model
+  with a real request.
+
+## Documentation
+
+Start with the [documentation index](./docs/README.md). It separates current runtime contracts,
+developer operations, historical design research, and unverified experience targets. Source code
+and tests remain authoritative when a document and the implementation disagree.
 
 ## Development
 
-Requirements: Node.js 20.19+ or 22.12+, pnpm 9.12.3, and Chrome 116+.
+Requirements: Node.js 20.19 or newer, pnpm 9.12.3, and Chrome 116 or newer.
 
 ```bash
 pnpm install
@@ -90,10 +91,10 @@ pnpm build:edge
 pnpm budget
 ```
 
-Production archives are generated with `pnpm zip` and `pnpm zip:edge`. A `v*` tag triggers the
-GitHub release workflow for browser archives, checksums, release notes, and an SBOM. See the
-[development guide](./docs/development.md) for repository structure and release verification.
+Engine changes require reloading Panelot from `chrome://extensions`; refreshing a web page does not
+restart the MV3 service worker. Production archives use `pnpm zip` and `pnpm zip:edge`. The
+[development guide](./docs/development.md) covers repository layout, verification, and releases.
 
 ## License
 
-See [LICENSE](./LICENSE).
+[MIT](./LICENSE)

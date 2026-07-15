@@ -43,7 +43,7 @@ export default defineConfig({
   manifest: {
     name: 'Panelot',
     description:
-      'Browser-native AI agent — bring your own model, operate the web, extend with Skills & MCP.',
+      'Use your own AI model with browser tools, Skills, and remote MCP in Chrome or Edge.',
     permissions: [
       'sidePanel',
       'storage',

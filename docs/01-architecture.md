@@ -1,7 +1,7 @@
-# 01 — 整体架构与消息协议
+# 01 — 架构与消息协议
 
-> 文档索引：[README.md](../README.md) · 关联：[02 数据模型](./02-data-model.md) · [04 Agent 引擎](./04-agent-engine.md) · [06 权限](./06-permissions.md)
-> 借鉴来源：Codex CLI 的 SQ/EQ 双队列与 app-server JSON-RPC 协议、Pi Agent 的 transport 抽象（详见 [11 参考项目](./11-references.md)）
+> 文档入口：[文档目录](./README.md) · 关联：[02 数据模型](./02-data-model.md) · [04 Agent 引擎](./04-agent-engine.md) · [06 权限](./06-permissions.md)
+> 相关调研：Codex CLI 的 SQ/EQ 双队列与 app-server JSON-RPC 协议、Pi Agent 的 transport 抽象。来源见 [11 参考项目](./11-references.md)。
 
 ---
 
@@ -31,11 +31,11 @@
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-原则：
+当前约束：
 
-- **引擎唯一**：所有状态变更（会话、审批、工具执行）只发生在 background；UI 是可重连的薄视图。
-- **UI 可多开**：同一 Thread 可被侧边栏和全屏页同时订阅，事件广播到所有订阅 Port。
-- **UI 无本地真相**：UI 状态 = 落库数据回放 + 实时事件叠加。UI 崩溃/关闭不影响任务。
+- 会话、审批和工具执行的状态只由 background 引擎修改；UI 是可重连的视图。
+- 同一 Thread 可以同时显示在侧边栏和全屏页中，事件会广播到所有订阅它的 Port。
+- UI 状态由已落库数据和实时事件合成。关闭或重开 UI 不会直接终止任务。
 
 ## 2. 三层原语：Thread / Turn / Item
 
@@ -55,8 +55,8 @@ Item 类型（`ItemKind`）：`user_message` / `assistant_message` / `reasoning`
 
 - 客户端 → 引擎：**Op**（操作，等价 Codex 的 Submission），每个 Op 带客户端生成的 `submissionId`（UUID）。
 - 引擎 → 客户端：**AgentEvent**（事件），凡由某个 Op 直接引发的事件回填 `submissionId`；广播类事件（其他 UI 引发的变更）不带。
-- **共享类型单一来源**：全部类型定义在 `src/messaging/protocol.ts`，引擎与三个 UI 入口 import 同一份，禁止各自复制。
-- **前向兼容**：`AgentEvent` 是开放联合；UI 对未知 `type` 一律忽略（不报错、不崩），保证引擎先行迭代。
+- 共享类型都定义在 `src/messaging/protocol.ts`，引擎和三个 UI 入口直接引用，不各自复制。
+- `AgentEvent` 是开放联合。UI 忽略未知 `type`，以便引擎与 UI 在扩展更新期间完成版本握手。
 
 ### 3.2 Op 联合类型
 
@@ -132,9 +132,9 @@ interface TurnOverrides {
 }
 ```
 
-上面是核心字段摘要；精确联合还包含注释和兼容字段，以 `src/messaging/protocol.ts` 为唯一事实源。当前 `thread.fork` 只创建带 `parentThreadId` 的新空 Thread，不复制来源节点；对话内“编辑重发/重新生成”走 `turn.fork`，在同一消息树上创建兄弟分支。
+上面只列常用字段；完整联合及兼容字段以 `src/messaging/protocol.ts` 为准。当前 `thread.fork` 只创建带 `parentThreadId` 的新空 Thread，不复制来源节点；对话内“编辑重发/重新生成”走 `turn.fork`，在同一消息树上创建兄弟分支。
 
-### 3.3 AgentEvent 联合类型（核心摘要）
+### 3.3 AgentEvent 联合类型摘要
 
 ```ts
 type AgentEvent =
@@ -282,7 +282,7 @@ tool_call
 - content script 消息协议同样定义在 `protocol.ts`（`ContentScriptOp` / `ContentScriptResult`），带超时（默认 10s）与单次重注入重试。
 - debugger attach 以 tab 为粒度记录；当前在最后一次 CDP 调用空闲 30s 后自动 detach，没有 turn-complete 立即 detach。
 
-## 6. 已定事项
+## 6. 当前约束
 
 - `protocol` 或 schema hash 不匹配时，EngineHost 返回 `fatal.reload_required` 并断开；该最小控制信封对版本保持可解析，host 回显请求方 `protocol`，使旧 UI 能进入 `reloadRequired` 并停止重连。`initialized` 与其余普通事件仍只接受当前协议和 schema hash，不提供行为兼容分支。未知 AgentEvent 仍应忽略。
 - 多窗口 Side Panel：各窗口独立选择 Thread（`chrome.sidePanel` 本身 per-window），同一 Thread 被多处订阅时靠事件广播保持一致，无须额外绑定机制。

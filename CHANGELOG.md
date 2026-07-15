@@ -4,6 +4,34 @@ All notable changes to Panelot are documented here.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-15
+
+### Changed
+
+- Reworked the bilingual README, documentation index, store copy, and UI guidance so they match
+  the current permission modes, task-model selector, deep browser tools, and i18n coverage.
+- Reconciled the architecture, Agent, browser-tool, permission, Provider, MCP, Plugin, UI, prompt,
+  and development guides with the current source and test contracts while keeping experience goals
+  explicitly separate from implemented behavior.
+- Removed completed Provider diagnostics plan files from the published documentation tree.
+
+## [0.4.0] - 2026-07-15
+
+### Added
+
+- Shared shadcn-based UI primitives for attachments, sidebars, progress, keyboard hints, scrolling,
+  tables, and settings surfaces.
+- Regression coverage for Agent loop behavior, tool schemas, browser data, page context, message
+  rendering, engine reconnects, extension startup, and service-worker recovery.
+
+### Changed
+
+- Hardened browser tools and Agent event handling around result schemas, hidden-tab targeting,
+  deep actions, recovery, and tool-result limits.
+- Standardized the chat, onboarding, approval, queue, thread, Provider, MCP, Plugin, Skill,
+  attachment, permission, and data settings interfaces on shared accessible components.
+- Stabilized release verification, bundle budgets, and extension end-to-end tests.
+
 ## [0.3.0] - 2026-07-15
 
 ### Added
@@ -77,6 +105,8 @@ All notable changes to Panelot are documented here.
 - Plugin archives reject traversal, symlinks, executable payloads, and archive bombs.
 - Provider error details are sanitized before display or persistence.
 
-[Unreleased]: https://github.com/wangdiandao/Panelot/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/wangdiandao/Panelot/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/wangdiandao/Panelot/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/wangdiandao/Panelot/releases/tag/v0.4.0
 [0.3.0]: https://github.com/wangdiandao/Panelot/releases/tag/v0.3.0
 [0.2.0]: https://github.com/wangdiandao/Panelot/releases/tag/v0.2.0

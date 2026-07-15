@@ -1,7 +1,7 @@
-# 03 — Provider 体系
+# 03 — Provider
 
-> 文档索引：[README.md](../README.md) · 关联：[01 架构](./01-architecture.md) · [04 Agent 引擎](./04-agent-engine.md)
-> 借鉴来源：OpenWebUI 的协议优先抽象 / 模型预设 / task model（并补其 customHeaders、多 key、并发拉取三处短板）
+> 文档入口：[文档目录](./README.md) · 关联：[01 架构](./01-architecture.md) · [04 Agent 引擎](./04-agent-engine.md)
+> 相关调研：OpenWebUI 的协议抽象、模型预设和 task model。Panelot 另外实现了自定义 Header、多 Key 和并发模型拉取。
 
 ---
 
@@ -46,7 +46,7 @@ interface ModelEntry {
 
 resolver 将 ModelEntry pricing 固化进 Run 环境，usage 与 Thread 统计同事务累计 `costUsd`；未配置价格时成本为 0。
 
-### 1.3 ModelPreset —— 命名 Agent（OpenWebUI Models Workspace 的移植）
+### 1.3 ModelPreset
 
 数据类型、`chrome.storage.local` 访问层和独立 ModelPreset 管理页已经实现；支持新建、编辑、删除以及把 Plugin 只读 preset 复制为用户资产。
 
@@ -81,7 +81,7 @@ interface GenParams {
 // 规则2：Panelot 自有控制字段（如 UI 渲染选项）绝不混入 payload
 ```
 
-### 1.5 Task Model —— 副任务路由
+### 1.5 Task Model
 
 Presets 设置页提供全局任务模型选择器（可指向任意 connection）；标题生成优先使用它，未配置时回退主对话模型。follow-up 建议尚未接入 UI。
 
@@ -184,7 +184,7 @@ type ProviderError =
 重试只发生在「本次 LLM 调用」层；工具执行错误不在此层（那是模型自纠的领域）。`rate_limit`、`overloaded`、`network` 可重试；`auth`、`context_too_long`、`content_filter`、`protocol` 和未知类型默认不可重试。这里的 `content_filter` 错误不同于成功响应中的同名 `stopReason`：后者必须保留响应并向用户说明停止原因。
 错误详情保留 OpenAI `x-request-id` 或 Anthropic `request-id`，用于问题定位；不记录 API Key 或完整响应体。
 
-## 8. 已定事项
+## 8. 当前约束
 
 - 多 key 轮换粒度：**粘性 key + 失败才切换**（非 round-robin）——对 provider 侧 prompt cache 更友好（Anthropic cache 按账号，OpenAI 按 key）。429/401 时先 failover 到下一个 key，全部失效才报错。
 - Gemini 不做第三种 kind：其 OpenAI 兼容层已覆盖需求，新增线协议的维护成本不值。

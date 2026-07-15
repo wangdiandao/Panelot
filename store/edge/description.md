@@ -1,4 +1,3 @@
-# Panelot — browser-native AI agent for Microsoft Edge
+# Panelot — AI agent for Microsoft Edge
 
-Use your own AI model endpoint to read and operate the web from a local-first Edge extension. Panelot combines recoverable tasks, explicit approvals, Skills, plugins, MCP integrations, encrypted local credentials, and optional per-site access without accounts, telemetry, or cloud sync.
-
+Connect your own model endpoint to read pages and carry out browser tasks in Edge. Panelot supports recoverable runs, three permission modes, Skills, data-only Plugins, remote MCP, encrypted local credentials, and per-origin website access. It has no Panelot account, telemetry, or cloud sync.
