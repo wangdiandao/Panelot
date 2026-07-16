@@ -10,6 +10,8 @@
 
 import type {
   ApprovalDecision,
+  InteractionRequestPayload,
+  InteractionResponse,
   PermissionPolicy,
   ApprovalRequestPayload,
   ContentBlock,
@@ -59,6 +61,7 @@ export type NodeType =
   | 'tool_call'
   | 'tool_result'
   | 'approval_decision'
+  | 'interaction_response'
   | 'turn_context'
   | 'system_notice';
 
@@ -103,6 +106,13 @@ export interface ApprovalDecisionPayload {
   decidedAt: number;
 }
 
+export interface InteractionResponsePayload {
+  interactionId: string;
+  request: InteractionRequestPayload;
+  response: InteractionResponse;
+  respondedAt: number;
+}
+
 /** One per turn start — restores the environment on replay (docs/02 §2.2). */
 export interface TurnContextPayload {
   turnId: string;
@@ -126,6 +136,7 @@ export type NodePayload =
   | ToolCallPayload
   | ToolResultPayload
   | ApprovalDecisionPayload
+  | InteractionResponsePayload
   | TurnContextPayload
   | SystemNoticePayload;
 
@@ -200,6 +211,7 @@ export type RunState =
   | 'preparing'
   | 'streaming_model'
   | 'waiting_approval'
+  | 'waiting_interaction'
   | 'executing_tool'
   | 'paused_budget'
   | 'paused_uncertain'
@@ -368,6 +380,19 @@ export interface ApprovalRecord {
   /** Persisted timeout boundary so a restarted worker does not restart the wait window. */
   deadlineAt?: number;
   decidedAt?: number;
+}
+
+export interface InteractionRecord {
+  id: string;
+  threadId: string;
+  runId: string;
+  turnId: string;
+  itemId: string;
+  request: InteractionRequestPayload;
+  status: 'pending' | 'resolved';
+  response?: InteractionResponse;
+  requestedAt: number;
+  respondedAt?: number;
 }
 
 /** Durable proof that a destructive data import committed inside IndexedDB. */

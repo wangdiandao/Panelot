@@ -14,7 +14,7 @@ import type { ProviderErrorDetails } from '../providers/types';
 export const PROTOCOL_VERSION = 1;
 export const ENGINE_PROTOCOL = 'panelot/engine-v1' as const;
 export const ENGINE_SCHEMA_HASH =
-  'f0847bb919874375b6707b328fb7e61b367635f6bb16a45fafe4d5891d067337' as const;
+  'fbf1e682038a1c5ecdc4d783b2c86579305392561714cf3afb00d5a3f05862bf' as const;
 export const CONTENT_SCRIPT_PROTOCOL = 'panelot/content-v1' as const;
 export const CONTENT_SCRIPT_SCHEMA_HASH =
   '5183fbae23c854482874412b8703bf669cc2a0b00f0fca5413559b51da9067cd' as const;
@@ -108,6 +108,44 @@ export interface ApprovalRequestPayload {
   preview?: { snapshotLine?: string; screenshotAttachmentId?: string };
 }
 
+export interface AskUserOption {
+  value: string;
+  label: string;
+  description?: string;
+}
+
+export interface AskUserQuestion {
+  id: string;
+  question: string;
+  options?: AskUserOption[];
+}
+
+export type InteractionRequestPayload =
+  | { kind: 'ask_user'; questions: AskUserQuestion[] }
+  | { kind: 'user_action'; instruction: string; tabId?: number }
+  | {
+      kind: 'watch_page';
+      tabId: number;
+      condition:
+        | { type: 'text'; value: string }
+        | { type: 'text_gone'; value: string }
+        | { type: 'url'; value: string }
+        | { type: 'download'; downloadId: number };
+      deadlineAt: number;
+    }
+  | { kind: 'schedule'; resumeAt: number; reason: string }
+  | {
+      kind: 'mcp_elicitation';
+      serverId: string;
+      message: string;
+      requestedSchema: Record<string, unknown>;
+    };
+
+export type InteractionResponse =
+  | { kind: 'submit'; value: unknown }
+  | { kind: 'cancel'; note?: string }
+  | { kind: 'timeout'; value?: unknown };
+
 // ---------------------------------------------------------------------------
 // Thread / Turn / Item primitives (docs/01 §2)
 // ---------------------------------------------------------------------------
@@ -184,6 +222,14 @@ export interface PendingApproval {
   requestedAt: number;
 }
 
+export interface PendingInteraction {
+  interactionId: string;
+  turnId: string;
+  itemId: string;
+  request: InteractionRequestPayload;
+  requestedAt: number;
+}
+
 export interface ThreadSnapshotMeta {
   id: string;
   revision: number;
@@ -204,6 +250,7 @@ export interface ThreadSnapshot {
   items: SnapshotItem[];
   activeTurn: ActiveTurnState | null;
   pendingApprovals: PendingApproval[];
+  pendingInteractions?: PendingInteraction[];
   queuedInputs: number;
   queuedRuns: {
     runId: string;
@@ -224,7 +271,12 @@ export interface ThreadStreamCursor {
 
 export interface RunRecoveryState {
   runId: string;
-  state: 'waiting_approval' | 'paused_budget' | 'paused_uncertain' | 'interrupted';
+  state:
+    | 'waiting_approval'
+    | 'waiting_interaction'
+    | 'paused_budget'
+    | 'paused_uncertain'
+    | 'interrupted';
   revision: number;
   stopReason?: string;
   pendingTool?: {
@@ -319,6 +371,12 @@ export type Op =
       submissionId: string;
       approvalId: string;
       decision: ApprovalDecision;
+    }
+  | {
+      type: 'interaction.response';
+      submissionId: string;
+      interactionId: string;
+      response: InteractionResponse;
     }
   | { type: 'ping'; submissionId: string };
 
@@ -445,6 +503,14 @@ export type AgentEvent =
         approvalId: string;
         request: ApprovalRequestPayload;
       }
+    | {
+        type: 'interaction.request';
+        threadId: string;
+        turnId: string;
+        interactionId: string;
+        itemId: string;
+        request: InteractionRequestPayload;
+      }
     // —— broadcasts ——
     | {
         type: 'thread.updated';
@@ -473,7 +539,12 @@ export type AgentEvent =
          * subscribed to OTHER threads (the whole point).
          */
         type: 'activity.updated';
-        activity: { threadId: string; running: boolean; pendingApprovals: number };
+        activity: {
+          threadId: string;
+          running: boolean;
+          pendingApprovals: number;
+          pendingInteractions?: number;
+        };
       }
   ) & { stream?: ThreadStreamCursor };
 
@@ -547,6 +618,7 @@ const OP_TYPES = new Set<Op['type']>([
   'run.resume',
   'run.resolveUncertain',
   'approval.response',
+  'interaction.response',
   'ping',
 ]);
 

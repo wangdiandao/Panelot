@@ -104,6 +104,6 @@ sequenceDiagram
 
 ## 6. 非目标
 
-- Elicitation（MCP 服务器主动向用户提问）：不支持。工具结果里的提问文本可正常回给模型，但当前没有独立 `ask_user` 工具，只能由模型在普通回复中向用户提问。
+- Elicitation：支持 `form` 模式。MCP 工具调用期间，服务器请求被转成持久 `mcp_elicitation` 交互卡，用户接受、拒绝或取消后再回到原调用；`url` 模式当前明确 decline。由于远端 HTTP 调用无法跨 Service Worker 中断续接，恢复时不会假装答案已送达服务器，而是给模型返回明确失败，只有确认重试安全后才能重发 MCP 工具。
 - resources subscribe 的推送更新。
 - 本地 stdio 服务器（需 Native Host，违反零本地程序原则）。

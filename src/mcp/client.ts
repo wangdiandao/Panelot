@@ -1,6 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { extractWWWAuthenticateParams } from '@modelcontextprotocol/sdk/client/auth.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { ElicitRequestSchema, type ElicitResult } from '@modelcontextprotocol/sdk/types.js';
 import type { McpOAuthChallenge } from './types';
 
 export interface McpTool {
@@ -29,6 +30,15 @@ export interface McpClientOptions {
   onBeforeFetch?: (url: string) => Promise<void>;
   onUnauthorized?: (challenge: McpOAuthChallenge) => Promise<boolean>;
   onCapabilitiesChanged?: () => void;
+  onElicit?: (
+    request: { message: string; requestedSchema: Record<string, unknown> },
+    context: McpToolCallContext,
+  ) => Promise<ElicitResult>;
+}
+
+export interface McpToolCallContext {
+  threadId: string;
+  itemId: string;
 }
 
 export class McpClient {
@@ -37,14 +47,16 @@ export class McpClient {
   tools: McpTool[] = [];
   prompts: McpPrompt[] = [];
   resources: McpResource[] = [];
+  private activeToolContext: McpToolCallContext | null = null;
+  private toolCallTail = Promise.resolve();
 
   constructor(private opts: McpClientOptions) {}
 
   async connect(): Promise<void> {
     const sdk = new Client(
-      { name: 'Panelot', version: '0.2.0' },
+      { name: 'Panelot', version: '0.4.2' },
       {
-        capabilities: {},
+        capabilities: { elicitation: { form: {} } },
         listChanged: {
           tools: { onChanged: () => void this.refreshCapabilities() },
           prompts: { onChanged: () => void this.refreshCapabilities() },
@@ -52,6 +64,18 @@ export class McpClient {
         },
       },
     );
+    sdk.setRequestHandler(ElicitRequestSchema, async (request) => {
+      if (request.params.mode === 'url' || !this.opts.onElicit || !this.activeToolContext) {
+        return { action: 'decline' };
+      }
+      return this.opts.onElicit(
+        {
+          message: request.params.message,
+          requestedSchema: request.params.requestedSchema as Record<string, unknown>,
+        },
+        this.activeToolContext,
+      );
+    });
     const transport = new StreamableHTTPClientTransport(new URL(this.opts.url), {
       fetch: (input, init) => this.fetchWithAuth(input, init),
     });
@@ -103,12 +127,25 @@ export class McpClient {
   async callTool(
     name: string,
     args: unknown,
+    context?: McpToolCallContext,
   ): Promise<{ content: { type: string; text?: string }[]; isError?: boolean }> {
-    const result = await this.requireClient().callTool({
-      name,
-      arguments: (args ?? {}) as Record<string, unknown>,
+    const previous = this.toolCallTail;
+    let release!: () => void;
+    this.toolCallTail = new Promise<void>((resolve) => {
+      release = resolve;
     });
-    return result as { content: { type: string; text?: string }[]; isError?: boolean };
+    await previous;
+    this.activeToolContext = context ?? null;
+    try {
+      const result = await this.requireClient().callTool({
+        name,
+        arguments: (args ?? {}) as Record<string, unknown>,
+      });
+      return result as { content: { type: string; text?: string }[]; isError?: boolean };
+    } finally {
+      this.activeToolContext = null;
+      release();
+    }
   }
 
   async getPrompt(

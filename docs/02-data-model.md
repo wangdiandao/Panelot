@@ -26,6 +26,7 @@ class PanelotDB extends Dexie {
   runs!: Table<RunRecord, string>;
   commandReceipts!: Table<CommandReceipt, string>;
   approvals!: Table<ApprovalRecord, string>;
+  interactions!: Table<InteractionRecord, string>;
   plugins!: Table<PluginRecord, string>;
   pluginAssets!: Table<PluginAssetRecord, string>;
 
@@ -40,6 +41,7 @@ class PanelotDB extends Dexie {
       runs: 'id, threadId, [threadId+state], submissionId, updatedAt',
       commandReceipts: 'id, [clientId+submissionId], status, createdAt, expiresAt',
       approvals: 'id, threadId, runId, [threadId+status], requestedAt',
+      interactions: 'id, threadId, runId, [threadId+status], requestedAt',
       plugins: 'id, name, enabled, updatedAt',
       pluginAssets: 'id, pluginId, [pluginId+path], kind, createdAt',
     });
@@ -91,6 +93,7 @@ type NodeType =
   | 'tool_call' // { itemId, toolName, params, level: 'L0'|'L1'|'L2'|'mcp'|'builtin' }
   | 'tool_result' // { itemId, ok, contentForLlm: ContentBlock[], details?: unknown }
   | 'approval_decision' // { approvalId, request: ApprovalRequestPayload, decision, ts }
+  | 'interaction_response' // { interactionId, request, response, respondedAt }
   | 'turn_context' // { turnId, model, permissionPolicy, activeSkills[] }
   //   —— 每轮开头一条，恢复时复原环境
   | 'system_notice'; // 用户可见但不进 LLM 历史的提示（如"已自动暂停"）
@@ -100,6 +103,7 @@ type NodeType =
 
 - `childrenIds` **不存储**，由 `parentId` 索引反查派生（避免双向引用失同步——这是 OpenWebUI 教训的直接应用）。
 - `tool_call` / `tool_result` 分开两个节点：审批可能间隔任意长时间，且 result 的 `details`（截图等大对象）指向 attachments 表而非内联。
+- `interactions` 保存等待用户或外部条件的请求；响应和恢复 claim 都以事务提交，避免 Worker 重启后重复续跑。
 - **不落库的东西**：`item.delta` 流式增量、L1 快照的 selector_map（内存态，见 05）。
 
 ### 2.3 attachments

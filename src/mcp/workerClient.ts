@@ -60,11 +60,12 @@ export class McpWorkerClient {
   async callTool(
     name: string,
     args: unknown,
+    context?: { threadId: string; itemId: string },
   ): Promise<{ content: { type: string; text?: string }[]; isError?: boolean }> {
     const response = await this.request<{
       content: { type: string; text?: string }[];
       isError?: boolean;
-    }>({ type: 'panelot.mcpWorker.callTool', serverId: this.serverId, name, args });
+    }>({ type: 'panelot.mcpWorker.callTool', serverId: this.serverId, name, args, context });
     return response.result!;
   }
 

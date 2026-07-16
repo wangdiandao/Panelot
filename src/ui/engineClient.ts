@@ -15,6 +15,8 @@ import {
   type ContextBlock,
   type Op,
   type PendingApproval,
+  type PendingInteraction,
+  type InteractionResponse,
   type RunRecoveryState,
   type SnapshotItem,
   type StopReason,
@@ -64,6 +66,7 @@ export interface ThreadUiState {
   /** True when the prior SW died mid-turn — UI offers a "continue" button. */
   wasInterrupted: boolean;
   pendingApprovals: PendingApproval[];
+  pendingInteractions: PendingInteraction[];
   queuedInputs: number;
   queuedRuns: ThreadSnapshot['queuedRuns'];
   recoverableRuns: RunRecoveryState[];
@@ -92,6 +95,7 @@ export interface ThreadUiState {
 export interface ThreadActivity {
   running: boolean;
   pendingApprovals: number;
+  pendingInteractions?: number;
 }
 
 const initialState: ThreadUiState = {
@@ -105,6 +109,7 @@ const initialState: ThreadUiState = {
   activeTurn: null,
   wasInterrupted: false,
   pendingApprovals: [],
+  pendingInteractions: [],
   queuedInputs: 0,
   queuedRuns: [],
   recoverableRuns: [],
@@ -591,6 +596,15 @@ export class EngineSession {
     }));
   }
 
+  respondInteraction(interactionId: string, response: InteractionResponse): void {
+    this.send({ type: 'interaction.response', interactionId, response });
+    this.store.setState((state) => ({
+      pendingInteractions: state.pendingInteractions.filter(
+        (interaction) => interaction.interactionId !== interactionId,
+      ),
+    }));
+  }
+
   // ---- event application -----------------------------------------------------
 
   private apply(ev: AgentEvent): void {
@@ -772,6 +786,22 @@ export class EngineSession {
           ],
         }));
         break;
+      case 'interaction.request':
+        s.setState((state) => ({
+          pendingInteractions: [
+            ...state.pendingInteractions.filter(
+              (interaction) => interaction.interactionId !== ev.interactionId,
+            ),
+            {
+              interactionId: ev.interactionId,
+              turnId: ev.turnId,
+              itemId: ev.itemId,
+              request: ev.request,
+              requestedAt: Date.now(),
+            },
+          ],
+        }));
+        break;
       case 'queue.updated':
         // Reconcile the local text echo against the authoritative count:
         // engine drains FIFO, so drop from the head when the count shrinks;
@@ -808,6 +838,7 @@ export class EngineSession {
           next.set(ev.activity.threadId, {
             running: ev.activity.running,
             pendingApprovals: ev.activity.pendingApprovals,
+            pendingInteractions: ev.activity.pendingInteractions ?? 0,
           });
         this.activityStore.setState({ activity: next });
         break;
@@ -945,6 +976,7 @@ export class EngineSession {
         wasInterrupted: snap.activeTurn?.wasInterrupted ?? false,
         lastStopReason: turnLive ? st.lastStopReason : persistedStopReason,
         pendingApprovals: snap.pendingApprovals,
+        pendingInteractions: snap.pendingInteractions ?? [],
         queuedInputs: snap.queuedInputs,
         queuedRuns: snap.queuedRuns,
         recoverableRuns: snap.recoverableRuns,

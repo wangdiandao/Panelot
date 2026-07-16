@@ -31,6 +31,7 @@ async function handle(message: unknown): Promise<unknown> {
     name?: string;
     args?: unknown;
     uri?: string;
+    context?: { threadId: string; itemId: string };
   };
   if (!request.type?.startsWith('panelot.mcpWorker.') || !request.serverId) return undefined;
 
@@ -68,6 +69,22 @@ async function handle(message: unknown): Promise<unknown> {
             })
             .catch(() => {});
         },
+        onElicit: async (elicitation, context) => {
+          const response = (await chrome.runtime.sendMessage({
+            type: 'panelot.mcpWorkerElicitation',
+            serverId: request.serverId,
+            context,
+            ...elicitation,
+          })) as { action?: 'accept' | 'decline' | 'cancel'; content?: Record<string, unknown> };
+          return {
+            action: response.action ?? 'decline',
+            ...(response.content
+              ? {
+                  content: response.content as Record<string, string | number | boolean | string[]>,
+                }
+              : {}),
+          };
+        },
       });
       await client.connect();
       clients.set(request.serverId, client);
@@ -83,7 +100,10 @@ async function handle(message: unknown): Promise<unknown> {
     }
     if (request.type === 'panelot.mcpWorker.callTool') {
       if (!request.name) throw new Error('MCP tool name is missing');
-      return { ok: true, result: await client.callTool(request.name, request.args) };
+      return {
+        ok: true,
+        result: await client.callTool(request.name, request.args, request.context),
+      };
     }
     if (request.type === 'panelot.mcpWorker.getPrompt') {
       if (!request.name) throw new Error('MCP prompt name is missing');

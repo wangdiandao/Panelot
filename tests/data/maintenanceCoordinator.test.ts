@@ -76,6 +76,18 @@ describe('DataImportCoordinator', () => {
       provenance: 'user',
       refs: { nodeIds: ['old-node'], runIds: ['old-run'] },
     });
+    await db.interactions.put({
+      id: 'old-interaction',
+      threadId: 'old-thread',
+      runId: 'old-run',
+      turnId: 'old-turn',
+      itemId: 'old-call',
+      request: { kind: 'user_action', instruction: 'Old handoff' },
+      status: 'resolved',
+      response: { kind: 'cancel' },
+      requestedAt: 1,
+      respondedAt: 2,
+    });
     local.values.set('thread_params:old', { temperature: 1 });
     local.values.set('unknown_future_key', { keep: true });
     session.values.set('engine_client_id:chat', 'old-client');
@@ -104,6 +116,7 @@ describe('DataImportCoordinator', () => {
       nodeIds: ['new-node'],
       runIds: [],
     });
+    expect(await db.interactions.count()).toBe(0);
     expect(local.values.get(DATA_IMPORT_JOURNAL_KEY)).toMatchObject({ phase: 'db_committed' });
     expect(local.values.has('thread_params:old')).toBe(false);
     expect(local.values.get('unknown_future_key')).toEqual({ keep: true });
@@ -179,6 +192,27 @@ describe('DataImportCoordinator', () => {
     const approvalBlocked = createCoordinator();
     const approvalPreview = await approvalBlocked.preview(plan, 'approval-operation');
     expect(approvalPreview.blockers).toMatchObject({ hardBlocked: true, pendingApprovals: 1 });
+
+    await db.approvals.clear();
+    await db.interactions.put({
+      id: 'interaction',
+      threadId: 'old-thread',
+      runId: 'old-run',
+      turnId: 'old-turn',
+      itemId: 'call',
+      request: {
+        kind: 'ask_user',
+        questions: [{ id: 'choice', question: 'Choose one' }],
+      },
+      status: 'pending',
+      requestedAt: 1,
+    });
+    const interactionBlocked = createCoordinator();
+    const interactionPreview = await interactionBlocked.preview(plan, 'interaction-operation');
+    expect(interactionPreview.blockers).toMatchObject({
+      hardBlocked: true,
+      pendingInteractions: 1,
+    });
   });
 
   it.each([

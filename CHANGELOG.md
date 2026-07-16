@@ -4,6 +4,22 @@ All notable changes to Panelot are documented here.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-07-16
+
+### Added
+
+- Durable interaction workflows for structured questions, user handoff, page-condition watches,
+  scheduled resumption, and MCP form elicitation, including recovery-safe persistence and UI cards.
+- A built-in artifact tool that saves generated UTF-8 text files to the conversation before
+  downloading them.
+
+### Changed
+
+- Strengthened native tool-call guidance, interaction target checks, maintenance-state reporting,
+  notifications, and regression coverage across the Agent loop, engine, messaging, MCP, and UI.
+- Updated the architecture, data model, browser tools, MCP, UI, prompt, and experience-target
+  documentation for the new interaction contracts.
+
 ## [0.4.1] - 2026-07-15
 
 ### Changed
@@ -105,7 +121,8 @@ All notable changes to Panelot are documented here.
 - Plugin archives reject traversal, symlinks, executable payloads, and archive bombs.
 - Provider error details are sanitized before display or persistence.
 
-[Unreleased]: https://github.com/wangdiandao/Panelot/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/wangdiandao/Panelot/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/wangdiandao/Panelot/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/wangdiandao/Panelot/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/wangdiandao/Panelot/releases/tag/v0.4.0
 [0.3.0]: https://github.com/wangdiandao/Panelot/releases/tag/v0.3.0

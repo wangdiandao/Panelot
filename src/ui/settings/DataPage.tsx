@@ -397,6 +397,7 @@ function summarizeBlockers(preview: DataImportCoordinatorPreview) {
     hard: sum(preview.blockers.hardRuns),
     dormant: sum(preview.blockers.dormantRuns),
     approvals: preview.blockers.pendingApprovals,
+    interactions: preview.blockers.pendingInteractions,
   };
 }
 

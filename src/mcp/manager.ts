@@ -586,7 +586,7 @@ export class McpManager {
   // ---- capability bridging (docs/07 §4) --------------------------------------
 
   /** tools → AgentTool[], name = mcp__{serverId}__{tool}. */
-  buildTools(): AnyAgentTool[] {
+  buildTools(getThreadId?: () => string): AnyAgentTool[] {
     const out: AnyAgentTool[] = [];
     for (const [serverId, client] of this.clients) {
       const config = this.configs.get(serverId);
@@ -630,8 +630,12 @@ export class McpManager {
             ).origin,
             serverId,
           }),
-          execute: async (_id, params) => {
-            const result = await client.callTool(tool.name, params);
+          execute: async (itemId, params) => {
+            const result = await client.callTool(
+              tool.name,
+              params,
+              getThreadId ? { threadId: getThreadId(), itemId } : undefined,
+            );
             const text = result.content.map((c) => c.text ?? '').join('\n');
             if (result.isError) throw new Error(text || 'MCP tool error');
             return { content: [{ type: 'text', text }] };

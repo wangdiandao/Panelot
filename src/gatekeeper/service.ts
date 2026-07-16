@@ -99,7 +99,15 @@ const DEFAULT_CONFIG: ThreadPermissionConfig = {
   permissionPolicy: 'untrusted',
 };
 
-const ORIGINLESS_TOOLS = new Set(['tabs_list', 'memory_read', 'memory_write', 'load_skill']);
+const ORIGINLESS_TOOLS = new Set([
+  'tabs_list',
+  'memory_read',
+  'memory_write',
+  'load_skill',
+  'ask_user',
+  'request_user_action',
+  'schedule_resume',
+]);
 
 export class GatekeeperService {
   /** threadId → session grants (acceptForSession; storage.session, docs/06 §4). */

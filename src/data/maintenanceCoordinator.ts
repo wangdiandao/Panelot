@@ -22,6 +22,7 @@ const HARD = new Set<RunState>([
   'preparing',
   'streaming_model',
   'waiting_approval',
+  'waiting_interaction',
   'executing_tool',
 ]);
 const DORMANT = new Set<RunState>(['queued', 'paused_budget', 'paused_uncertain', 'interrupted']);
@@ -222,9 +223,10 @@ export class DataImportCoordinator {
   }
 
   private async blockers(): Promise<DataImportBlockers> {
-    const [runs, pendingApprovals] = await Promise.all([
+    const [runs, pendingApprovals, pendingInteractions] = await Promise.all([
       this.db.runs.toArray(),
       this.db.approvals.filter((approval) => approval.status === 'pending').count(),
+      this.db.interactions.filter((interaction) => interaction.status === 'pending').count(),
     ]);
     const hardRuns: Partial<Record<RunState, number>> = {};
     const dormantRuns: Partial<Record<RunState, number>> = {};
@@ -238,9 +240,13 @@ export class DataImportCoordinator {
       hardRuns,
       dormantRuns,
       pendingApprovals,
+      pendingInteractions,
       requiresDormantConfirmation: Object.keys(dormantRuns).length > 0,
       hardBlocked:
-        !!activeThreadIds.length || !!Object.keys(hardRuns).length || pendingApprovals > 0,
+        !!activeThreadIds.length ||
+        !!Object.keys(hardRuns).length ||
+        pendingApprovals > 0 ||
+        pendingInteractions > 0,
     };
   }
 
@@ -340,6 +346,7 @@ export class DataImportCoordinator {
         this.db.runs,
         this.db.commandReceipts,
         this.db.approvals,
+        this.db.interactions,
         this.db.maintenance,
       ],
       async () => {
@@ -359,6 +366,7 @@ export class DataImportCoordinator {
           this.db.runs.clear(),
           this.db.commandReceipts.clear(),
           this.db.approvals.clear(),
+          this.db.interactions.clear(),
         ]);
         await Promise.all([
           this.db.threads.bulkPut(plan.bundle.threads),

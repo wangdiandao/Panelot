@@ -63,8 +63,6 @@ profile or run code as the user. See the [privacy policy](./docs/privacy-policy.
 - Plugins contain validated, read-only data assets. They cannot run remote code.
 - Skills are imported as one `SKILL.md` file; companion `scripts/` and `references/` directories
   are not imported.
-- There is no built-in `web_search` or separate `ask_user` tool. The model can still ask a normal
-  question in chat.
 - A provider label does not guarantee compatibility. Use **Verify**, then test the selected model
   with a real request.
 

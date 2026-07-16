@@ -124,6 +124,12 @@ type Op =
       approvalId: string;
       decision: ApprovalDecision;
     } // 见 06 章
+  | {
+      type: 'interaction.response';
+      submissionId: string;
+      interactionId: string;
+      response: InteractionResponse;
+    }
   | { type: 'ping'; submissionId: string }; // UI 心跳，兼作 SW 保活
 
 interface TurnOverrides {
@@ -212,6 +218,13 @@ type AgentEvent =
       approvalId: string;
       request: ApprovalRequestPayload;
     } // 完整参数展示，见 06
+  | {
+      type: 'interaction.request';
+      threadId: string;
+      turnId: string;
+      interactionId: string;
+      request: InteractionRequestPayload;
+    } // 提问、用户接管、页面等待、定时恢复或 MCP Elicitation
   // L1→L2 升级确认走同一事件，flags 带 'escalation_l2'（06 §5）
 
   // —— 广播类 ——
@@ -246,7 +259,7 @@ sequenceDiagram
   Note over SW,UI: Port 断开（SW 被杀/UI 休眠）→ UI 监听 onDisconnect 自动重连，重新 initialize
 ```
 
-`ThreadSnapshot` = 带 revision 的 Thread 元数据 + 当前路径消息 + 活跃 turn（若有）+ 持久 pending approvals + durable queued/recoverable Runs。EngineClient 把待确认命令保存在 `chrome.storage.session` outbox；断线后用相同 `clientId + submissionId` 重发，收到 ack/rejection 才清除。
+`ThreadSnapshot` = 带 revision 的 Thread 元数据 + 当前路径消息 + 活跃 turn（若有）+ 持久 pending approvals/interactions + durable queued/recoverable Runs。EngineClient 把待确认命令保存在 `chrome.storage.session` outbox；断线后用相同 `clientId + submissionId` 重发，收到 ack/rejection 才清除。
 
 ### 3.5 背压与有界队列
 

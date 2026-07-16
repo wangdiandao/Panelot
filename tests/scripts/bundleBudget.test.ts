@@ -51,7 +51,7 @@ describe('bundle budget static graph', () => {
 
   it('keeps a separate cap on the service worker entry', async () => {
     const root = await fixture();
-    await writeFile(join(root, 'background.js'), `${' '.repeat(201 * 1024)}`);
+    await writeFile(join(root, 'background.js'), `${' '.repeat(209 * 1024)}`);
 
     const result = spawnSync(process.execPath, [script, root], { encoding: 'utf8' });
 

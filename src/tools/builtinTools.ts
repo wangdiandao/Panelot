@@ -1,7 +1,5 @@
 /**
- * Built-in tools executed inside the engine (docs/05 §3): fetch_url, memory,
- * download. web_search ships when a search backend is chosen;
- * ask_user maps to the approval-style RPC.
+ * Built-in tools executed inside the engine (docs/05 §3).
  */
 
 import { schema } from '../agent/schema';
@@ -167,4 +165,150 @@ export function createDownloadTool(): AnyAgentTool {
       return { content: [{ type: 'text', text: `已开始下载 (#${downloadId}): ${params.url}` }] };
     },
   };
+}
+
+export function createArtifactTool(db: PanelotDB, getThreadId: () => string): AnyAgentTool {
+  return {
+    name: 'artifact_create',
+    label: '创建文件',
+    description:
+      'Create a UTF-8 text artifact, save it to the conversation, and download it for the user. Use for requested Markdown, CSV, JSON, HTML, or plain-text deliverables; not for temporary reasoning.',
+    parameters: schema.object({
+      filename: schema.string({
+        min: 1,
+        max: 160,
+        pattern: /^[^/\\]+$/,
+        patternMessage: 'filename must not contain path separators',
+      }),
+      mime: schema.optional(schema.string({ max: 120 })),
+      content: schema.string({ max: 200_000 }),
+    }),
+    level: 'builtin',
+    effects: 'write',
+    recovery: 'never-retry',
+    resultTrust: 'trusted',
+    resultProvenance: 'tool',
+    execute: async (_id, params: { filename: string; mime?: string; content: string }) =>
+      import('./builtinCapabilityRuntime').then(({ createArtifact }) =>
+        createArtifact(db, getThreadId(), params),
+      ),
+  };
+}
+
+const unavailableInteractionExecute: AnyAgentTool['execute'] = async () => {
+  throw new Error('Interactive tools must be executed by the engine interaction runtime.');
+};
+
+export function createInteractionTools(
+  resolveTabId: (requestedTabId?: number) => Promise<number>,
+): AnyAgentTool[] {
+  const option = schema.object({
+    value: schema.string({ min: 1, max: 80 }),
+    label: schema.string({ min: 1, max: 80 }),
+    description: schema.optional(schema.string({ max: 240 })),
+  });
+  const question = schema.object({
+    id: schema.string({ min: 1, max: 64 }),
+    question: schema.string({ min: 1, max: 500 }),
+    options: schema.optional(schema.array(option, { min: 2, max: 3 })),
+  });
+  return [
+    {
+      name: 'ask_user',
+      label: '询问用户',
+      description:
+        'Pause the current turn and ask the user 1-3 concise questions. Use only when an answer materially changes the next action; call it alone, never for routine confirmation. Free-form answers are always available.',
+      parameters: schema.object({ questions: schema.array(question, { min: 1, max: 3 }) }),
+      level: 'builtin',
+      effects: 'read',
+      recovery: 'retry-safe',
+      resultTrust: 'trusted',
+      resultProvenance: 'user',
+      interaction: 'ask_user',
+      prepareInteraction: async (params) => ({ kind: 'ask_user', questions: params.questions }),
+      execute: unavailableInteractionExecute,
+    },
+    {
+      name: 'request_user_action',
+      label: '请求用户接管',
+      description:
+        'Pause and ask the user to perform a browser step that Panelot must not or cannot perform, such as entering credentials, a one-time code, payment details, or completing a human verification. The result never includes secrets.',
+      parameters: schema.object({
+        instruction: schema.string({ min: 1, max: 1000 }),
+        tabId: schema.optional(schema.number({ integer: true, min: 0 })),
+      }),
+      level: 'builtin',
+      effects: 'read',
+      recovery: 'retry-safe',
+      resultTrust: 'trusted',
+      resultProvenance: 'user',
+      interaction: 'user_action',
+      prepareInteraction: async (params) => ({
+        kind: 'user_action',
+        instruction: params.instruction,
+        tabId: params.tabId === undefined ? undefined : await resolveTabId(params.tabId),
+      }),
+      execute: unavailableInteractionExecute,
+    },
+    {
+      name: 'watch_page',
+      label: '持续等待页面',
+      description:
+        'Suspend the turn until a page condition becomes true, for waits longer than wait_for or when the service worker may restart. Conditions are checked without asking the model to poll.',
+      parameters: schema.object({
+        tabId: schema.optional(schema.number({ integer: true, min: 0 })),
+        condition: schema.enum(['text', 'text_gone', 'url']),
+        value: schema.string({ min: 1, max: 1000 }),
+        timeoutSeconds: schema.optional(schema.number({ integer: true, min: 10, max: 86_400 })),
+      }),
+      level: 'builtin',
+      effects: 'read',
+      recovery: 'retry-safe',
+      resultTrust: 'trusted',
+      resultProvenance: 'tool',
+      interaction: 'watch_page',
+      resolveTarget: async (params) => {
+        const tabId = await resolveTabId(params.tabId);
+        const tab = await chrome.tabs.get(tabId);
+        let origin: string | undefined;
+        if (tab.url) {
+          try {
+            origin = new URL(tab.url).origin;
+          } catch {
+            origin = undefined;
+          }
+        }
+        return { tabId, origin };
+      },
+      prepareInteraction: async (params) => ({
+        kind: 'watch_page',
+        tabId: await resolveTabId(params.tabId),
+        condition: { type: params.condition, value: params.value },
+        deadlineAt: Date.now() + (params.timeoutSeconds ?? 300) * 1000,
+      }),
+      execute: unavailableInteractionExecute,
+    },
+    {
+      name: 'schedule_resume',
+      label: '定时继续',
+      description:
+        'Suspend the current turn and resume it after a delay. Use for a concrete future check, not as a substitute for waiting on a known page condition.',
+      parameters: schema.object({
+        delaySeconds: schema.number({ integer: true, min: 10, max: 604_800 }),
+        reason: schema.string({ min: 1, max: 500 }),
+      }),
+      level: 'builtin',
+      effects: 'read',
+      recovery: 'retry-safe',
+      resultTrust: 'trusted',
+      resultProvenance: 'tool',
+      interaction: 'schedule',
+      prepareInteraction: async (params) => ({
+        kind: 'schedule',
+        resumeAt: Date.now() + params.delaySeconds * 1000,
+        reason: params.reason,
+      }),
+      execute: unavailableInteractionExecute,
+    },
+  ];
 }

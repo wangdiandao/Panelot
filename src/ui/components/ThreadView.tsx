@@ -9,6 +9,7 @@ import { toast } from 'sonner';
 import type {
   ApprovalDecision,
   ContextBlock,
+  InteractionResponse,
   PermissionPolicy,
   SubmissionBrowserContext,
 } from '../../messaging/protocol';
@@ -21,6 +22,7 @@ import type { EngineSession, ThreadUiState } from '../engineClient';
 import { MessageStream } from './MessageStream';
 import { PromptInput } from './PromptInput';
 import { ApprovalCard } from './ApprovalCard';
+import { InteractionCard } from './InteractionCard';
 import { EmptyState } from './EmptyState';
 import { QueueDock } from './QueueDock';
 import { RecoveryCard } from './RecoveryCard';
@@ -231,6 +233,14 @@ export function ThreadView({
     [session],
   );
 
+  const onInteractionResponse = useCallback(
+    (id: string, response: InteractionResponse) => {
+      session.respondInteraction(id, response);
+      requestAnimationFrame(() => inputRef.current?.focus());
+    },
+    [session],
+  );
+
   // ArrowUp on an empty composer recalls the last user message text.
   const recallLast = useCallback((): string | undefined => {
     const { items } = session.store.getState();
@@ -276,6 +286,12 @@ export function ThreadView({
   const errorView = state.lastError ? buildProviderErrorPresentation(state.lastError) : undefined;
   const canOpenErrorSettings = Boolean(errorView?.opensSettings && onOpenSettings);
   const canRetryError = Boolean(state.lastError?.retryable && state.lastInput);
+  const askUserInteraction = state.pendingInteractions.find(
+    (interaction) => interaction.request.kind === 'ask_user',
+  );
+  const cardInteractions = state.pendingInteractions.filter(
+    (interaction) => interaction.request.kind !== 'ask_user',
+  );
 
   return (
     <div className="flex h-full flex-col bg-background text-foreground">
@@ -373,8 +389,19 @@ export function ThreadView({
             ))}
           </div>
         )}
+        {cardInteractions.length > 0 && (
+          <div className="flex flex-col gap-2 px-4 pb-2">
+            {cardInteractions.slice(0, 1).map((interaction) => (
+              <InteractionCard
+                key={interaction.interactionId}
+                interaction={interaction}
+                onResponse={onInteractionResponse}
+              />
+            ))}
+          </div>
+        )}
         {state.recoverableRuns
-          .filter((run) => run.state !== 'waiting_approval')
+          .filter((run) => run.state !== 'waiting_approval' && run.state !== 'waiting_interaction')
           .slice(0, 1)
           .map((run) => (
             <RecoveryCard
@@ -391,45 +418,55 @@ export function ThreadView({
         )}
         <QueueDock
           runs={state.queuedRuns}
-          paused={state.pendingApprovals.length > 0}
+          paused={state.pendingApprovals.length > 0 || state.pendingInteractions.length > 0}
           onUpdate={(runId, text) => {
             const run = state.queuedRuns.find((candidate) => candidate.runId === runId);
             session.updateQueued(runId, { ...run?.input, text }, run?.overrides);
           }}
           onRemove={(runId) => session.removeQueued(runId)}
         />
-        <PromptInput
-          running={state.activeTurn !== null}
-          steerable={state.activeTurn?.steerable ?? false}
-          disabled={!providerConfigured}
-          contextChips={stagedContext}
-          submissionThreadId={state.threadId}
-          onRemoveChip={(i) => onRemoveStagedContext?.(i)}
-          onAttachContext={onAttachContext}
-          onAttachFile={onAttachContext ? attachFile : undefined}
-          attachmentUnavailableReason={state.threadId ? undefined : t('input.uploadRequiresThread')}
-          onSend={send}
-          onEnqueue={enqueue}
-          onStop={() => session.interrupt()}
-          textareaRef={inputRef}
-          draft={draft}
-          onDraftChange={setDraft}
-          onBackspaceEmpty={onBackspaceEmpty}
-          onRecallLast={recallLast}
-          modelOverride={state.pendingOverrides.model ?? null}
-          onSelectModel={
-            modelSelectorInComposer
-              ? (choice) =>
-                  session.setOverrides({
-                    model: choice
-                      ? { connectionId: choice.connectionId, modelId: choice.modelId }
-                      : undefined,
-                  })
-              : undefined
-          }
-          permissionPolicy={permissionPolicy}
-          onSelectPolicy={(tier) => session.setOverrides({ permissionPolicy: tier })}
-        />
+        {askUserInteraction ? (
+          <InteractionCard
+            key={askUserInteraction.interactionId}
+            interaction={askUserInteraction}
+            onResponse={onInteractionResponse}
+          />
+        ) : (
+          <PromptInput
+            running={state.activeTurn !== null}
+            steerable={state.activeTurn?.steerable ?? false}
+            disabled={!providerConfigured || state.pendingInteractions.length > 0}
+            contextChips={stagedContext}
+            submissionThreadId={state.threadId}
+            onRemoveChip={(i) => onRemoveStagedContext?.(i)}
+            onAttachContext={onAttachContext}
+            onAttachFile={onAttachContext ? attachFile : undefined}
+            attachmentUnavailableReason={
+              state.threadId ? undefined : t('input.uploadRequiresThread')
+            }
+            onSend={send}
+            onEnqueue={enqueue}
+            onStop={() => session.interrupt()}
+            textareaRef={inputRef}
+            draft={draft}
+            onDraftChange={setDraft}
+            onBackspaceEmpty={onBackspaceEmpty}
+            onRecallLast={recallLast}
+            modelOverride={state.pendingOverrides.model ?? null}
+            onSelectModel={
+              modelSelectorInComposer
+                ? (choice) =>
+                    session.setOverrides({
+                      model: choice
+                        ? { connectionId: choice.connectionId, modelId: choice.modelId }
+                        : undefined,
+                    })
+                : undefined
+            }
+            permissionPolicy={permissionPolicy}
+            onSelectPolicy={(tier) => session.setOverrides({ permissionPolicy: tier })}
+          />
+        )}
       </div>
     </div>
   );

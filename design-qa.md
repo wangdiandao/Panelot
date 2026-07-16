@@ -2,60 +2,40 @@
 
 ## Evidence
 
-- Source visual truth:
-  - `C:\Users\Lenovo\AppData\Local\Temp\codex-clipboard-6cc3807a-039f-4516-9618-d6994d4bd3a7.png`
-  - `C:\Users\Lenovo\AppData\Local\Temp\codex-clipboard-ca5c7e5a-6d47-40a3-b7c7-9079318e3354.png`
-- Browser-rendered implementation:
-  - `E:\repos\Panelot\scratch\playwright\codex-chat\panelot-chat-final.png`
-  - `E:\repos\Panelot\scratch\playwright\codex-chat\panelot-chat-final-bottom.png`
-- URL: `http://localhost:5391/`
-- Primary viewport: 1440 × 900, CSS pixel scale
-- Responsive checks: 900 × 800 and 640 × 800
-- Theme and state: dark theme; one completed Agent message with process collapsed and result visible; one active Agent message with process expanded.
+- Source visual truth: `C:\Users\Lenovo\AppData\Local\Temp\codex-clipboard-51cb9b41-3cdb-45a9-af85-325213c86f8b.png`
+- Browser-rendered implementation: `E:\repos\Panelot\output\playwright\ask-user-codex-style-dark.jpg`
+- Preview URL used during QA: `http://127.0.0.1:5393/`
+- Reference viewport: 734 × 233 CSS pixels
+- Responsive viewport: 360 × 420 CSS pixels
+- Theme and state: dark theme, question 2 of 3, no option selected
 
-## Full-view comparison evidence
+## Comparison evidence
 
-The two Codex Desktop source crops and the 1440 × 900 implementation capture were opened together in one comparison input. The implementation preserves the source hierarchy: a quiet one-line process summary, a thin divider, flat process content when expanded, and an unboxed final answer. The full-page layout intentionally retains Panelot's thread sidebar and composer while removing the detached right activity panel.
+The source and implementation were opened together at their original 734 × 233 dimensions. The component fills the comparison viewport, so the full-view comparison also provides readable focused-region evidence for the title, navigation, option rows, freeform input, and skip action.
 
-## Focused region comparison evidence
-
-The source images already crop tightly to the Agent message region. The bottom-aligned implementation capture isolates the corresponding completed and running message regions at readable scale, so no additional crop was needed. The completed state shows `已处理 9s` with a collapsed chevron and visible answer; the running state shows `处理中` with reasoning and tool execution visible below it.
+The implementation preserves the reference hierarchy: question title and progress controls at the top, a compact single-column numbered option set with a recommended marker, and a freeform answer row with a skip action. Panelot's existing border, radius, typography, and semantic color tokens remain intentional differences from the Codex host surface.
 
 ## Findings
 
 - No actionable P0, P1, or P2 mismatch remains.
-- Typography: the system UI stack, compact status label, body weight, line height, and muted metadata preserve the Codex-like hierarchy without introducing a display font or oversized title treatment.
-- Spacing and layout: nested response cards were removed; status, divider, process, result, citations, and actions now form one continuous message. The 768px content cap remains intentional for Panelot. No horizontal overflow was present at 900px or 640px.
-- Colors and tokens: background, muted foreground, dividers, status colors, and tool metadata use the existing shadcn theme tokens and maintain the restrained dark palette visible in the source.
-- Image quality and assets: the target contains no imagery, logos, or decorative raster assets. Lucide icons remain code-native UI icons; no source image was replaced with a CSS or SVG approximation.
-- Copy and content: `处理中` and `已处理` clearly distinguish active and completed states. Completed duration is retained beside the summary, matching the source's compact elapsed-time treatment.
-- Interaction and accessibility: running work is expanded by default; completed work is collapsed by default; the completed process can be reopened through a semantic button with `aria-expanded`; final answer content remains outside the collapsed region. Final browser console check reported zero errors and zero warnings.
+- Layout: all controls are visible at 734 × 233. At 360px, the title receives a full row and navigation moves below it; document width stays at 360px with no horizontal overflow.
+- Typography and density: labels retain emphasis, descriptions remain muted, and option descriptions stay inline on wider viewports while wrapping on narrow sidebars.
+- Components and tokens: the selector uses the repository's shadcn `Card`, `ToggleGroup`, `Field`, `InputGroup`, `Badge`, and `Button` primitives without raw color values.
+- Interaction: selecting an answer advances to the next question, previous and next controls navigate the question set, freeform answers submit from the input action or Enter, and skip or close cancels the interaction.
+- Accessibility: the option list is a semantic radio group, navigation and close buttons have localized accessible names, and the freeform field retains a visible placeholder.
+- Browser console: zero errors in the final reference-size run.
 
-## Comparison history
+## Iteration history
 
-The first post-implementation comparison found no actionable P0/P1/P2 issue. A P3 fidelity refinement added elapsed time to the completed summary; the revised 1440 × 900 capture was compared again with both source images.
+The first browser render clipped the footer at the reference height. Compact row spacing and inline desktop descriptions restored the complete footer. A later 360px check found the title compressed by navigation; the header now stacks only on narrow viewports and keeps the reference layout at wider widths.
 
 ## Primary interactions tested
 
-- Loaded the browser-rendered preview.
-- Confirmed the completed process is collapsed while its final answer remains visible.
-- Expanded the completed process and confirmed reasoning and grouped tools become visible.
-- Confirmed the active process is expanded with live reasoning and tool progress.
-- Confirmed no detached right task panel or top-bar task-panel toggle remains.
-- Checked 900px and 640px widths for horizontal overflow.
-- Checked the final browser console: zero errors and zero warnings.
-
-## Implementation checklist
-
-- [x] Keep thinking, tool calls, intermediate text, and final answer inside one Agent message.
-- [x] Preserve real event order instead of forcing a fixed phase order.
-- [x] Expand active work and collapse completed work by default.
-- [x] Keep the completed final answer visible outside the process collapsible.
-- [x] Remove the right task panel and its toggle.
-- [x] Verify desktop and narrow layouts in a real browser.
-
-## Follow-up polish
-
-- P3: elapsed time uses compact Latin units (`h`, `m`, `s`) in both locales to match the reference density; localized unit wording can be added later if product language requirements change.
+- Loaded the real component in a local Vite preview.
+- Selected the first answer and confirmed automatic progression from question 1 to question 2.
+- Confirmed the final 734 × 233 state matches the intended three-option view.
+- Confirmed the 360 × 420 layout has no horizontal or vertical document overflow.
+- Confirmed only `ask_user` replaces the composer through component tests; other interaction cards leave the message input rendered.
+- Confirmed the final browser console contains no errors.
 
 final result: passed

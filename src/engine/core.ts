@@ -9,8 +9,11 @@ import type {
   ApprovalDecision,
   ApprovalRequestPayload,
   ContextBlock,
+  InteractionRequestPayload,
+  InteractionResponse,
   Op,
   PendingApproval,
+  PendingInteraction,
   SnapshotItem,
   ThreadSnapshot,
   TurnOverrides,
@@ -35,6 +38,7 @@ import type {
 } from '../db/types';
 import { RunRepository } from './runRepository';
 import { ApprovalRepository } from './approvalRepository';
+import { InteractionRepository } from './interactionRepository';
 import { CommandReceiptRepository } from './commandReceipts';
 import { ThreadActorRegistry } from './threadActor';
 import {
@@ -83,6 +87,7 @@ export interface ProviderResolver {
 interface ActiveTurn {
   handle: TurnHandle;
   threadId: string;
+  runId: string;
 }
 
 interface RecoveryExecution {
@@ -119,15 +124,26 @@ interface PendingApprovalWaiter {
   cleanup: () => void;
 }
 
+interface PendingInteractionWaiter {
+  threadId: string;
+  turnId: string;
+  request: InteractionRequestPayload;
+  settle: (response: InteractionResponse) => Promise<InteractionResponse>;
+  cleanup: () => void;
+}
+
 export class RealEngineCore {
   private tree: ThreadTree;
   private runs: RunRepository;
   private approvals: ApprovalRepository;
+  private interactions: InteractionRepository;
   private receipts: CommandReceiptRepository;
   private actors = new ThreadActorRegistry();
   private activeTurns = new Map<string, ActiveTurn>(); // threadId → turn
   private queues = new Map<string, QueuedInput[]>(); // threadId → queued inputs
   private pendingApprovals = new Map<string, PendingApprovalWaiter>();
+  private pendingInteractions = new Map<string, PendingInteractionWaiter>();
+  private recoveredInteractionsByThread = new Map<string, string>();
   private recoveredApprovalTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private recoveredApprovalsByThread = new Map<string, RecoveredApprovalWait>();
   private recoveryExecutions = new Map<string, RecoveryExecution>();
@@ -158,6 +174,7 @@ export class RealEngineCore {
    */
   resolveSlashCommand?: (text: string) => Promise<ContextBlock | null>;
   onBeforeRun?: () => Promise<void>;
+  onInteractionResolved?: (interactionId: string) => void;
   /** Bind browser tools to the submission identity before constructing the turn registry. */
   onTurnBrowserContext?: (
     threadId: string,
@@ -185,6 +202,7 @@ export class RealEngineCore {
     this.tree = new ThreadTree(db);
     this.runs = new RunRepository(db);
     this.approvals = new ApprovalRepository(db);
+    this.interactions = new InteractionRepository(db);
     this.receipts = new CommandReceiptRepository(db);
     this.approvalTimeoutMs = options.approvalTimeoutMs ?? APPROVAL_TIMEOUT_MS;
     this.recoveryToolTimeoutMs = options.recoveryToolTimeoutMs ?? 20_000;
@@ -206,13 +224,21 @@ export class RealEngineCore {
   private broadcastActivity(threadId: string): void {
     const epoch = (this.activityEpoch.get(threadId) ?? 0) + 1;
     this.activityEpoch.set(threadId, epoch);
-    void this.approvals
-      .pendingCountForThread(threadId)
-      .then((pendingApprovals) => {
+    void Promise.all([
+      this.approvals.pendingCountForThread(threadId),
+      this.interactions.pendingCountForThread(threadId),
+    ])
+      .then(([pendingApprovals, pendingInteractions]) => {
         if (this.activityEpoch.get(threadId) !== epoch) return;
         this.onBroadcast({
           type: 'activity.updated',
-          activity: { threadId, running: this.activeTurns.has(threadId), pendingApprovals },
+          activity: {
+            threadId,
+            running:
+              this.activeTurns.has(threadId) || this.recoveredInteractionsByThread.has(threadId),
+            pendingApprovals,
+            pendingInteractions,
+          },
         });
       })
       .catch(() => undefined);
@@ -303,6 +329,9 @@ export class RealEngineCore {
       let actorThreadId = this.threadIdOf(op);
       if (!actorThreadId && op.type === 'approval.response') {
         actorThreadId = (await this.approvals.get(op.approvalId))?.threadId ?? null;
+      }
+      if (!actorThreadId && op.type === 'interaction.response') {
+        actorThreadId = (await this.interactions.get(op.interactionId))?.threadId ?? null;
       }
       await this.actors.run(actorThreadId ?? `client:${clientId}`, () =>
         this.dispatchOp(op, capture, clientId),
@@ -639,6 +668,10 @@ export class RealEngineCore {
         }
         return;
       }
+      case 'interaction.response': {
+        await this.resolveInteraction(op.interactionId, op.response);
+        return;
+      }
       case 'thread.fork': {
         const source = await this.tree.getThread(op.threadId);
         if (!source) {
@@ -898,6 +931,8 @@ export class RealEngineCore {
       gatekeeper: this.gatekeeper,
       requestApproval: (turnId, request, pendingTool, signal) =>
         this.requestApproval(threadId, run.id, turnId, request, pendingTool, signal),
+      requestInteraction: (turnId, itemId, request, pendingTool, signal) =>
+        this.requestInteraction(threadId, run.id, turnId, itemId, request, pendingTool, signal),
       emit: (ev) => {
         if (ev.type === 'token.usage') {
           // Cost from pricing ($/Mtok), if the resolver supplied it (docs/03 §1.2).
@@ -965,7 +1000,7 @@ export class RealEngineCore {
       resumeExisting,
       initialStepCursor: run.stepCursor,
     });
-    this.activeTurns.set(threadId, { handle, threadId });
+    this.activeTurns.set(threadId, { handle, threadId, runId: run.id });
     this.broadcastActivity(threadId);
     // Title generation runs in parallel with the turn (ChatGPT semantics):
     // the list shows a name seconds after the first message, not minutes
@@ -979,6 +1014,12 @@ export class RealEngineCore {
         if (p.turnId === handle.turnId) {
           p.cleanup();
           this.pendingApprovals.delete(id);
+        }
+      }
+      for (const [id, pending] of this.pendingInteractions) {
+        if (pending.turnId === handle.turnId) {
+          pending.cleanup();
+          this.pendingInteractions.delete(id);
         }
       }
       this.broadcastActivity(threadId);
@@ -1493,6 +1534,7 @@ export class RealEngineCore {
   private recoveryState(run: RunRecord): RunRecoveryState {
     if (
       run.state !== 'waiting_approval' &&
+      run.state !== 'waiting_interaction' &&
       run.state !== 'paused_budget' &&
       run.state !== 'paused_uncertain' &&
       run.state !== 'interrupted'
@@ -1520,6 +1562,7 @@ export class RealEngineCore {
     await this.receipts.recoverIncomplete();
     const recovered = await this.runs.recoverOpenRuns();
     const restoredApprovals = new Set<string>();
+    const restoredInteractions = new Set<string>();
     const rejectedRecoveries = new Set<string>();
     for (const run of recovered) {
       if (run.environment || run.recoveryAction !== 'resume_run') {
@@ -1590,6 +1633,44 @@ export class RealEngineCore {
           this.broadcastActivity(run.threadId);
           restoredApprovals.add(run.id);
         }
+      } else if (run.recoveryAction === 'restore_interaction') {
+        const interaction = await this.interactions.latestForRun(run.id);
+        if (!interaction) {
+          await this.runs.transition(run.id, 'failed', {
+            pendingTool: undefined,
+            stopReason: 'recovery_missing_interaction',
+            error: {
+              code: 'recovery_missing_interaction',
+              message: 'The waiting run has no durable interaction record.',
+            },
+          });
+          restoredInteractions.add(run.id);
+          this.onBroadcast({
+            type: 'error',
+            threadId: run.threadId,
+            code: 'internal',
+            message: 'A waiting interaction could not be restored because its record is missing.',
+            retryable: false,
+          });
+          continue;
+        }
+        if (interaction.status === 'resolved' && interaction.response) {
+          await this.actors.run(run.threadId, () =>
+            this.continueResolvedInteraction(interaction.id),
+          );
+        } else {
+          this.recoveredInteractionsByThread.set(run.threadId, interaction.id);
+          this.onBroadcast({
+            type: 'interaction.request',
+            threadId: interaction.threadId,
+            turnId: interaction.turnId,
+            interactionId: interaction.id,
+            itemId: interaction.itemId,
+            request: interaction.request,
+          });
+          this.broadcastActivity(run.threadId);
+        }
+        restoredInteractions.add(run.id);
       }
     }
     const resumableThreads = new Set(
@@ -1605,6 +1686,9 @@ export class RealEngineCore {
     for (const threadId of resumableThreads) await this.drainQueue(threadId);
     for (const run of recovered) {
       if (run.recoveryAction === 'restore_approval' && !restoredApprovals.has(run.id)) {
+        this.broadcastActivity(run.threadId);
+      }
+      if (run.recoveryAction === 'restore_interaction' && !restoredInteractions.has(run.id)) {
         this.broadcastActivity(run.threadId);
       }
       if (run.recoveryAction === 'request_resolution' || run.recoveryAction === 'request_resume') {
@@ -1664,6 +1748,7 @@ export class RealEngineCore {
         ...this.activeTurns.keys(),
         ...this.recoveryExecutions.keys(),
         ...this.recoveredApprovalsByThread.keys(),
+        ...this.recoveredInteractionsByThread.keys(),
       ]),
     ];
   }
@@ -1683,17 +1768,27 @@ export class RealEngineCore {
     while (
       this.activeTurns.size > 0 ||
       this.recoveryExecutions.size > 0 ||
-      this.recoveredApprovalsByThread.size > 0
+      this.recoveredApprovalsByThread.size > 0 ||
+      this.recoveredInteractionsByThread.size > 0
     ) {
       await Promise.allSettled([...this.activeTurns.values()].map((active) => active.handle.done));
-      if (this.recoveryExecutions.size > 0 || this.recoveredApprovalsByThread.size > 0) {
+      if (
+        this.recoveryExecutions.size > 0 ||
+        this.recoveredApprovalsByThread.size > 0 ||
+        this.recoveredInteractionsByThread.size > 0
+      ) {
         await new Promise<void>((resolve) => this.recoveryIdleWaiters.add(resolve));
       }
     }
   }
 
   private notifyRecoveryIdle(): void {
-    if (this.recoveryExecutions.size > 0 || this.recoveredApprovalsByThread.size > 0) return;
+    if (
+      this.recoveryExecutions.size > 0 ||
+      this.recoveredApprovalsByThread.size > 0 ||
+      this.recoveredInteractionsByThread.size > 0
+    )
+      return;
     for (const resolve of this.recoveryIdleWaiters) resolve();
     this.recoveryIdleWaiters.clear();
   }
@@ -1852,6 +1947,129 @@ export class RealEngineCore {
     });
   }
 
+  private async requestInteraction(
+    threadId: string,
+    runId: string,
+    turnId: string,
+    itemId: string,
+    request: InteractionRequestPayload,
+    pendingTool: PendingToolExecution,
+    signal: AbortSignal,
+  ): Promise<InteractionResponse> {
+    const interactionId = crypto.randomUUID();
+    const { interaction } = await this.interactions.createPendingWork({
+      id: interactionId,
+      threadId,
+      runId,
+      turnId,
+      itemId,
+      request,
+      pendingTool,
+    });
+    return new Promise<InteractionResponse>((resolve, reject) => {
+      let settlement: Promise<InteractionResponse> | undefined;
+      const onAbort = () => {
+        void waiter.settle({ kind: 'cancel', note: 'turn interrupted' }).catch(() => undefined);
+      };
+      const cleanup = () => signal.removeEventListener('abort', onAbort);
+      const waiter: PendingInteractionWaiter = {
+        threadId,
+        turnId,
+        request,
+        cleanup,
+        settle: (proposedResponse) => {
+          if (settlement) return settlement;
+          cleanup();
+          settlement = this.interactions
+            .resolve(interactionId, proposedResponse)
+            .then((resolved) => {
+              const response = resolved.response ?? proposedResponse;
+              resolve(response);
+              return response;
+            })
+            .catch((error) => {
+              reject(error);
+              throw error;
+            })
+            .finally(() => {
+              if (this.pendingInteractions.get(interactionId) === waiter) {
+                this.pendingInteractions.delete(interactionId);
+              }
+              this.onInteractionResolved?.(interactionId);
+              this.broadcastActivity(threadId);
+            });
+          return settlement;
+        },
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      this.pendingInteractions.set(interactionId, waiter);
+      this.onBroadcast({
+        type: 'interaction.request',
+        threadId,
+        turnId,
+        interactionId,
+        itemId,
+        request,
+      });
+      this.broadcastActivity(threadId);
+      if (signal.aborted) onAbort();
+      void interaction;
+    });
+  }
+
+  async resolveInteraction(interactionId: string, response: InteractionResponse): Promise<void> {
+    const record = await this.interactions.get(interactionId);
+    if (!record) throw new Error(`interaction ${interactionId} not found`);
+    const pending = this.pendingInteractions.get(interactionId);
+    if (pending) {
+      await pending.settle(response);
+      return;
+    }
+    await this.interactions.resolve(interactionId, response);
+    this.onInteractionResolved?.(interactionId);
+    await this.continueResolvedInteraction(interactionId);
+    this.broadcastActivity(record.threadId);
+  }
+
+  async requestMcpElicitation(
+    threadId: string,
+    itemId: string,
+    request: Extract<InteractionRequestPayload, { kind: 'mcp_elicitation' }>,
+  ): Promise<InteractionResponse> {
+    const active = this.activeTurns.get(threadId);
+    if (!active) throw new Error(`No active turn for MCP elicitation in thread ${threadId}`);
+    const run = await this.runs.get(active.runId);
+    if (!run?.pendingTool || run.pendingTool.itemId !== itemId) {
+      throw new Error('MCP elicitation does not match the active tool call.');
+    }
+    return this.requestInteraction(
+      threadId,
+      run.id,
+      run.turnId,
+      itemId,
+      request,
+      run.pendingTool,
+      active.handle.signal,
+    );
+  }
+
+  private async continueResolvedInteraction(interactionId: string): Promise<boolean> {
+    const current = await this.interactions.get(interactionId);
+    if (!current || this.activeTurns.has(current.threadId)) return false;
+    const claimed = await this.interactions.claimResolvedContinuation(interactionId);
+    if (!claimed) return false;
+    this.recoveredInteractionsByThread.delete(claimed.run.threadId);
+    this.notifyRecoveryIdle();
+    this.onBroadcast({
+      type: 'item.complete',
+      threadId: claimed.run.threadId,
+      itemId: claimed.interaction.itemId,
+      result: { ok: true, details: { response: claimed.interaction.response } },
+    });
+    await this.resumePersistedRun(claimed.run.id);
+    return true;
+  }
+
   // -------------------------------------------------------------------------
   // Snapshot (docs/01 §3.4)
   // -------------------------------------------------------------------------
@@ -1886,6 +2104,8 @@ export class RealEngineCore {
 
     const active = this.activeTurns.get(threadId);
     const pendingApprovals: PendingApproval[] = await this.approvals.pendingForThread(threadId);
+    const pendingInteractions: PendingInteraction[] =
+      await this.interactions.pendingForThread(threadId);
     const queuedRuns = await this.runs.queuedForThread(threadId);
     const recoverableRuns = await this.runs.recoverableForThread(threadId);
 
@@ -1923,6 +2143,7 @@ export class RealEngineCore {
           ? { turnId: '', turnKind: 'user', steerable: false, startedAt: 0, wasInterrupted: true }
           : null,
       pendingApprovals,
+      pendingInteractions,
       queuedInputs: queuedRuns.length,
       queuedRuns: queuedRuns.map((run) => ({
         runId: run.id,

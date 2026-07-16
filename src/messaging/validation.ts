@@ -208,6 +208,14 @@ const approvalDecision: Check = (value, path) =>
     return expected(`${current}.kind`, 'valid approval decision');
   });
 
+const interactionResponse: Check = (value, path) =>
+  recordCheck(value, path, (response, current) => {
+    if (response.kind === 'submit') return requiredField(response, 'value', current);
+    if (response.kind === 'cancel') return optionalField(response, 'note', stringValue, current);
+    if (response.kind === 'timeout') return undefined;
+    return expected(`${current}.kind`, 'submit | cancel | timeout');
+  });
+
 const streamCursor: Check = (value, path) =>
   recordCheck(value, path, (stream, current) =>
     first(
@@ -265,6 +273,12 @@ const snapshot: Check = (value, path) =>
       field(
         state,
         'pendingApprovals',
+        arrayOf(() => undefined),
+        current,
+      ),
+      optionalField(
+        state,
+        'pendingInteractions',
         arrayOf(() => undefined),
         current,
       ),
@@ -369,6 +383,11 @@ function validateOp(value: unknown): string | undefined {
       return first(
         field(value, 'approvalId', nonEmptyString, '<root>'),
         field(value, 'decision', approvalDecision, '<root>'),
+      );
+    case 'interaction.response':
+      return first(
+        field(value, 'interactionId', nonEmptyString, '<root>'),
+        field(value, 'response', interactionResponse, '<root>'),
       );
     case 'ping':
       return undefined;
@@ -545,6 +564,15 @@ function validateAgentEvent(value: unknown): string | undefined {
         field(value, 'turnId', nonEmptyString, '<root>'),
         field(value, 'approvalId', nonEmptyString, '<root>'),
         requiredField(value, 'request', '<root>'),
+        stream(),
+      );
+    case 'interaction.request':
+      return first(
+        thread(),
+        field(value, 'turnId', nonEmptyString, '<root>'),
+        field(value, 'interactionId', nonEmptyString, '<root>'),
+        field(value, 'itemId', nonEmptyString, '<root>'),
+        field(value, 'request', objectValue, '<root>'),
         stream(),
       );
     case 'thread.updated':

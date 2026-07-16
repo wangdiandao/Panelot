@@ -19,7 +19,9 @@ import { createL2Tools } from '../src/tools/l2Tools';
 import { CdpManager } from '../src/tools/cdp/debugger';
 import {
   createDownloadTool,
+  createArtifactTool,
   createFetchUrlTool,
+  createInteractionTools,
   createMemoryTools,
 } from '../src/tools/builtinTools';
 import { GatekeeperService } from '../src/gatekeeper/service';
@@ -277,7 +279,11 @@ function startBackground(
     attentionNotifications.delete(threadId);
     for (const id of ids) void chrome.notifications.clear(id);
   };
-  const notifyThread = (threadId: string, kind: 'approval' | 'recovery', instanceId: string) => {
+  const notifyThread = (
+    threadId: string,
+    kind: 'approval' | 'recovery' | 'interaction',
+    instanceId: string,
+  ) => {
     const id = threadNotificationId(threadId, kind, instanceId);
     let ids = attentionNotifications.get(threadId);
     if (!ids) {
@@ -292,7 +298,9 @@ function startBackground(
       message:
         kind === 'approval'
           ? 'A browser action is waiting for your approval.'
-          : 'A task needs your decision before it can continue.',
+          : kind === 'interaction'
+            ? 'A task is waiting for your input.'
+            : 'A task needs your decision before it can continue.',
       priority: 1,
     });
   };
@@ -354,6 +362,9 @@ function startBackground(
       add(tool);
     for (const tool of createL2Tools(cdp, gateway, db, getThreadId)) add(tool);
     add(createFetchUrlTool());
+    add(createArtifactTool(db, getThreadId));
+    for (const tool of createInteractionTools((tabId) => gateway.getOperationTab(threadId, tabId)))
+      add(tool);
     for (const tool of createMemoryTools(db)) add(tool);
     add(createDownloadTool());
     const skillSource = snapshot
@@ -382,7 +393,7 @@ function startBackground(
       : skills;
     add(createLoadSkillTool(skillSource, getThreadId));
     // MCP tools (mcp__{server}__{tool}) from connected servers (docs/07 §4).
-    for (const tool of mcp.buildTools()) add(tool);
+    for (const tool of mcp.buildTools(getThreadId)) add(tool);
     return registry;
   };
   const resolver = new SettingsProviderResolver(db);
@@ -421,6 +432,15 @@ function startBackground(
       },
     };
   });
+  const interactionAutomation = import('../src/engine/interactionAutomation').then(
+    ({ InteractionAutomation }) =>
+      new InteractionAutomation(gateway, (interactionId, response) =>
+        core.resolveInteraction(interactionId, response),
+      ),
+  );
+  core.onInteractionResolved = (interactionId) => {
+    void interactionAutomation.then((automation) => automation.clear(interactionId));
+  };
 
   // Rebuild the tool registry when MCP servers connect/disconnect (list_changed).
   mcp.onToolsChanged = () => {
@@ -520,6 +540,17 @@ function startBackground(
     if (ev.type === 'turn.complete') gateway.releaseFloatingTarget(ev.threadId);
     if (ev.type === 'approval.request') {
       notifyThread(ev.threadId, 'approval', ev.approvalId);
+    } else if (ev.type === 'interaction.request') {
+      void interactionAutomation.then((automation) =>
+        automation.handle(ev.threadId, ev.interactionId, ev.request),
+      );
+      if (
+        ev.request.kind === 'ask_user' ||
+        ev.request.kind === 'user_action' ||
+        ev.request.kind === 'mcp_elicitation'
+      ) {
+        notifyThread(ev.threadId, 'interaction', ev.interactionId);
+      }
     } else if (ev.type === 'run.recovery_required') {
       notifyThread(ev.threadId, 'recovery', ev.run.runId);
     } else if (ev.type === 'turn.complete') {
@@ -588,6 +619,46 @@ function startBackground(
   });
   registerRuntimeMessageHandler((msg: unknown, _sender, sendResponse) => {
     const type = (msg as { type?: unknown })?.type;
+    if (type === 'panelot.mcpWorkerElicitation') {
+      const request = msg as {
+        serverId?: unknown;
+        message?: unknown;
+        requestedSchema?: unknown;
+        context?: { threadId?: unknown; itemId?: unknown };
+      };
+      if (
+        typeof request.serverId !== 'string' ||
+        typeof request.message !== 'string' ||
+        !request.requestedSchema ||
+        typeof request.requestedSchema !== 'object' ||
+        typeof request.context?.threadId !== 'string' ||
+        typeof request.context.itemId !== 'string'
+      ) {
+        sendResponse({ action: 'decline' });
+        return true;
+      }
+      void core
+        .requestMcpElicitation(request.context.threadId, request.context.itemId, {
+          kind: 'mcp_elicitation',
+          serverId: request.serverId,
+          message: request.message,
+          requestedSchema: request.requestedSchema as Record<string, unknown>,
+        })
+        .then((response) => {
+          if (
+            response.kind === 'submit' &&
+            response.value &&
+            typeof response.value === 'object' &&
+            !Array.isArray(response.value)
+          ) {
+            sendResponse({ action: 'accept', content: response.value });
+          } else {
+            sendResponse({ action: response.kind === 'cancel' ? 'cancel' : 'decline' });
+          }
+        })
+        .catch(() => sendResponse({ action: 'decline' }));
+      return true;
+    }
     if (typeof type !== 'string' || !type.startsWith('panelot.mcp')) return false;
     handleMcpRuntimeMessage(mcp, msg, sendResponse);
     return true;
@@ -652,6 +723,10 @@ function startBackground(
   chrome.alarms.create('panelot-keepalive', { periodInMinutes: 0.5 });
   chrome.alarms.create('panelot-quota', { periodInMinutes: 15 });
   chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name.startsWith('panelot-interaction:')) {
+      void interactionAutomation.then((automation) => automation.handleAlarm(alarm.name));
+      return;
+    }
     if (alarm.name === 'panelot-quota') {
       // LRU-evict over-budget attachments, never touching a live thread (docs/02 §6).
       const active = core.activeThreadIds()[0];

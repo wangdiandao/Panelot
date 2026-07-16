@@ -70,7 +70,13 @@ export function sessionGrantKey(tool: string, origin: string): string {
 }
 
 /** Tools that never require approval regardless of policy (pure UI/read). */
-const ALWAYS_ALLOW = new Set(['memory_read', 'load_skill']);
+const ALWAYS_ALLOW = new Set([
+  'memory_read',
+  'load_skill',
+  'ask_user',
+  'request_user_action',
+  'schedule_resume',
+]);
 
 export function checkGate(call: GatekeeperCall, ctx: GatekeeperContext): GatekeeperVerdict {
   // URL-bearing writes are attributed to their destination: blacklist, rules

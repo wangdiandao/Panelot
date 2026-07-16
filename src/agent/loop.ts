@@ -19,10 +19,13 @@ import type {
   AgentEvent,
   ApprovalRequestPayload,
   ApprovalDecision,
+  InteractionRequestPayload,
+  InteractionResponse,
   TurnKind,
   StopReason,
   Usage,
 } from '../messaging/protocol';
+import { interactionResultContent, interactionResultProvenance } from './interaction';
 import type { ProviderAdapter, GenParams, ToolSchema } from '../providers/types';
 import { isProviderErrorRetryable, ProviderError } from '../providers/types';
 import { ActionError } from '../tools/action/errors';
@@ -64,11 +67,20 @@ export type ApprovalRequester = (
   signal: AbortSignal,
 ) => Promise<ApprovalDecision>;
 
+export type InteractionRequester = (
+  turnId: string,
+  itemId: string,
+  request: InteractionRequestPayload,
+  pendingTool: PendingToolExecution,
+  signal: AbortSignal,
+) => Promise<InteractionResponse>;
+
 export interface TurnEnv {
   tree: ThreadTree;
   tools: ToolRegistry;
   gatekeeper: GatekeeperCheck;
   requestApproval: ApprovalRequester;
+  requestInteraction?: InteractionRequester;
   emit: (ev: AgentEvent) => void;
   provider: ProviderAdapter;
   model: string;
@@ -120,6 +132,8 @@ export interface TurnHandle {
   turnId: string;
   turnKind: TurnKind;
   steerable: boolean;
+  /** Aborts approvals and nested interactions together with the turn. */
+  readonly signal: AbortSignal;
   /** Durably accept a steer message for the next provider request (docs/04 §3). */
   steer(input: UserInput): Promise<void>;
   interrupt(): void;
@@ -213,6 +227,7 @@ export function runTurn(
   const handle: TurnHandle = {
     turnId,
     turnKind,
+    signal: abort.signal,
     get steerable() {
       return acceptingSteer;
     },
@@ -619,6 +634,63 @@ export function runTurn(
               }
               continue;
             }
+          }
+
+          if (tool.interaction) {
+            if (final.toolCalls.length !== 1) {
+              await fail(
+                `${tool.name} must be the only tool call in its model response. Ask or wait first, then plan subsequent actions from the result.`,
+              );
+              continue;
+            }
+            if (!tool.prepareInteraction) {
+              await fail(`Interactive tool ${tool.name} has no request builder.`);
+              continue;
+            }
+            if (!env.requestInteraction) {
+              await fail('The engine interaction runtime is unavailable.');
+              continue;
+            }
+            const request = await tool.prepareInteraction(validation.params as never);
+            const response = await env.requestInteraction(
+              turnId,
+              callItemId,
+              request,
+              preparedTool,
+              abort.signal,
+            );
+            if (abort.signal.aborted) {
+              stopReason = 'interrupted';
+              await fail('interrupted', false, 'streaming_model');
+              break loop;
+            }
+            const resultNode: AppendNodeInput = {
+              type: 'tool_result',
+              payload: {
+                itemId: callItemId,
+                ok: true,
+                contentForLlm: interactionResultContent(response),
+                details: { response },
+                trust: 'trusted',
+                provenance: interactionResultProvenance(request),
+              },
+            };
+            if (env.appendNodesAndSetRunState) {
+              await env.appendNodesAndSetRunState([resultNode], 'streaming_model', {
+                pendingTool: undefined,
+              });
+            } else {
+              await env.tree.appendNode(threadId, resultNode);
+              await env.setRunState?.('streaming_model', { pendingTool: undefined });
+            }
+            env.emit({
+              type: 'item.complete',
+              threadId,
+              itemId: callItemId,
+              result: { ok: true, details: { response } },
+            });
+            consecutiveFailures = 0;
+            continue;
           }
 
           if (abort.signal.aborted) {

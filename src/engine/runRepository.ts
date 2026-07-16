@@ -46,6 +46,7 @@ export type RecoveredRun = RunRecord & {
   recoveryAction:
     | 'resume_run'
     | 'restore_approval'
+    | 'restore_interaction'
     | 'replay_tool'
     | 'request_resolution'
     | 'request_resume'
@@ -58,6 +59,7 @@ const steerableStates: readonly RunState[] = [
   'preparing',
   'streaming_model',
   'waiting_approval',
+  'waiting_interaction',
   'executing_tool',
 ];
 
@@ -110,6 +112,7 @@ export class RunRepository {
   async recoverableForThread(threadId: string): Promise<RunRecord[]> {
     const states: readonly RunState[] = [
       'waiting_approval',
+      'waiting_interaction',
       'paused_budget',
       'paused_uncertain',
       'interrupted',

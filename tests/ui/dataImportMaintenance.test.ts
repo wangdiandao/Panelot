@@ -77,6 +77,7 @@ const blockers = {
   hardRuns: {},
   dormantRuns: { queued: 1 },
   pendingApprovals: 0,
+  pendingInteractions: 0,
   requiresDormantConfirmation: true,
   hardBlocked: false,
 };

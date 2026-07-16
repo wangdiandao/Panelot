@@ -64,6 +64,32 @@ describe('cross-context runtime validation', () => {
     expect(parsed.ok).toBe(false);
   });
 
+  it('accepts interaction responses and streamed interaction requests', () => {
+    expect(
+      parseOp({
+        type: 'interaction.response',
+        submissionId: 'interaction-response-1',
+        interactionId: 'interaction-1',
+        response: { kind: 'submit', value: { answers: [{ id: 'choice', value: 'a' }] } },
+      }).ok,
+    ).toBe(true);
+    expect(
+      parseAgentEvent({
+        type: 'interaction.request',
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        interactionId: 'interaction-1',
+        itemId: 'call-1',
+        request: {
+          kind: 'ask_user',
+          questions: [{ id: 'choice', question: 'Choose one' }],
+        },
+        requestedAt: 1,
+        stream: { threadId: 'thread-1', epoch: 1, sequence: 1 },
+      }).ok,
+    ).toBe(true);
+  });
+
   it('accepts only the current content-script protocol and schema hash', () => {
     expect(
       parseContentScriptOp({
@@ -174,6 +200,15 @@ describe('cross-context runtime validation', () => {
         decision: { kind: 'allow-everything' },
       },
       '<root>.decision.kind',
+    ],
+    [
+      {
+        type: 'interaction.response',
+        submissionId: 'interaction-2',
+        interactionId: 'interaction-2',
+        response: { kind: 'finished' },
+      },
+      '<root>.response.kind',
     ],
   ])('rejects invalid engine command envelopes %#', (value, diagnosticPath) => {
     const parsed = parseOp(value);

@@ -15,6 +15,7 @@ describe('panelot runtime schema', () => {
         'approvals',
         'attachments',
         'commandReceipts',
+        'interactions',
         'memories',
         'maintenance',
         'nodes',

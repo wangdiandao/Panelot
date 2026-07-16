@@ -167,6 +167,40 @@ describe('GatekeeperService', () => {
     });
   });
 
+  it('keeps durable page watches inside the target origin permission boundary', async () => {
+    vi.stubGlobal('chrome', { permissions: {} });
+    const { db } = makeDb();
+    const hostPermissions = {
+      inspect: vi.fn(async () => ({ granted: false, origin: 'https://example.com/*' })),
+    };
+    const service = new GatekeeperService(
+      db as never,
+      async () => 'https://unrelated.test',
+      hostPermissions as never,
+    );
+    service.setThreadConfig('thread-1', { permissionPolicy: 'auto' });
+
+    await expect(
+      service.check(
+        {
+          toolName: 'watch_page',
+          params: { condition: 'text', value: 'Done' },
+          effects: 'read',
+          level: 'builtin',
+          target: { origin: 'https://example.com' },
+        },
+        'thread-1',
+      ),
+    ).resolves.toMatchObject({
+      verdict: 'ask',
+      request: {
+        targetOrigin: 'https://example.com/*',
+        flags: ['host_permission'],
+      },
+    });
+    expect(hostPermissions.inspect).toHaveBeenCalledWith('https://example.com');
+  });
+
   it('restores acceptForSession grants in a new service worker instance', async () => {
     const session = new MemorySessionStorage();
     const { db } = makeDb(['https://example.com']);

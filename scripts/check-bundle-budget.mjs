@@ -6,7 +6,7 @@ const root = resolve(process.argv[2] ?? 'dist/chrome-mv3');
 const limits = {
   totalJs: 4 * 1024 * 1024,
   eagerJs: 500 * 1024,
-  backgroundEntry: 200 * 1024,
+  backgroundEntry: 208 * 1024,
   backgroundStatic: 384 * 1024,
 };
 

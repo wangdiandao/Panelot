@@ -10,6 +10,7 @@
 import { schema, type RuntimeSchema } from './schema';
 import type { ToolExecutionBinding, ToolRecoveryPolicy } from '../db/types';
 import type { ContentBlock, ToolLevel } from '../messaging/protocol';
+import type { InteractionRequestPayload } from '../messaging/protocol';
 import type { ToolSchema } from '../providers/types';
 
 export interface ToolResult<D = unknown> {
@@ -42,6 +43,9 @@ export interface AgentTool<P = unknown, D = unknown> {
   resultProvenance?: 'user' | 'page' | 'mcp' | 'tool' | 'import' | 'plugin';
   /** Stable identity for recovery-time execution binding validation. */
   executionBinding?: ToolExecutionBinding;
+  /** Engine-mediated suspension. Interactive tools never execute directly. */
+  interaction?: InteractionRequestPayload['kind'];
+  prepareInteraction?: (params: P) => Promise<InteractionRequestPayload>;
   resolveTarget?: (params: P) => Promise<{
     tabId?: number;
     frameId?: number;

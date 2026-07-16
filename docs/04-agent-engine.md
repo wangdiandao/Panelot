@@ -121,7 +121,8 @@ SW 重启后的处理分为四类：
 
 - 尚未开始且仍为 queued 的 Run 可以首次解析环境；
 - 已开始的 Run 必须通过 `RunEnvironmentSnapshot` 的版本与摘要校验；
-- waiting_approval 从 approvals 表恢复，只读或 retry-safe 工具可以重放；
+- `waiting_approval` 从 approvals 表恢复；`waiting_interaction` 从 interactions 表恢复并重新展示或重挂 alarm/listener；
+- 已收到响应的普通交互只会 claim 一次并追加可信 `tool_result`。MCP Elicitation 若跨 Worker 中断，远端原调用无法续接，恢复结果会明确要求模型仅在安全时重发；
 - 结果不明的写操作进入 `paused_uncertain`，由用户选择 retry、mark_done 或 fail。模型流中断则进入 `interrupted`。
 
 恢复使用快照中的完整 prompt、Skill 内容、模型参数和 tool catalog。Provider transport、credential reference 形状、MCP endpoint/auth binding，或本地工具 schema 与安全元数据发生漂移时，恢复会被拒绝。同一 credential reference 指向的密文值可以轮换。快照在 clone、摘要和落库前还受总字节数、目录项数、单项体积和嵌套深度限制。

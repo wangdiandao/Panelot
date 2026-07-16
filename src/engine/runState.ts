@@ -7,6 +7,7 @@ const transitions: Record<RunState, readonly RunState[]> = {
   preparing: [
     'streaming_model',
     'waiting_approval',
+    'waiting_interaction',
     'executing_tool',
     'paused_budget',
     'paused_uncertain',
@@ -15,6 +16,7 @@ const transitions: Record<RunState, readonly RunState[]> = {
   ],
   streaming_model: [
     'waiting_approval',
+    'waiting_interaction',
     'executing_tool',
     'paused_budget',
     'interrupted',
@@ -22,9 +24,11 @@ const transitions: Record<RunState, readonly RunState[]> = {
     'completed',
   ],
   waiting_approval: ['executing_tool', 'streaming_model', 'interrupted', 'failed'],
+  waiting_interaction: ['streaming_model', 'interrupted', 'failed'],
   executing_tool: [
     'streaming_model',
     'waiting_approval',
+    'waiting_interaction',
     'paused_budget',
     'paused_uncertain',
     'interrupted',
@@ -53,6 +57,7 @@ export interface RunRecoveryInput {
 export type RunRecoveryDecision =
   | { state: 'queued'; action: 'resume_run' }
   | { state: 'waiting_approval'; action: 'restore_approval' }
+  | { state: 'waiting_interaction'; action: 'restore_interaction' }
   | { state: 'preparing'; action: 'replay_tool' }
   | { state: 'paused_uncertain'; action: 'request_resolution' }
   | { state: 'interrupted'; action: 'request_resume' }
@@ -65,6 +70,8 @@ export function recoverInterruptedRun(input: RunRecoveryInput): RunRecoveryDecis
       return { state: 'queued', action: 'resume_run' };
     case 'waiting_approval':
       return { state: 'waiting_approval', action: 'restore_approval' };
+    case 'waiting_interaction':
+      return { state: 'waiting_interaction', action: 'restore_interaction' };
     case 'executing_tool':
       if (input.pendingTool?.effect === 'read' || input.pendingTool?.recovery === 'retry-safe') {
         return { state: 'preparing', action: 'replay_tool' };

@@ -149,6 +149,12 @@ const snapshot: Check = (value, path) =>
         arrayOf(() => undefined),
         current,
       ),
+      optionalField(
+        state,
+        'pendingInteractions',
+        arrayOf(() => undefined),
+        current,
+      ),
       field(state, 'queuedInputs', nonNegativeInteger, current),
       field(
         state,
@@ -324,6 +330,15 @@ function validateAgentEvent(value: unknown): string | undefined {
         requiredField(value, 'request', '<root>'),
         stream(),
       );
+    case 'interaction.request':
+      return first(
+        thread(),
+        field(value, 'turnId', nonEmptyString, '<root>'),
+        field(value, 'interactionId', nonEmptyString, '<root>'),
+        field(value, 'itemId', nonEmptyString, '<root>'),
+        field(value, 'request', objectValue, '<root>'),
+        stream(),
+      );
     case 'thread.updated':
       return first(
         thread(),
@@ -358,6 +373,7 @@ function validateAgentEvent(value: unknown): string | undefined {
                 field(activity, 'threadId', nonEmptyString, nested),
                 field(activity, 'running', booleanValue, nested),
                 field(activity, 'pendingApprovals', nonNegativeInteger, nested),
+                optionalField(activity, 'pendingInteractions', nonNegativeInteger, nested),
               ),
             ),
           '<root>',

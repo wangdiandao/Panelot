@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import {
   ChevronDown,
+  CircleHelp,
   Ellipsis,
   Loader2,
   Pencil,
@@ -101,6 +102,7 @@ export function isUnread(
 export interface ThreadActivity {
   running: boolean;
   pendingApprovals: number;
+  pendingInteractions?: number;
 }
 
 interface Props {
@@ -432,6 +434,8 @@ function ThreadRow({
       className="text-warning"
       aria-label={t('app.needsApproval')}
     />
+  ) : activity?.pendingInteractions ? (
+    <CircleHelp data-icon="inline-start" className="text-info" aria-label={t('app.needsInput')} />
   ) : activity?.running ? (
     <Loader2
       data-icon="inline-start"

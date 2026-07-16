@@ -21,6 +21,7 @@ export interface DataImportBlockers {
   hardRuns: Partial<Record<RunState, number>>;
   dormantRuns: Partial<Record<RunState, number>>;
   pendingApprovals: number;
+  pendingInteractions: number;
   requiresDormantConfirmation: boolean;
   hardBlocked: boolean;
 }

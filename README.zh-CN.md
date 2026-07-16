@@ -56,7 +56,6 @@ Panelot 不提供账户、应用后端、云同步、广告或遥测。你选入
 - MCP 只支持远端 Streamable HTTP，不支持本地 stdio Server。
 - Plugin 只能包含经过校验的只读数据资产，不能运行远程代码。
 - Skill 以单个 `SKILL.md` 文件导入，不会一并导入 `scripts/`、`references/` 等附属目录。
-- 当前没有内置 `web_search` 或独立的 `ask_user` 工具；模型仍可在普通回复中提问。
 - Provider 名称不能证明端点兼容。请先运行 **Verify**，再用所选模型发起一次真实请求。
 
 ## 文档

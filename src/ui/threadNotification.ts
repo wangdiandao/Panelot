@@ -2,7 +2,7 @@ const PREFIX = 'panelot:thread:';
 
 export function threadNotificationId(
   threadId: string,
-  kind: 'approval' | 'recovery',
+  kind: 'approval' | 'recovery' | 'interaction',
   instanceId: string,
 ): string {
   return `${PREFIX}${encodeURIComponent(threadId)}:${kind}:${encodeURIComponent(instanceId)}`;

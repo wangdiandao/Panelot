@@ -33,6 +33,7 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   'app.unread': { 'zh-CN': '有新内容', en: 'Unread' },
   'app.running': { 'zh-CN': '任务运行中', en: 'Task running' },
   'app.needsApproval': { 'zh-CN': '等待审批', en: 'Awaiting approval' },
+  'app.needsInput': { 'zh-CN': '等待你的输入', en: 'Awaiting your input' },
   'app.deleteConfirmTitle': { 'zh-CN': '删除会话？', en: 'Delete this chat?' },
   'app.deleteConfirmBody': { 'zh-CN': '删除后不可恢复。', en: 'This cannot be undone.' },
 
@@ -102,6 +103,23 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   'approval.allowOnce': { 'zh-CN': '允许一次', en: 'Allow once' },
   'approval.allowSession': { 'zh-CN': '本次会话', en: 'This chat' },
   'approval.allowSite': { 'zh-CN': '本站始终', en: 'Always on this site' },
+  'interaction.question': { 'zh-CN': '需要你的回答', en: 'Your input is needed' },
+  'interaction.userAction': { 'zh-CN': '请接管此步骤', en: 'Take over this step' },
+  'interaction.watchPage': { 'zh-CN': '正在等待页面变化', en: 'Waiting for a page change' },
+  'interaction.schedule': { 'zh-CN': '任务已定时暂停', en: 'Task scheduled to resume' },
+  'interaction.mcp': { 'zh-CN': 'MCP 服务需要输入', en: 'MCP server needs input' },
+  'interaction.otherAnswer': { 'zh-CN': '输入其他答案', en: 'Type another answer' },
+  'interaction.completed': { 'zh-CN': '我已完成', en: 'I completed it' },
+  'interaction.submit': { 'zh-CN': '提交', en: 'Submit' },
+  'interaction.skip': { 'zh-CN': '跳过', en: 'Skip' },
+  'interaction.previousQuestion': { 'zh-CN': '上一题', en: 'Previous question' },
+  'interaction.nextQuestion': { 'zh-CN': '下一题', en: 'Next question' },
+  'interaction.questionProgress': { 'zh-CN': '/', en: 'of' },
+  'interaction.watching': {
+    'zh-CN': 'Panelot 会在条件满足或超时后自动继续。',
+    en: 'Panelot will continue when the condition is met or the wait times out.',
+  },
+  'interaction.invalidJson': { 'zh-CN': '请输入有效的 JSON。', en: 'Enter valid JSON.' },
   'approval.decline': { 'zh-CN': '拒绝', en: 'Decline' },
   'approval.crossScope': {
     'zh-CN': '越出任务作用域 — 该操作的目标不在本任务已触达的站点内',
@@ -801,8 +819,9 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
     en: 'Current activity blocks this import',
   },
   'settings.data.blockerSummary': {
-    'zh-CN': '活动会话 {active} · 运行中任务 {hard} · 可丢弃任务 {dormant} · 待审批 {approvals}',
-    en: 'Active chats {active} · running tasks {hard} · discardable tasks {dormant} · pending approvals {approvals}',
+    'zh-CN':
+      '活动会话 {active} · 运行中任务 {hard} · 可丢弃任务 {dormant} · 待审批 {approvals} · 待交互 {interactions}',
+    en: 'Active chats {active} · running tasks {hard} · discardable tasks {dormant} · pending approvals {approvals} · pending interactions {interactions}',
   },
   'settings.data.confirmDormant': {
     'zh-CN': '我确认丢弃已排队、暂停或中断的任务状态。',

@@ -129,6 +129,55 @@ const eventTypes = () => events.map((e) => e.type);
 // ---------------------------------------------------------------------------
 
 describe('agent loop (docs/04 §2)', () => {
+  it('suspends for an interactive tool without executing its placeholder', async () => {
+    const execute = vi.fn();
+    tools.register({
+      name: 'ask_user',
+      label: 'Ask user',
+      description: 'Ask for a material choice.',
+      parameters: z.object({ question: z.string() }),
+      level: 'builtin',
+      effects: 'read',
+      recovery: 'retry-safe',
+      resultTrust: 'trusted',
+      resultProvenance: 'user',
+      interaction: 'ask_user',
+      prepareInteraction: async (params) => ({
+        kind: 'ask_user',
+        questions: [{ id: 'answer', question: params.question }],
+      }),
+      execute,
+    });
+    const requestInteraction = vi.fn(async () => ({
+      kind: 'submit' as const,
+      value: { answers: [{ id: 'answer', value: 'Use the compact layout' }] },
+    }));
+    const thread = await tree.createThread({});
+    provider.queue(
+      {
+        toolCalls: [{ id: 'c1', name: 'ask_user', params: { question: 'Which layout?' } }],
+      },
+      { streamText: ['done'] },
+    );
+
+    const stop = await runTurn(makeEnv({ requestInteraction }), thread.id, { text: 'design it' })
+      .done;
+
+    expect(stop).toBe('end');
+    expect(execute).not.toHaveBeenCalled();
+    expect(requestInteraction).toHaveBeenCalledWith(
+      expect.any(String),
+      'c1',
+      {
+        kind: 'ask_user',
+        questions: [{ id: 'answer', question: 'Which layout?' }],
+      },
+      expect.objectContaining({ toolName: 'ask_user' }),
+      expect.any(AbortSignal),
+    );
+    expect(JSON.stringify(provider.requests[1]?.messages)).toContain('Use the compact layout');
+  });
+
   it('emits structured provider diagnostics on a failed model call', async () => {
     const details = {
       status: 400,

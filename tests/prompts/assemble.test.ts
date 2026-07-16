@@ -52,6 +52,21 @@ describe('assembleSystemPrompt (docs/10 §1 layering)', () => {
     expect(KERNEL_PROMPT).toMatch(/does\s+not replace the submission default/);
     expect(KERNEL_PROMPT).toContain('tabs_list always covers every browser window');
   });
+
+  it('defines a strict native tool-call formatting contract', () => {
+    expect(KERNEL_PROMPT).toContain("provider's native tool-call mechanism");
+    expect(KERNEL_PROMPT).toMatch(
+      /Never\s+substitute assistant text, Markdown, or a code fence for the actual call/,
+    );
+    expect(KERNEL_PROMPT).toContain('exactly one JSON object');
+    expect(KERNEL_PROMPT).toMatch(
+      /Include every\s+required field and only fields the schema permits/,
+    );
+    expect(KERNEL_PROMPT).toContain('Do not add an extra tool/name/arguments envelope');
+    expect(KERNEL_PROMPT).toContain('or stringify nested objects or arrays');
+    expect(KERNEL_PROMPT).toContain('Parallel calls must be independent');
+    expect(KERNEL_PROMPT).toContain('Do not resend the same invalid payload unchanged');
+  });
 });
 
 describe('fenceUntrusted (docs/10 §4)', () => {

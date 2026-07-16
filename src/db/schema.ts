@@ -1,6 +1,7 @@
 import Dexie, { type Table } from 'dexie';
 import type {
   ApprovalRecord,
+  InteractionRecord,
   Attachment,
   CommandReceipt,
   MemoryRecord,
@@ -22,6 +23,7 @@ export class PanelotDB extends Dexie {
   runs!: Table<RunRecord, string>;
   commandReceipts!: Table<CommandReceipt, string>;
   approvals!: Table<ApprovalRecord, string>;
+  interactions!: Table<InteractionRecord, string>;
   plugins!: Table<PluginRecord, string>;
   pluginAssets!: Table<PluginAssetRecord, string>;
   maintenance!: Table<MaintenanceMarker, string>;
@@ -45,6 +47,9 @@ export class PanelotDB extends Dexie {
     });
     this.version(3).stores({
       maintenance: 'id, operationId, committedAt',
+    });
+    this.version(4).stores({
+      interactions: 'id, threadId, runId, [threadId+status], requestedAt',
     });
   }
 }
