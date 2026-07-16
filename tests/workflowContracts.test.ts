@@ -19,14 +19,14 @@ function sourceFiles(relativeDirectory: string): string[] {
 }
 
 const actionPins = new Map([
-  ['actions/checkout@v4.3.1', '34e114876b0b11c390a56381ad16ebd13914f8d5'],
-  ['pnpm/action-setup@v4.4.0', 'fc06bc1257f339d1d5d8b3a19a8cae5388b55320'],
-  ['actions/setup-node@v4.4.0', '49933ea5288caeca8642d1e84afbd3f7d6820020'],
-  ['actions/upload-artifact@v4.6.2', 'ea165f8d65b6e75b540449e92b4886f43607fa02'],
+  ['actions/checkout@v7.0.0', '9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0'],
+  ['pnpm/action-setup@v6.0.9', '0ebf47130e4866e96fce0953f49152a61190b271'],
+  ['actions/setup-node@v7.0.0', '820762786026740c76f36085b0efc47a31fe5020'],
+  ['actions/upload-artifact@v7.0.1', '043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'],
   ['anchore/sbom-action@v0.24.0', 'e22c389904149dbc22b58101806040fa8d37a610'],
-  ['actions/configure-pages@v5.0.0', '983d7736d9b0ae728b81ab479565c72886d7745b'],
-  ['actions/upload-pages-artifact@v3.0.1', '56afc609e74202658d3ffba0e8f6dda462b719fa'],
-  ['actions/deploy-pages@v4.0.5', 'd6db90164ac5ed86f2b6aed7e0febac5b3c0c03e'],
+  ['actions/configure-pages@v6.0.0', '45bfe0192ca1faeb007ade9deae92b16b8254a0d'],
+  ['actions/upload-pages-artifact@v5.0.0', 'fc324d3547104276b827a68afc52ff2a11cc49c9'],
+  ['actions/deploy-pages@v5.0.0', 'cd2ce8fcbc39b97be8ca5fce6e763baed58fa128'],
 ]);
 
 describe('repository delivery contracts', () => {
