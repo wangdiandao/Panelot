@@ -106,7 +106,8 @@ export function parseKeyCombo(combo: string): KeyPayload {
     if (bit === undefined) throw new Error(`未知修饰键: "${part}"（支持 Control/Alt/Shift/Meta）`);
     modifiers |= bit;
   }
-  const last = parts[parts.length - 1]!;
+  const last = parts.at(-1);
+  if (!last) throw new Error('按键组合不能为空');
 
   // A trailing modifier alone ('Control') is also valid-ish — treat as error
   // to keep the model honest about what it's pressing.

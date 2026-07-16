@@ -12,7 +12,7 @@ import {
   type ContentScriptResult,
 } from '../messaging/protocol';
 import { parseContentScriptResult } from '../messaging/validation';
-import type { ExecuteResult } from './content/executor';
+import type { ExecuteResult } from './content/protocol';
 import { ActionError } from './action/errors';
 import { actionError } from './action/errors';
 import { ActionDeadline, abortedAction, deadlineForTool, waitWithContext } from './action/deadline';
@@ -415,7 +415,8 @@ export class BrowserToolGateway {
   }
 
   #schedulePersist(): void {
-    if (!this.#sessionStorage) return;
+    const sessionStorage = this.#sessionStorage;
+    if (!sessionStorage) return;
     const operation = this.#mutationTail.then(async () => {
       await this.ready();
       const state: StoredBrowserGatewayState = {
@@ -425,7 +426,7 @@ export class BrowserToolGateway {
         touched: boundedThreadTabSets(this.#touched),
         drivenTabs: boundedThreadTabSets(this.#drivenTabs),
       };
-      await this.#sessionStorage!.set({ [BROWSER_GATEWAY_SESSION_STATE_KEY]: state });
+      await sessionStorage.set({ [BROWSER_GATEWAY_SESSION_STATE_KEY]: state });
     });
     this.#mutationTail = operation.catch((error: unknown) => {
       this.#stateError = new Error('Browser session state is unavailable', { cause: error });
@@ -820,7 +821,8 @@ export class BrowserToolGateway {
       }
 
       if (!executionCompleted) throw executionError;
-      return result!;
+      if (!result) throw new Error('content script completed without a result');
+      return result;
     });
   }
 
@@ -886,7 +888,12 @@ export class BrowserToolGateway {
       if (createdTab && threadId && newTabWatch) {
         return this.#createdTabResult(threadId, newTabWatch, createdTab, signal, deadlineAt);
       }
-      return result.result as ExecuteResult;
+      if (typeof result.result === 'string') {
+        throw new ContentProtocolError(
+          `content script returned ${result.result} for an execute request`,
+        );
+      }
+      return result.result;
     } catch (e) {
       if (e instanceof ToolReportedError) {
         if (e.failure) throw new ActionError(e.failure);
@@ -1191,8 +1198,13 @@ export class BrowserToolGateway {
       deadlineAt,
     };
     const result = await this.#sendContentRequest(tabId, op, signal, deadlineAt, false);
-    if (!result?.ok) throw new Error(result ? (result as { error: string }).error : 'no response');
-    return result.result as ExecuteResult;
+    if (!result.ok) throw new Error(result.error);
+    if (typeof result.result === 'string') {
+      throw new ContentProtocolError(
+        `content script returned ${result.result} for an execute request`,
+      );
+    }
+    return result.result;
   }
 
   async #ensureInjected(

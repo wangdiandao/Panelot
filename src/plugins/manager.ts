@@ -583,11 +583,14 @@ function concatenateChunks(chunks: readonly Uint8Array[], byteLength: number): U
 function normalizeArchiveEntries(entries: JSZipObject[]): NormalizedZipEntry[] {
   const paths = entries.map((entry) => validatePath(entry.name));
   const roots = new Set(paths.map((path) => path.split('/')[0]));
-  const root = roots.size === 1 ? paths[0]!.split('/')[0]! : '';
+  const firstPath = paths[0];
+  const root = roots.size === 1 && firstPath ? (firstPath.split('/')[0] ?? '') : '';
   const commonRoot = paths.includes(`${root}/${MANIFEST_PATH}`) ? `${root}/` : '';
   const seen = new Set<string>();
   return entries.map((entry, index) => {
-    const path = validatePath(commonRoot ? paths[index]!.slice(commonRoot.length) : paths[index]!);
+    const sourcePath = paths[index];
+    if (!sourcePath) throw new Error('Plugin archive entry path is missing');
+    const path = validatePath(commonRoot ? sourcePath.slice(commonRoot.length) : sourcePath);
     if (seen.has(path)) throw new Error(`Plugin archive has duplicate path: ${path}`);
     seen.add(path);
     return { entry, path };
@@ -598,8 +601,9 @@ async function resolveGitHubArchiveUrl(parsed: URL, fetcher: typeof fetch): Prom
   if (parsed.hostname === 'codeload.github.com') return parsed.href;
   const segments = parsed.pathname.split('/').filter(Boolean);
   if (segments.length < 2) throw new Error('GitHub plugin URL must identify a repository');
-  const owner = segments[0]!;
-  const repository = segments[1]!.replace(/\.git$/i, '');
+  const [owner, rawRepository] = segments;
+  if (!owner || !rawRepository) throw new Error('GitHub plugin URL must identify a repository');
+  const repository = rawRepository.replace(/\.git$/i, '');
   if (!/^[a-z0-9_.-]+$/i.test(owner) || !/^[a-z0-9_.-]+$/i.test(repository)) {
     throw new Error('GitHub plugin repository path is invalid');
   }

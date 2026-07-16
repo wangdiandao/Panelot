@@ -43,13 +43,17 @@ function receivesEvents(el: Element): { ok: true } | { ok: false; blocker: Eleme
     [rect.left + rect.width / 2, rect.top + rect.height / 2],
     [rect.left + Math.min(4, rect.width / 2), rect.top + Math.min(4, rect.height / 2)],
   ];
-  for (const [x, y] of points) {
-    const hit = document.elementFromPoint(x!, y!);
+  let blocker: Element | null = null;
+  for (const point of points) {
+    const [x, y] = point;
+    if (x === undefined || y === undefined) continue;
+    const hit = document.elementFromPoint(x, y);
     if (!hit || hit === el || el.contains(hit) || hit.contains(el)) return { ok: true };
+    blocker ??= hit;
     const root = hit.getRootNode();
     if (root instanceof ShadowRoot && el.contains(root.host)) return { ok: true };
   }
-  return { ok: false, blocker: document.elementFromPoint(points[0]![0]!, points[0]![1]!)! };
+  return blocker ? { ok: false, blocker } : { ok: true };
 }
 
 async function stable(el: Element, deadline: ActionDeadline): Promise<boolean> {

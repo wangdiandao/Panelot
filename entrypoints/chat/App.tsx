@@ -135,15 +135,21 @@ export function App() {
   useEffect(() => {
     if (!globalSettings) return;
     if (globalSettings.sidebarWidth) {
+      // Hydrate persisted layout when the external settings snapshot becomes available.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSidebarWidth(clampSidebarWidth(globalSettings.sidebarWidth));
     }
     setSidebarCollapsed(globalSettings.sidebarCollapsed ?? false);
     setCollapsedGroups(globalSettings.sidebarGroupsCollapsed ?? []);
   }, [globalSettings]);
 
-  useEffect(() => void refreshThreads(), [state.meta?.title, state.meta?.updatedAt]);
+  useEffect(() => {
+    void refreshThreads();
+  }, [state.meta?.title, state.meta?.updatedAt]);
   // Keep the open thread's seen timestamp fresh while it advances on-screen.
   useEffect(() => {
+    // Reconcile local unread state with externally persisted thread progress.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (state.threadId && state.meta?.updatedAt) markSeen(state.threadId);
   }, [state.threadId, state.meta?.updatedAt]);
 

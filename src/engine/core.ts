@@ -638,7 +638,9 @@ export class RealEngineCore {
           );
           await this.resumePersistedRun(run.id);
         } else {
-          await this.replayPreparedTool({ ...(await this.runs.get(run.id))! });
+          const refreshedRun = await this.runs.get(run.id);
+          if (!refreshedRun) throw new Error(`Run ${run.id} disappeared before replay`);
+          await this.replayPreparedTool({ ...refreshedRun });
         }
         return;
       }
@@ -822,9 +824,9 @@ export class RealEngineCore {
         const presetSkills = (await this.db.skills.bulkGet(presetSkillIds)).filter(
           (skill): skill is NonNullable<typeof skill> => !!skill?.enabled,
         );
-        const attachedSkillIds = (input.attachedContext ?? [])
-          .filter((block) => block.kind === 'skill' && !!block.sourceRef)
-          .map((block) => block.sourceRef!);
+        const attachedSkillIds = (input.attachedContext ?? []).flatMap((block) =>
+          block.kind === 'skill' && block.sourceRef ? [block.sourceRef] : [],
+        );
         const activeSkillIds = [
           ...new Set([...presetSkills.map((skill) => skill.id), ...attachedSkillIds]),
         ];
@@ -1819,7 +1821,8 @@ export class RealEngineCore {
       if (!excerpt) return;
 
       // Stage 1 — instant fallback: first line of the message, truncated.
-      const fallback = excerpt.split('\n')[0]!.slice(0, 40);
+      const [firstLine = ''] = excerpt.split('\n');
+      const fallback = firstLine.slice(0, 40);
       await this.setTitle(threadId, fallback);
 
       // Stage 2 — LLM title via the task model (docs/03 §1.5).
@@ -2114,8 +2117,8 @@ export class RealEngineCore {
     // The UI offers "continue"; replay from the last checkpoint continues.
     let wasInterrupted = false;
     if (!active && items.length > 0) {
-      const last = items[items.length - 1]!;
-      wasInterrupted = last.kind === 'tool_call' || last.kind === 'user_message';
+      const last = items.at(-1);
+      wasInterrupted = last?.kind === 'tool_call' || last?.kind === 'user_message';
     }
 
     return {

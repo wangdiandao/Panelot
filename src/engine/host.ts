@@ -404,7 +404,9 @@ export class EngineHost {
     queue.running = true;
     try {
       while (queue.ops.length > 0) {
-        const { op, from } = queue.ops.shift()!;
+        const queued = queue.ops.shift();
+        if (!queued) continue;
+        const { op, from } = queued;
         try {
           await this.#core.handleOp(
             { ...op, clientId: from.clientId ?? 'unidentified-client' } as Op,
@@ -450,15 +452,16 @@ export class EngineHost {
       ev.type === 'item.delta' &&
       (ev.delta.text !== undefined || ev.delta.reasoning !== undefined)
     ) {
+      if (!ev.stream) throw new Error('item.delta is missing its stream cursor');
       const buf = client.pendingDeltas.get(ev.itemId) ?? {
         threadId: ev.threadId,
         text: '',
         reasoning: '',
-        stream: ev.stream!,
+        stream: ev.stream,
       };
       buf.text += ev.delta.text ?? '';
       buf.reasoning += ev.delta.reasoning ?? '';
-      buf.stream = ev.stream!;
+      buf.stream = ev.stream;
       client.pendingDeltas.set(ev.itemId, buf);
       if (client.flushTimer === null) {
         client.flushTimer = setTimeout(() => this.#flushDeltas(client), DELTA_COALESCE_MS);

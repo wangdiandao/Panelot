@@ -19,11 +19,14 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   reactHooks.configs.flat.recommended,
   {
-    linterOptions: { reportUnusedDisableDirectives: 'off' },
+    linterOptions: { reportUnusedDisableDirectives: 'error' },
     rules: {
-      'react-hooks/refs': 'off',
-      'react-hooks/set-state-in-effect': 'off',
-      'react-hooks/static-components': 'off',
+      'no-console': 'error',
+      'no-eval': 'error',
+      'no-new-func': 'error',
+      'react-hooks/refs': 'error',
+      'react-hooks/set-state-in-effect': 'error',
+      'react-hooks/static-components': 'error',
     },
   },
   {
@@ -41,7 +44,8 @@ export default tseslint.config(
       },
     },
     rules: {
-      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-explicit-any': 'error',
+      '@typescript-eslint/no-non-null-assertion': 'error',
       '@typescript-eslint/no-unused-vars': [
         'error',
         { argsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' },
@@ -53,6 +57,20 @@ export default tseslint.config(
     files: ['src/ui/components/ui/**/*.{ts,tsx}'],
     rules: {
       'react-hooks/static-components': 'off',
+    },
+  },
+  {
+    files: ['scripts/**/*.{js,mjs,cjs}'],
+    rules: {
+      'no-console': 'off',
+    },
+  },
+  {
+    // Test fixtures frequently assert presence immediately before dereferencing.
+    // Production, preview, and browser-level e2e code remain fully gated.
+    files: ['tests/**/*.{ts,tsx}'],
+    rules: {
+      '@typescript-eslint/no-non-null-assertion': 'off',
     },
   },
 );

@@ -4,7 +4,7 @@
  * submit composes "/cmd" user text with {{key}} placeholders resolved.
  */
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Field, FieldGroup, FieldLabel } from './ui/field';
@@ -25,6 +25,7 @@ import {
   SelectValue,
 } from './ui/select';
 import type { SkillCommand } from './composerTriggers';
+import { t } from '../i18n';
 
 interface Props {
   command: SkillCommand | null;
@@ -34,18 +35,32 @@ interface Props {
 }
 
 export function SkillVariableForm({ command, onClose, onSubmit }: Props) {
-  const [values, setValues] = useState<Record<string, string>>({});
-
-  useEffect(() => {
-    if (!command) return;
-    const defaults: Record<string, string> = {};
-    for (const v of command.variables ?? []) {
-      if (v.default !== undefined) defaults[v.key] = v.default;
-    }
-    setValues(defaults);
-  }, [command]);
-
   if (!command) return null;
+
+  return (
+    <SkillVariableDialog
+      key={`${command.skillName}:${command.command}`}
+      command={command}
+      onClose={onClose}
+      onSubmit={onSubmit}
+    />
+  );
+}
+
+function initialValues(command: SkillCommand): Record<string, string> {
+  return Object.fromEntries(
+    (command.variables ?? [])
+      .filter((variable) => variable.default !== undefined)
+      .map((variable) => [variable.key, variable.default ?? '']),
+  );
+}
+
+function SkillVariableDialog({
+  command,
+  onClose,
+  onSubmit,
+}: Omit<Props, 'command'> & { command: SkillCommand }) {
+  const [values, setValues] = useState<Record<string, string>>(() => initialValues(command));
 
   const missing = (command.variables ?? []).filter((v) => v.required && !values[v.key]?.trim());
 
@@ -78,7 +93,7 @@ export function SkillVariableForm({ command, onClose, onSubmit }: Props) {
                   onValueChange={(val) => setValues((s) => ({ ...s, [v.key]: val }))}
                 >
                   <SelectTrigger id={`var-${v.key}`} className="w-full" aria-required={v.required}>
-                    <SelectValue placeholder="选择…" />
+                    <SelectValue placeholder={t('skills.variableSelect')} />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
@@ -105,10 +120,10 @@ export function SkillVariableForm({ command, onClose, onSubmit }: Props) {
         </FieldGroup>
         <DialogFooter>
           <Button variant="outline" size="sm" onClick={onClose}>
-            取消
+            {t('app.cancel')}
           </Button>
           <Button size="sm" disabled={missing.length > 0} onClick={submit}>
-            发送
+            {t('input.send')}
           </Button>
         </DialogFooter>
       </DialogContent>

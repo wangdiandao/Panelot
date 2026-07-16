@@ -121,6 +121,8 @@ export function ThreadView({
   const [showDisconnected, setShowDisconnected] = useState(false);
   useEffect(() => {
     if (state.connected) {
+      // This is the reset branch of a debounced external connection-state machine.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setShowDisconnected(false);
       return;
     }
@@ -129,7 +131,13 @@ export function ThreadView({
   }, [state.connected]);
   // Draft lives here (not in PromptInput) so the empty state can filter its
   // suggestions live and drafts persist per thread across panel closes.
-  const [draft, setDraft] = useThreadDraft(state.threadId);
+  const [draft, setDraft, draftStatus] = useThreadDraft(state.threadId);
+  useEffect(() => {
+    if (!draftStatus.error) return;
+    toast.error(
+      t(draftStatus.error.phase === 'read' ? 'input.draftReadFailed' : 'input.draftWriteFailed'),
+    );
+  }, [draftStatus.error]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const buildInput = useCallback(
@@ -245,7 +253,8 @@ export function ThreadView({
   const recallLast = useCallback((): string | undefined => {
     const { items } = session.store.getState();
     for (let i = items.length - 1; i >= 0; i--) {
-      const item = items[i]!;
+      const item = items[i];
+      if (!item) continue;
       if (item.kind === 'user_message') {
         const content = (item.payload as { content: { type: string; text?: string }[] }).content;
         return content.map((c) => (c.type === 'text' ? c.text : '')).join('\n') || undefined;
@@ -265,7 +274,8 @@ export function ThreadView({
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'c') {
         const { items } = session.store.getState();
         for (let i = items.length - 1; i >= 0; i--) {
-          const item = items[i]!;
+          const item = items[i];
+          if (!item) continue;
           if (item.kind === 'assistant_message') {
             const content = (item.payload as { content: { type: string; text?: string }[] })
               .content;
@@ -295,7 +305,7 @@ export function ThreadView({
 
   return (
     <div className="flex h-full flex-col bg-background text-foreground">
-      {showDisconnected && (
+      {!state.connected && showDisconnected && (
         <Marker variant="border" role="status" className="justify-center px-3 py-1">
           <MarkerContent>{t('reconnecting')}</MarkerContent>
         </Marker>
@@ -322,7 +332,7 @@ export function ThreadView({
         />
       )}
       <ProviderStopNotice stopReason={state.lastStopReason} />
-      {(showDisconnected || state.loading) && state.items.length === 0 ? (
+      {((!state.connected && showDisconnected) || state.loading) && state.items.length === 0 ? (
         /* Thread switch / reconnect: 3-message skeleton (docs/09 §7). */
         <div className="flex flex-1 flex-col gap-6 px-4 py-6">
           <div className="flex justify-end">

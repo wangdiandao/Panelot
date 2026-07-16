@@ -77,6 +77,8 @@ function schemaToZod(_inputSchema: Record<string, unknown>): RuntimeSchema {
 
 export class McpManager {
   private clients = new Map<string, McpWorkerClient>();
+  private connectAttempts = new Map<string, Promise<void>>();
+  private connectionTails = new Map<string, Promise<void>>();
   private configs = new Map<string, McpServerConfig>();
   private states = new Map<string, McpConnectionState>();
   private pendingPermissionPlans = new Map<string, McpOAuthPermissionRequired>();
@@ -123,12 +125,30 @@ export class McpManager {
   // ---- connection ----------------------------------------------------------
 
   async connect(id: string): Promise<void> {
+    const pending = this.connectAttempts.get(id);
+    if (pending) return pending;
+    const predecessor = this.connectionTails.get(id);
+    const attempt = (predecessor ? predecessor.catch(() => undefined) : Promise.resolve()).then(
+      () => this.connectCandidate(id),
+    );
+    this.connectAttempts.set(id, attempt);
+    this.connectionTails.set(id, attempt);
+    try {
+      await attempt;
+    } finally {
+      if (this.connectAttempts.get(id) === attempt) this.connectAttempts.delete(id);
+      if (this.connectionTails.get(id) === attempt) this.connectionTails.delete(id);
+    }
+  }
+
+  private async connectCandidate(id: string): Promise<void> {
     const servers = await this.listServers();
     const config = servers.find((s) => s.id === id);
     if (!config || !config.enabled) return;
     if (this.clients.has(id)) return;
 
     this.setState(id, { status: 'connecting' });
+    let candidate: McpWorkerClient | undefined;
     try {
       const url = normalizeEndpointUrl(config.url, { label: `MCP 服务器 ${config.name} 的 URL` });
       const resourcePermission = await this.preparePermissionStage(id, undefined, {
@@ -142,9 +162,11 @@ export class McpManager {
       }
       this.configs.set(id, { ...config, url });
       const client = new McpWorkerClient(config.id, () => {
+        if (this.clients.get(config.id) !== client) return;
         this.setState(config.id, { status: 'ready', toolCount: client.tools.length });
         this.onToolsChanged();
       });
+      candidate = client;
       await client.connect({
         url,
         authorization: await this.authHeaderFor(config.id),
@@ -153,6 +175,7 @@ export class McpManager {
       this.setState(id, { status: 'ready', toolCount: client.tools.length });
       this.onToolsChanged();
     } catch (e) {
+      if (candidate) await candidate.close().catch(() => undefined);
       const permissionRequired = permissionRequiredFromError(e);
       this.setState(id, {
         status: 'error',
@@ -164,10 +187,27 @@ export class McpManager {
   }
 
   async disconnect(id: string): Promise<void> {
-    const client = this.clients.get(id);
-    this.clients.delete(id);
-    await client?.close();
-    this.setState(id, { status: 'disconnected' });
+    const predecessor = this.connectionTails.get(id);
+    // A disconnect is a serialization barrier: a later connect must queue after it
+    // instead of sharing the older in-flight connection promise.
+    this.connectAttempts.delete(id);
+    const operation = (predecessor ? predecessor.catch(() => undefined) : Promise.resolve()).then(
+      async () => {
+        const client = this.clients.get(id);
+        this.clients.delete(id);
+        try {
+          await client?.close();
+        } finally {
+          this.setState(id, { status: 'disconnected' });
+        }
+      },
+    );
+    this.connectionTails.set(id, operation);
+    try {
+      await operation;
+    } finally {
+      if (this.connectionTails.get(id) === operation) this.connectionTails.delete(id);
+    }
   }
 
   /** Ensure lazy-connect servers are up before first use (docs/07 §2). */
@@ -317,9 +357,14 @@ export class McpManager {
         endpointStage.planDigest,
         oauthSummary(discovery),
       );
+      const existingClientId = config.auth.clientId;
+      if (endpointStage.reuseClient && !existingClientId) {
+        throw new Error('Stored OAuth client registration is missing its clientId');
+      }
       const clientId = endpointStage.reuseClient
-        ? config.auth.clientId!
+        ? existingClientId
         : await registerClient(discovery.metadata, scopes, fetchGuard, discovery.binding.resource);
+      if (!clientId) throw new Error('OAuth client registration did not produce a clientId');
       const tokens = await authorize(
         discovery.metadata,
         clientId,
@@ -625,9 +670,7 @@ export class McpManager {
                   : { kind: 'none' },
           },
           resolveTarget: async () => ({
-            origin: new URL(
-              (await this.listServers()).find((server) => server.id === serverId)!.url,
-            ).origin,
+            origin: new URL(await this.serverUrl(serverId)).origin,
             serverId,
           }),
           execute: async (itemId, params) => {
@@ -711,15 +754,14 @@ export class McpManager {
       origin?: string;
     }[] = [];
     for (const [serverId, client] of this.clients) {
+      const configuredUrl = this.configs.get(serverId)?.url;
       for (const resource of client.resources) {
         resources.push({
           serverId,
           uri: resource.uri,
           name: resource.name ?? resource.uri,
           description: resource.description,
-          origin: this.configs.get(serverId)
-            ? new URL(this.configs.get(serverId)!.url).origin
-            : undefined,
+          origin: configuredUrl ? new URL(configuredUrl).origin : undefined,
         });
       }
     }
@@ -787,6 +829,12 @@ export class McpManager {
       sourceRef: `${serverId}:${uri}`,
       content,
     };
+  }
+
+  private async serverUrl(serverId: string): Promise<string> {
+    const server = (await this.listServers()).find((candidate) => candidate.id === serverId);
+    if (!server) throw new Error(`MCP server is no longer configured: ${serverId}`);
+    return server.url;
   }
 }
 

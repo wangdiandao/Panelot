@@ -4,11 +4,21 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const composerMocks = vi.hoisted(() => ({ evaluateVariables: vi.fn() }));
+const composerMocks = vi.hoisted(() => ({
+  evaluateVariables: vi.fn(),
+  listSkillCommands: vi.fn(),
+}));
+const pageContextMocks = vi.hoisted(() => ({ listAttachableTabs: vi.fn() }));
 
 vi.mock('../../src/ui/components/composerTriggers', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/ui/components/composerTriggers')>()),
   evaluateVariables: composerMocks.evaluateVariables,
+  listSkillCommands: composerMocks.listSkillCommands,
+}));
+
+vi.mock('../../src/ui/pageContext', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/ui/pageContext')>()),
+  listAttachableTabs: pageContextMocks.listAttachableTabs,
 }));
 
 import { PromptInput } from '../../src/ui/components/PromptInput';
@@ -40,6 +50,8 @@ beforeEach(() => {
   container = document.createElement('div');
   document.body.append(container);
   root = createRoot(container);
+  composerMocks.listSkillCommands.mockResolvedValue([]);
+  pageContextMocks.listAttachableTabs.mockResolvedValue([]);
 });
 
 afterEach(async () => {
@@ -64,6 +76,107 @@ async function typeAndSubmit(value: string): Promise<void> {
 }
 
 describe('PromptInput submission ordering', () => {
+  it('drops queued variable expansion after the composer unmounts', async () => {
+    const expansion = deferred<string>();
+    composerMocks.evaluateVariables.mockReturnValueOnce(expansion.promise);
+    const onSend = vi.fn(() => true);
+    await act(async () =>
+      root.render(
+        createElement(PromptInput, {
+          running: false,
+          steerable: false,
+          contextChips: [],
+          submissionThreadId: 'thread-a',
+          onRemoveChip: vi.fn(),
+          onSend,
+          onEnqueue: vi.fn(() => true),
+          onStop: vi.fn(),
+        }),
+      ),
+    );
+    await typeAndSubmit('pending {{CURRENT_DATE}}');
+    expect(composerMocks.evaluateVariables).toHaveBeenCalledOnce();
+
+    await act(async () => root.unmount());
+    await act(async () => {
+      expansion.resolve('must not send');
+      await expansion.promise;
+      await Promise.resolve();
+    });
+
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('clears the deferred blur timer when the composer unmounts', async () => {
+    vi.useFakeTimers();
+    const clearTimer = vi.spyOn(globalThis, 'clearTimeout');
+    try {
+      await act(async () =>
+        root.render(
+          createElement(PromptInput, {
+            running: false,
+            steerable: false,
+            contextChips: [],
+            submissionThreadId: 'thread-a',
+            onRemoveChip: vi.fn(),
+            onSend: vi.fn(() => true),
+            onEnqueue: vi.fn(() => true),
+            onStop: vi.fn(),
+          }),
+        ),
+      );
+      const textarea = container.querySelector('textarea');
+      if (!textarea) throw new Error('Expected textarea');
+      await act(async () => {
+        textarea.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+      });
+      const timer = vi.getTimerCount();
+      expect(timer).toBeGreaterThan(0);
+
+      await act(async () => root.unmount());
+
+      expect(clearTimer).toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBeLessThan(timer);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('refreshes attachable tabs and skills every time the attachment menu opens', async () => {
+    await act(async () =>
+      root.render(
+        createElement(PromptInput, {
+          running: false,
+          steerable: false,
+          contextChips: [],
+          submissionThreadId: 'thread-a',
+          onRemoveChip: vi.fn(),
+          onSend: vi.fn(() => true),
+          onEnqueue: vi.fn(() => true),
+          onStop: vi.fn(),
+          onAttachContext: vi.fn(),
+        }),
+      ),
+    );
+
+    const trigger = container.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]');
+    if (!trigger) throw new Error('Expected attachment menu trigger');
+    await act(async () => {
+      openMenu(trigger);
+      await Promise.resolve();
+    });
+    expect(composerMocks.listSkillCommands).toHaveBeenCalledTimes(1);
+    expect(pageContextMocks.listAttachableTabs).toHaveBeenCalledTimes(1);
+
+    await act(async () => openMenu(trigger));
+    await act(async () => {
+      openMenu(trigger);
+      await Promise.resolve();
+    });
+    expect(composerMocks.listSkillCommands).toHaveBeenCalledTimes(2);
+    expect(pageContextMocks.listAttachableTabs).toHaveBeenCalledTimes(2);
+  });
+
   it('dispatches variable expansion in FIFO order even when an earlier read is slow', async () => {
     const first = deferred<string>();
     const second = deferred<string>();
@@ -206,3 +319,13 @@ describe('PromptInput submission ordering', () => {
     session.stop();
   });
 });
+
+function openMenu(trigger: HTMLButtonElement): void {
+  trigger.dispatchEvent(
+    new PointerEvent('pointerdown', {
+      bubbles: true,
+      button: 0,
+      pointerType: 'mouse',
+    }),
+  );
+}

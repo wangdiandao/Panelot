@@ -150,7 +150,8 @@ export function ToolCallGroup({
   const okCount = cards.filter((c) => c.status === 'ok').length;
   const failCount = cards.filter((c) => c.status === 'fail').length;
   const running = cards.some((c) => c.live || c.status === 'running' || c.status === 'pending');
-  const tail = cards[cards.length - 1]!;
+  const tail = cards.at(-1);
+  if (!tail) return null;
   const totalMs = cards.reduce((sum, c) => sum + (c.durationMs ?? 0), 0);
 
   return (

@@ -102,10 +102,10 @@ export function AttachmentsPage() {
                     {attachment.provenance ?? t('settings.attachments.unknownSource')}
                   </Badge>
                   <Badge variant="outline">{attachment.threadId}</Badge>
-                  {(attachment.refs?.nodeIds?.length ?? 0) > 0 && (
+                  {attachment.refs?.nodeIds && attachment.refs.nodeIds.length > 0 && (
                     <Badge variant="outline">
                       {t('settings.attachments.nodeRefs', {
-                        count: attachment.refs!.nodeIds!.length,
+                        count: attachment.refs.nodeIds.length,
                       })}
                     </Badge>
                   )}

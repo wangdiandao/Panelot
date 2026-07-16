@@ -340,7 +340,8 @@ export class RunRepository {
   }
 
   private async linkAttachments(run: RunRecord, attachmentLink?: AttachmentLink): Promise<void> {
-    for (const attachmentId of attachmentLink?.attachmentIds ?? []) {
+    if (!attachmentLink) return;
+    for (const attachmentId of attachmentLink.attachmentIds) {
       const attachment = await this.db.attachments.get(attachmentId);
       if (!attachment || attachment.threadId !== run.threadId) {
         throw new Error(`Attachment not found in run thread: ${attachmentId}`);
@@ -351,7 +352,7 @@ export class RunRepository {
       await this.db.attachments.update(attachmentId, {
         refs: {
           ...attachment.refs,
-          nodeIds: [...new Set([...(attachment.refs?.nodeIds ?? []), attachmentLink!.nodeId])],
+          nodeIds: [...new Set([...(attachment.refs?.nodeIds ?? []), attachmentLink.nodeId])],
           runIds: [...new Set([...(attachment.refs?.runIds ?? []), run.id])],
         },
       });

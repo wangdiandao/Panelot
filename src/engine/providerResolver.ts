@@ -271,10 +271,13 @@ function assertEnvironmentBindingUnchanged(
     binding.baseUrl === current.baseUrl &&
     stableQuirks(binding.quirks) === stableQuirks(current.quirks) &&
     bindingCredentials.length === currentCredentials.length &&
-    bindingCredentials.every(
-      (reference, index) =>
-        credentialIdentity(reference) === credentialIdentity(currentCredentials[index]!),
-    );
+    bindingCredentials.every((reference, index) => {
+      const currentReference = currentCredentials[index];
+      return (
+        currentReference !== undefined &&
+        credentialIdentity(reference) === credentialIdentity(currentReference)
+      );
+    });
   if (!unchanged) {
     throw new RunEnvironmentSnapshotError(
       'environment_snapshot_invalid',

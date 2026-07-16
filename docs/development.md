@@ -6,12 +6,12 @@
 
 ## 1. 环境要求
 
-| 项目                | 要求        | 依据                                                                               |
-| ------------------- | ----------- | ---------------------------------------------------------------------------------- |
-| Node.js             | `>=20.19`   | `package.json#engines`；GitHub Actions 固定使用 `22.12.0`                          |
-| pnpm                | `9.12.3`    | `package.json#packageManager` 与 lockfile v9                                       |
-| 浏览器              | Chrome 116+ | `wxt.config.ts` 的 `minimum_chrome_version`；Edge 作为构建目标但未声明单独最低版本 |
-| Playwright Chromium | 仅 e2e 需要 | `playwright.config.ts` 只配置 Chromium 项目                                        |
+| 项目                | 要求                     | 依据                                                                               |
+| ------------------- | ------------------------ | ---------------------------------------------------------------------------------- |
+| Node.js             | `^20.19.0 || >=22.12.0`  | `package.json#engines`；GitHub Actions 固定使用 `22.12.0`                          |
+| pnpm                | `9.12.3`                 | `package.json#packageManager` 与 lockfile v9                                       |
+| 浏览器              | Chrome 116+              | `wxt.config.ts` 的 `minimum_chrome_version`；Edge 作为构建目标但未声明单独最低版本 |
+| Playwright Chromium | 仅 e2e 需要              | `playwright.config.ts` 只配置 Chromium 项目                                        |
 
 项目没有必需的 `.env` 文件，也没有从 `process.env` / `import.meta.env` 读取运行配置。模型端点、API Key、权限、Skills 和 MCP 服务器均在扩展设置页配置。
 
@@ -115,6 +115,8 @@ Dexie 数据库名为 `panelot_v1`，表定义在 `src/db/schema.ts`。0.1.0 数
 
 导入分两次确认。Options 页面先校验文件和加密口令，后台再通过已认证的内部 Port 交给 offscreen worker 做 canonical 校验。后台会核对输入与设置 digest，并列出运行中、待审批和已暂停的任务。第二次确认后，恢复日志、设置和 IndexedDB 数据才会提交。
 
+解密后的便携秘密在密封进本机存储前会校验完整结构、字段类型和重复 ID。启动恢复只接受覆盖全部受管设置键及合法 `thread_params:*` 键的 journal preimage；缺键、畸形条目或任意键会以 `IMPORT_JOURNAL_CORRUPT` 失败关闭，不执行部分回滚。
+
 导入不会覆盖现有附件 blob。仍被导入节点引用的附件会重建引用，未引用附件标记为 orphan，Plugin 和 builtin Skills 会保留。提交后必须重载扩展；重载前新的 Agent 命令会被拒绝。
 
 ## 6. 开发命令
@@ -123,9 +125,9 @@ Dexie 数据库名为 `panelot_v1`，表定义在 `src/db/schema.ts`。0.1.0 数
 | ----------------------------- | --------------------------------------------- | -------------------------------------------------- |
 | `pnpm dev`                    | Chrome 开发模式与热更新                       | `dist/chrome-mv3-dev`                              |
 | `pnpm dev:edge`               | Edge 开发目标                                 | `dist/edge-mv3-dev`                                |
-| `pnpm compile`                | TypeScript 严格类型检查                       | `tsc --noEmit`                                     |
+| `pnpm compile`                | TypeScript 严格类型与控制流检查               | 主源码、扩展入口、e2e 与 preview 独立配置          |
 | `pnpm lint`                   | ESLint 9 与 React Hooks 门禁                  | 全仓库源码与测试                                   |
-| `pnpm format:check`           | Prettier 格式门禁                             | TypeScript/JavaScript/JSON                         |
+| `pnpm format:check`           | Prettier 格式门禁                             | TypeScript/JavaScript/JSON（含 preview）           |
 | `pnpm test`                   | Vitest 单测与无浏览器集成测试                 | `tests/**/*.test.ts`                               |
 | `pnpm test:coverage`          | Vitest V8 覆盖率与阈值门禁                    | 终端 text；`coverage/`（JSON summary、LCOV、HTML） |
 | `pnpm test:watch`             | Vitest 监听模式                               | 本地开发使用                                       |
@@ -151,7 +153,7 @@ pnpm exec playwright install chromium
 ## 7. 测试边界
 
 - Vitest 使用 Node 环境；需要 DOM 的用例按文件引入 happy-dom/fake-indexeddb。
-- `pnpm test:coverage` 使用 V8 统计 `src/**/*.ts`，排除声明文件。整体基线为 lines 58%、branches 50%；核心文件另有分支阈值：`runState.ts` 72%、`gatekeeper.ts` 93%、`rules.ts` 87%、`service.ts` 78%、`secretStore.ts` 80%、`exportImport.ts` 52%。报告写入 `coverage/`。CI 要求 `coverage-report` artifact 存在并保留 30 天。
+- `pnpm test:coverage` 使用 V8 统计 `src/**/*.{ts,tsx}`，排除声明文件。扩展 `entrypoints/` 由独立 TypeScript 配置和仓库契约检查保护；只有能够稳定导入测试的入口组合层才进入执行覆盖率，避免用不可导入的 MV3 启动副作用稀释指标。整体基线为 lines 58%、branches 50%；核心文件另有分支阈值：`runState.ts` 72%、`gatekeeper.ts` 93%、`rules.ts` 87%、`service.ts` 78%、`secretStore.ts` 80%、`exportImport.ts` 52%。报告写入 `coverage/`。CI 要求 `coverage-report` artifact 存在并保留 30 天。
 - `tests/engine/integration.test.ts` 通过 DirectTransport、mock Provider 和真实 Dexie 逻辑验证引擎链路，不启动 Chrome。
 - Playwright 使用 persistent Chromium context 加载生产 unpacked extension，验证 MV3 Service Worker、options 页面、manifest、快照/ref 与表单回显。三层跨站 OOPIF 会通过生产扩展入口执行 `read_page_deep → type_trusted → click_trusted`，并检查 UI 审批、最新 generation deep ref 和 `event.isTrusted`。closed shadow root 目前由 Playwright 原生 CDP fixture 验证浏览器能力。
 - Provider Verify 需要用户配置的真实端点，不能由默认离线测试证明所有第三方兼容性。

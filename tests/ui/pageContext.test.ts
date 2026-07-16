@@ -1,8 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ContextBlock } from '../../src/messaging/protocol';
-import { captureSubmissionBrowserContext } from '../../src/ui/pageContext';
+import { setLang } from '../../src/ui/i18n';
+import {
+  attachSelectionFromTab,
+  attachTab,
+  captureSubmissionBrowserContext,
+} from '../../src/ui/pageContext';
 
 afterEach(() => {
+  setLang('zh-CN');
   vi.unstubAllGlobals();
 });
 
@@ -55,5 +61,43 @@ describe('captureSubmissionBrowserContext', () => {
 
     expect(context.defaultTab).toBeUndefined();
     expect(context.referencedTabs).toEqual([referencedPage.tab]);
+  });
+
+  it('localizes page truncation and selection context content', async () => {
+    setLang('en');
+    const executeScript = vi
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          result: {
+            text: 'x'.repeat(60_001),
+            title: 'Long page',
+            url: 'https://page.example/path',
+          },
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          result: {
+            text: 'selected text',
+            title: 'Selection page',
+            url: 'https://selection.example/path',
+          },
+        },
+      ]);
+    vi.stubGlobal('chrome', { scripting: { executeScript } });
+
+    const page = await attachTab(7, 'https://page.example/path');
+    const selection = await attachSelectionFromTab({
+      tabId: 8,
+      url: 'https://selection.example/path',
+      title: 'Selection page',
+    });
+
+    expect(page?.content[0]).toMatchObject({ type: 'text' });
+    expect((page?.content[0] as { text?: string }).text).toContain('[Content truncated]');
+    expect((selection?.content[0] as { text?: string }).text).toBe(
+      'Selection from https://selection.example/path:\n\nselected text',
+    );
   });
 });

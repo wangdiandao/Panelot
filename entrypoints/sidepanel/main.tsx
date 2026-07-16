@@ -6,7 +6,9 @@ import '../../src/ui/styles/global.css';
 
 void bootstrapLanguage().then((stopLanguageSync) => {
   window.addEventListener('pagehide', stopLanguageSync, { once: true });
-  ReactDOM.createRoot(document.getElementById('root')!).render(
+  const root = document.getElementById('root');
+  if (!root) throw new Error('Missing #root mount element');
+  ReactDOM.createRoot(root).render(
     <React.StrictMode>
       <App />
     </React.StrictMode>,

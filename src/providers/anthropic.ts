@@ -18,6 +18,7 @@ import {
   createProviderFrameError,
   createResponseFormatError,
   normalizeHttpError,
+  parseModelListResponse,
   withRetry,
 } from './http';
 import {
@@ -253,7 +254,16 @@ export class AnthropicAdapter implements ProviderAdapter {
         { signal: req.signal },
       );
 
-      for await (const sse of iterateSse(response.body!, req.signal)) {
+      const responseBody = response.body;
+      if (!responseBody) {
+        throw createResponseFormatError(
+          'protocol',
+          response.status,
+          'response has no body',
+          'response has no body',
+        );
+      }
+      for await (const sse of iterateSse(responseBody, req.signal)) {
         if (sse.terminal === 'done') continue;
         let parsed: unknown;
         try {
@@ -454,12 +464,20 @@ export class AnthropicAdapter implements ProviderAdapter {
         const text = textParts.join('');
         if (text) message.push({ type: 'text', text });
         const reasoning = reasoningParts.join('');
+        if (!finalStopReason) {
+          throw createResponseFormatError(
+            'protocol',
+            200,
+            'provider stream ended without a final stop reason',
+            'provider stream ended without a final stop reason',
+          );
+        }
         return {
           message,
           reasoning: reasoning || undefined,
           toolCalls,
           usage,
-          stopReason: finalStopReason!,
+          stopReason: finalStopReason,
         };
       },
     };
@@ -479,8 +497,18 @@ export class AnthropicAdapter implements ProviderAdapter {
         res.headers.get('retry-after'),
         res.headers.get('request-id'),
       );
-    const json = (await res.json()) as { data?: { id: string }[] };
-    return (json.data ?? []).map((m) => m.id);
+    let json: unknown;
+    try {
+      json = await res.json();
+    } catch {
+      throw createResponseFormatError(
+        'protocol',
+        res.status,
+        'model list response was not valid JSON',
+        'model list response was not valid JSON',
+      );
+    }
+    return parseModelListResponse(json, res.status);
   }
 
   async verify(): Promise<VerifyResult> {

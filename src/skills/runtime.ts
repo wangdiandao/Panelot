@@ -53,8 +53,9 @@ export class SkillRuntime {
 
   async resolveCommand(text: string): Promise<SkillRecord | null> {
     const match = /^\/([\w:-]+)/.exec(text.trim());
-    if (!match) return null;
-    const token = match[1]!.toLowerCase();
+    const matchedToken = match?.[1];
+    if (!matchedToken) return null;
+    const token = matchedToken.toLowerCase();
     const skills = await this.db.skills.filter((skill) => skill.enabled).toArray();
     return (
       skills.find((skill) => {

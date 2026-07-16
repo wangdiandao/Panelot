@@ -142,7 +142,91 @@ describe('InteractionCard', () => {
       value: { completed: true },
     });
   });
+
+  it('associates MCP JSON instructions and validation errors with the input', async () => {
+    const interaction: PendingInteraction = {
+      interactionId: 'interaction-mcp',
+      turnId: 'turn-mcp',
+      itemId: 'call-mcp',
+      requestedAt: 1,
+      request: {
+        kind: 'mcp_elicitation',
+        serverId: 'calendar',
+        message: 'Provide a structured date range.',
+        requestedSchema: { type: 'object' },
+      },
+    };
+    await act(async () =>
+      root.render(createElement(InteractionCard, { interaction, onResponse: vi.fn() })),
+    );
+
+    const textarea = container.querySelector('textarea');
+    expect(textarea?.labels?.[0]?.textContent).toContain('JSON');
+    expect(textarea?.getAttribute('aria-describedby')).toBe(
+      'interaction-mcp-structured-description',
+    );
+
+    if (!textarea) throw new Error('Expected structured response textarea');
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(
+      textarea,
+      '{',
+    );
+    await act(async () => textarea.dispatchEvent(new Event('input', { bubbles: true })));
+    await act(async () => findButton('Submit').click());
+
+    expect(textarea.getAttribute('aria-invalid')).toBe('true');
+    expect(textarea.getAttribute('aria-describedby')).toBe(
+      'interaction-mcp-structured-description interaction-mcp-structured-error',
+    );
+    expect(container.querySelector('#interaction-mcp-structured-error')?.textContent).toContain(
+      'valid JSON',
+    );
+  });
+
+  it('resets MCP JSON state when a new interaction replaces the previous request', async () => {
+    const onResponse = vi.fn();
+    const interaction = mcpInteraction('interaction-mcp-first', 'First request');
+    await act(async () => root.render(createElement(InteractionCard, { interaction, onResponse })));
+
+    const firstTextarea = container.querySelector('textarea');
+    if (!firstTextarea) throw new Error('Expected structured response textarea');
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(
+      firstTextarea,
+      '{',
+    );
+    await act(async () => firstTextarea.dispatchEvent(new Event('input', { bubbles: true })));
+    await act(async () => findButton('Submit').click());
+    expect(firstTextarea.getAttribute('aria-invalid')).toBe('true');
+
+    const nextInteraction = mcpInteraction('interaction-mcp-next', 'Next request');
+    await act(async () =>
+      root.render(createElement(InteractionCard, { interaction: nextInteraction, onResponse })),
+    );
+
+    const nextTextarea = container.querySelector('textarea');
+    expect(nextTextarea?.value).toBe('{}');
+    expect(nextTextarea?.getAttribute('aria-invalid')).toBe('false');
+    expect(nextTextarea?.getAttribute('aria-describedby')).toBe(
+      'interaction-mcp-next-structured-description',
+    );
+    expect(container.querySelector('#interaction-mcp-first-structured-error')).toBeNull();
+  });
 });
+
+function mcpInteraction(interactionId: string, message: string): PendingInteraction {
+  return {
+    interactionId,
+    turnId: `turn-${interactionId}`,
+    itemId: `call-${interactionId}`,
+    requestedAt: 1,
+    request: {
+      kind: 'mcp_elicitation',
+      serverId: 'calendar',
+      message,
+      requestedSchema: { type: 'object' },
+    },
+  };
+}
 
 function findButton(text: string): HTMLButtonElement {
   return [...container.querySelectorAll<HTMLButtonElement>('button')].find((button) =>

@@ -108,8 +108,9 @@ export const TriggerMenu = forwardRef<TriggerMenuHandle, Props>(function Trigger
 
   // Keep the selection on a visible item as the query narrows.
   useEffect(() => {
-    if (filtered.length === 0) return;
-    if (!filtered.some((i) => i.id === selected)) setSelected(filtered[0]!.id);
+    const firstFiltered = filtered[0];
+    if (!firstFiltered) return;
+    if (!filtered.some((i) => i.id === selected)) setSelected(firstFiltered.id);
   }, [filtered, selected]);
 
   useImperativeHandle(

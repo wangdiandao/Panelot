@@ -9,6 +9,11 @@ import {
   type Op,
   type ThreadStreamCursor,
 } from './protocol';
+import {
+  parseContentToolCall,
+  validateActionFailure,
+  validateExecuteResult,
+} from '../tools/content/protocol';
 
 export type ProtocolParseResult<T> =
   | { ok: true; value: T }
@@ -652,6 +657,12 @@ function validateContentScriptOp(value: unknown): string | undefined {
         field(value, 'tool', nonEmptyString, '<root>'),
         requiredField(value, 'params', '<root>'),
         field(value, 'deadlineAt', nonNegativeInteger, '<root>'),
+        typeof value.tool === 'string' && Object.hasOwn(value, 'params')
+          ? (() => {
+              const parsed = parseContentToolCall(value.tool, value.params);
+              return parsed.ok ? undefined : `<root>.${parsed.diagnostic}`;
+            })()
+          : undefined,
       );
     case 'cancel':
       return field(value, 'cancelRequestId', nonEmptyString, '<root>');
@@ -673,8 +684,24 @@ function validateContentScriptResult(value: unknown): string | undefined {
   if (!isObject(value)) return expected('<root>', 'object');
   const envelope = contentEnvelope(value);
   if (envelope) return envelope;
-  if (value.ok === true) return requiredField(value, 'result', '<root>');
-  if (value.ok === false) return field(value, 'error', stringValue, '<root>');
+  if (value.ok === true) {
+    const required = requiredField(value, 'result', '<root>');
+    if (required) return required;
+    if (value.result === 'pong' || value.result === 'cancelled') return undefined;
+    const diagnostic = validateExecuteResult(value.result);
+    return diagnostic ? `<root>.${diagnostic}` : undefined;
+  }
+  if (value.ok === false) {
+    return first(
+      field(value, 'error', stringValue, '<root>'),
+      Object.hasOwn(value, 'failure') && value.failure !== undefined
+        ? (() => {
+            const diagnostic = validateActionFailure(value.failure);
+            return diagnostic ? `<root>.${diagnostic}` : undefined;
+          })()
+        : undefined,
+    );
+  }
   return expected('<root>.ok', 'true | false');
 }
 

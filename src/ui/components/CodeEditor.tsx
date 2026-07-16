@@ -35,7 +35,10 @@ export function CodeEditor({
   const themeCompartment = useRef(new Compartment());
   const accessibilityCompartment = useRef(new Compartment());
   const onChangeRef = useRef(onChange);
-  onChangeRef.current = onChange;
+
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
 
   useEffect(() => {
     if (!hostRef.current) return;

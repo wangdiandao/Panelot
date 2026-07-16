@@ -165,7 +165,8 @@ export function Onboarding({ onConfigured, onOpenSettings, onTryDemo }: Props) {
   };
 
   const saveTier = async () => {
-    const tierOption = APPROVAL_TIERS.find((option) => option.id === tier)!;
+    const tierOption = APPROVAL_TIERS.find((option) => option.id === tier);
+    if (!tierOption) return;
     await SettingsStore.global.patch({
       defaultPermissionPolicy: tierOption.id,
     });

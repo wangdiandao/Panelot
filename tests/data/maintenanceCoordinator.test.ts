@@ -55,6 +55,28 @@ let db: PanelotDB;
 let local: MemoryStorage;
 let session: MemoryStorage;
 
+const JOURNAL_SETTING_KEYS = [
+  'connections',
+  'model_presets',
+  'global_settings',
+  'permission_rules',
+  'sensitive_origins',
+  'mcp_servers',
+  'site_prompts',
+  'last_model',
+  'thread_seen',
+  'panelot_local_secret_key',
+  'panelot_kek_v1',
+] as const;
+
+function journalPreimage(
+  overrides: Record<string, { exists: boolean; value?: unknown }> = {},
+): Record<string, { exists: boolean; value?: unknown }> {
+  return Object.fromEntries(
+    JOURNAL_SETTING_KEYS.map((key) => [key, overrides[key] ?? { exists: false }]),
+  );
+}
+
 beforeEach(() => {
   db = new PanelotDB(`maintenance-coordinator-${Date.now()}-${serial++}`);
   local = new MemoryStorage();
@@ -543,16 +565,36 @@ describe('DataImportCoordinator', () => {
       digest: 'a'.repeat(64),
       phase: 'settings_applied',
       createdAt: 1,
-      preimage: {
+      preimage: journalPreimage({
         global_settings: { exists: true, value: { language: 'en' } },
-        connections: { exists: false },
-      },
+      }),
     });
 
     await expect(createCoordinator().reconcileStartup()).resolves.toBe('rolled_back');
     expect(local.values.get('global_settings')).toEqual({ language: 'en' });
     expect(local.values.has('connections')).toBe(false);
     expect(local.values.has(DATA_IMPORT_JOURNAL_KEY)).toBe(false);
+  });
+
+  it.each([
+    ['missing preimage keys', { global_settings: { exists: false } }],
+    ['malformed preimage entry', journalPreimage({ global_settings: { exists: true } })],
+    [
+      'unexpected preimage key',
+      { ...journalPreimage(), attacker_controlled_key: { exists: true, value: 'payload' } },
+    ],
+  ])('rejects a corrupt startup journal with %s', async (_label, preimage) => {
+    local.values.set(DATA_IMPORT_JOURNAL_KEY, {
+      version: 1,
+      operationId: 'corrupt-operation',
+      digest: 'a'.repeat(64),
+      phase: 'settings_applied',
+      createdAt: 1,
+      preimage,
+    });
+
+    await expect(createCoordinator().reconcileStartup()).rejects.toThrow('IMPORT_JOURNAL_CORRUPT');
+    expect(local.values.has(DATA_IMPORT_JOURNAL_KEY)).toBe(true);
   });
 
   it('rolls back the destructive Dexie transaction and settings when a database write fails', async () => {

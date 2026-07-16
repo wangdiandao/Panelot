@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import packageJson from '../../package.json' with { type: 'json' };
 import { parseMcpJson } from '../../src/mcp/types';
 import { McpClient } from '../../src/mcp/client';
 
@@ -83,11 +84,14 @@ function emptyCapabilityResult(method: string, id: number | string) {
 describe('McpClient', () => {
   it('performs the initialize handshake then lists capabilities', async () => {
     const calls: string[] = [];
+    let initializeRequest: { params?: { clientInfo?: { version?: string } } } | undefined;
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
       const body = JSON.parse((init as RequestInit).body as string);
       calls.push(body.method);
-      if (body.method === 'initialize')
+      if (body.method === 'initialize') {
+        initializeRequest = body;
         return jsonResponse(initializeResult(body.id), { 'mcp-session-id': 'sess-1' });
+      }
       if (body.method === 'tools/list')
         return jsonResponse({
           jsonrpc: '2.0',
@@ -115,6 +119,7 @@ describe('McpClient', () => {
     });
     await client.connect();
     expect(calls).toContain('initialize');
+    expect(initializeRequest?.params?.clientInfo?.version).toBe(packageJson.version);
     expect(calls).toContain('notifications/initialized');
     expect(client.tools).toHaveLength(1);
     expect(client.tools[0]!.annotations?.readOnlyHint).toBe(true);

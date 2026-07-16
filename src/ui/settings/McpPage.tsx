@@ -5,7 +5,7 @@
  * Built on shadcn/ui primitives; delete confirm uses AlertDialog.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '../components/ui/button';
 import { Switch } from '../components/ui/switch';
@@ -52,6 +52,8 @@ import { t } from '../i18n';
 
 export function McpPage() {
   const [servers, setServers] = useState<McpServerConfig[]>([]);
+  const serversRef = useRef<McpServerConfig[]>([]);
+  const saveTailRef = useRef<Promise<void>>(Promise.resolve());
   const [importText, setImportText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
@@ -61,36 +63,84 @@ export function McpPage() {
     Record<string, McpOAuthPermissionRequired>
   >({});
 
-  const loadDescription = useCallback(async (id: string, connect = false) => {
-    const response = (await chrome.runtime.sendMessage({
-      type: connect ? 'panelot.mcpConnect' : 'panelot.mcpStatus',
-      id,
-    })) as McpResponse;
-    if (response.description) {
-      setDescriptions((current) => ({ ...current, [id]: response.description! }));
-    }
-    if (response.permissionRequired) {
-      setPermissionPlans((current) => ({ ...current, [id]: response.permissionRequired! }));
-    } else if (response.ok && connect) {
-      setPermissionPlans((current) => withoutKey(current, id));
-    }
-    if (!response.ok && response.error) toast.error(response.error);
+  const reportOperationError = useCallback((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    toast.error(t('settings.mcp.operationFailed', { message }));
   }, []);
 
-  const refresh = useCallback(
-    () =>
-      listMcpServers().then((list) => {
-        setServers(list);
-        for (const server of list) void loadDescription(server.id);
-      }),
-    [loadDescription],
-  );
-  useEffect(() => void refresh(), [refresh]);
-
-  const save = async (list: McpServerConfig[]) => {
+  const applyServers = useCallback((list: McpServerConfig[]) => {
+    serversRef.current = list;
     setServers(list);
-    await saveMcpServers(list);
-  };
+  }, []);
+
+  const loadDescription = useCallback(
+    async (id: string, connect = false) => {
+      try {
+        const response = (await chrome.runtime.sendMessage({
+          type: connect ? 'panelot.mcpConnect' : 'panelot.mcpStatus',
+          id,
+        })) as McpResponse;
+        const description = response.description;
+        if (description) {
+          setDescriptions((current) => ({ ...current, [id]: description }));
+        }
+        const permissionRequired = response.permissionRequired;
+        if (permissionRequired) {
+          setPermissionPlans((current) => ({ ...current, [id]: permissionRequired }));
+        } else if (response.ok && connect) {
+          setPermissionPlans((current) => withoutKey(current, id));
+        }
+        if (!response.ok && response.error) toast.error(response.error);
+      } catch (error) {
+        reportOperationError(error);
+      }
+    },
+    [reportOperationError],
+  );
+
+  const refresh = useCallback(async () => {
+    try {
+      const list = await listMcpServers();
+      applyServers(list);
+      for (const server of list) void loadDescription(server.id);
+    } catch (error) {
+      reportOperationError(error);
+    }
+  }, [applyServers, loadDescription, reportOperationError]);
+  useEffect(() => {
+    // Hydrate the view from extension storage on mount and when the message loader changes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void refresh();
+  }, [refresh]);
+
+  const save = useCallback(
+    (update: (current: McpServerConfig[]) => McpServerConfig[]): Promise<McpServerConfig[]> => {
+      const operation = saveTailRef.current.then(async () => {
+        const next = update(serversRef.current);
+        await saveMcpServers(next);
+        applyServers(next);
+        return next;
+      });
+      saveTailRef.current = operation.then(
+        () => undefined,
+        () => undefined,
+      );
+      return operation;
+    },
+    [applyServers],
+  );
+
+  const saveAndRefresh = useCallback(
+    async (update: (current: McpServerConfig[]) => McpServerConfig[]) => {
+      try {
+        const saved = await save(update);
+        for (const server of saved) void loadDescription(server.id);
+      } catch (error) {
+        reportOperationError(error);
+      }
+    },
+    [loadDescription, reportOperationError, save],
+  );
 
   const doImport = async () => {
     try {
@@ -106,7 +156,7 @@ export function McpPage() {
         const granted = await hostPermissionBroker.request(server.url);
         if (!granted) throw new Error(t('settings.mcp.permissionDenied', { url: server.url }));
       }
-      await save([...servers, ...added]);
+      await save((current) => [...current, ...added]);
       setImportText('');
       setImportOpen(false);
       setError(null);
@@ -125,38 +175,44 @@ export function McpPage() {
   };
 
   const runOAuth = async (server: McpServerConfig, plan?: McpOAuthPermissionRequired) => {
-    const granted = plan
-      ? await hostPermissionBroker.requestAll(plan.origins)
-      : await requestHost(server.url);
-    if (!granted) {
-      toast.error(
-        t('settings.mcp.permissionDenied', { url: plan?.origins.join(', ') ?? server.url }),
-      );
-      return;
+    try {
+      const granted = plan
+        ? await hostPermissionBroker.requestAll(plan.origins)
+        : await requestHost(server.url);
+      if (!granted) {
+        toast.error(
+          t('settings.mcp.permissionDenied', { url: plan?.origins.join(', ') ?? server.url }),
+        );
+        return;
+      }
+      const response = (await chrome.runtime.sendMessage({
+        type: 'panelot.mcpOauth',
+        id: server.id,
+        permissionApproval: plan ? { stage: plan.stage, planDigest: plan.planDigest } : undefined,
+      })) as McpResponse;
+      const permissionRequired = response.permissionRequired;
+      if (permissionRequired) {
+        setPermissionPlans((current) => ({
+          ...current,
+          [server.id]: permissionRequired,
+        }));
+        return;
+      }
+      if (!response.ok) {
+        toast.error(response.error ?? t('settings.mcp.oauthFailed'));
+        return;
+      }
+      setPermissionPlans((current) => withoutKey(current, server.id));
+      const description = response.description;
+      if (description) {
+        setDescriptions((current) => ({ ...current, [server.id]: description }));
+      } else {
+        await loadDescription(server.id);
+      }
+      toast.success(t('settings.mcp.oauthComplete'));
+    } catch (error) {
+      reportOperationError(error);
     }
-    const response = (await chrome.runtime.sendMessage({
-      type: 'panelot.mcpOauth',
-      id: server.id,
-      permissionApproval: plan ? { stage: plan.stage, planDigest: plan.planDigest } : undefined,
-    })) as McpResponse;
-    if (response.permissionRequired) {
-      setPermissionPlans((current) => ({
-        ...current,
-        [server.id]: response.permissionRequired!,
-      }));
-      return;
-    }
-    if (!response.ok) {
-      toast.error(response.error ?? t('settings.mcp.oauthFailed'));
-      return;
-    }
-    setPermissionPlans((current) => withoutKey(current, server.id));
-    if (response.description) {
-      setDescriptions((current) => ({ ...current, [server.id]: response.description! }));
-    } else {
-      await loadDescription(server.id);
-    }
-    toast.success(t('settings.mcp.oauthComplete'));
   };
 
   return (
@@ -219,9 +275,11 @@ export function McpPage() {
                     <Switch
                       checked={s.enabled}
                       onCheckedChange={(on) =>
-                        void save(
-                          servers.map((x) => (x.id === s.id ? { ...x, enabled: on } : x)),
-                        ).then(() => refresh())
+                        void saveAndRefresh((current) =>
+                          current.map((server) =>
+                            server.id === s.id ? { ...server, enabled: on } : server,
+                          ),
+                        )
                       }
                       aria-label={s.name}
                     />
@@ -247,10 +305,11 @@ export function McpPage() {
                     variant="outline"
                     size="sm"
                     onClick={() =>
-                      void requestHost(s.url).then((granted) => {
-                        if (granted) return loadDescription(s.id, true);
-                        toast.error(t('settings.mcp.permissionDenied', { url: s.url }));
-                      })
+                      void (async () => {
+                        const granted = await requestHost(s.url);
+                        if (granted) await loadDescription(s.id, true);
+                        else toast.error(t('settings.mcp.permissionDenied', { url: s.url }));
+                      })()
                     }
                     disabled={!s.enabled || description?.state.status === 'connecting'}
                   >
@@ -341,14 +400,17 @@ export function McpPage() {
                                   checked={!s.disabledTools.includes(tool.name)}
                                   aria-label={t('settings.mcp.enableTool', { name: tool.name })}
                                   onCheckedChange={(enabled) => {
-                                    const disabledTools = enabled
-                                      ? s.disabledTools.filter((name) => name !== tool.name)
-                                      : [...new Set([...s.disabledTools, tool.name])];
-                                    void save(
-                                      servers.map((server) =>
-                                        server.id === s.id ? { ...server, disabledTools } : server,
-                                      ),
-                                    ).then(() => refresh());
+                                    void saveAndRefresh((current) =>
+                                      current.map((server) => {
+                                        if (server.id !== s.id) return server;
+                                        const disabledTools = enabled
+                                          ? server.disabledTools.filter(
+                                              (name) => name !== tool.name,
+                                            )
+                                          : [...new Set([...server.disabledTools, tool.name])];
+                                        return { ...server, disabledTools };
+                                      }),
+                                    );
                                   }}
                                 />
                                 <FieldContent>
@@ -395,8 +457,15 @@ export function McpPage() {
               variant="destructive"
               onClick={() => {
                 if (deleting) {
-                  void save(servers.filter((x) => x.id !== deleting.id));
-                  toast.success(t('settings.mcp.deleted'));
+                  const deletingId = deleting.id;
+                  void (async () => {
+                    try {
+                      await save((current) => current.filter((server) => server.id !== deletingId));
+                      toast.success(t('settings.mcp.deleted'));
+                    } catch (error) {
+                      reportOperationError(error);
+                    }
+                  })();
                 }
                 setDeleting(null);
               }}

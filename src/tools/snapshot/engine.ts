@@ -425,15 +425,16 @@ export function buildSnapshot(win: Window, opts: BuildOptions): SnapshotResult {
         node.ref = `s${documentToken}_${sid}_${refIndex}`;
         refMap.set(node.ref, el);
         frameMap.set(node.ref, [...frameStack]);
+        const inputType = el.getAttribute('type');
+        const label = el.getAttribute('aria-label');
+        const placeholder = el.getAttribute('placeholder');
         hintMap.set(node.ref, {
           role,
           name: node.name,
           tagName: tag,
-          ...(el.getAttribute('type') ? { inputType: el.getAttribute('type')! } : {}),
-          ...(el.getAttribute('aria-label') ? { label: el.getAttribute('aria-label')! } : {}),
-          ...(el.getAttribute('placeholder')
-            ? { placeholder: el.getAttribute('placeholder')! }
-            : {}),
+          ...(inputType ? { inputType } : {}),
+          ...(label ? { label } : {}),
+          ...(placeholder ? { placeholder } : {}),
         });
       }
       // Interactive leaf: don't descend (name already summarizes content).

@@ -14,6 +14,7 @@ import {
   createProviderFrameError,
   createResponseFormatError,
   normalizeHttpError,
+  parseModelListResponse,
   withRetry,
 } from './http';
 import {
@@ -306,7 +307,16 @@ export class OpenAiAdapter implements ProviderAdapter {
         { signal: req.signal },
       );
 
-      for await (const sse of iterateSse(response.body!, req.signal)) {
+      const responseBody = response.body;
+      if (!responseBody) {
+        throw createResponseFormatError(
+          'protocol',
+          response.status,
+          'response has no body',
+          'response has no body',
+        );
+      }
+      for await (const sse of iterateSse(responseBody, req.signal)) {
         if (sse.terminal === 'done') {
           sawDone = true;
           continue;
@@ -514,7 +524,15 @@ export class OpenAiAdapter implements ProviderAdapter {
         consumed ??= consumeAll();
         await consumed;
         const toolCalls = aggregateToolCalls(partialCalls);
-        const stopReason = mapOpenAiFinishReason(finishReason!);
+        if (!finishReason) {
+          throw createResponseFormatError(
+            'protocol',
+            200,
+            'provider stream ended without finish_reason',
+            'provider stream ended without finish_reason',
+          );
+        }
+        const stopReason = mapOpenAiFinishReason(finishReason);
         const message: ContentBlock[] = [];
         const text = textParts.join('');
         if (text) message.push({ type: 'text', text });
@@ -538,8 +556,18 @@ export class OpenAiAdapter implements ProviderAdapter {
         res.headers.get('retry-after'),
         res.headers.get('x-request-id'),
       );
-    const json = (await res.json()) as { data?: { id: string }[] };
-    return (json.data ?? []).map((m) => m.id);
+    let json: unknown;
+    try {
+      json = await res.json();
+    } catch {
+      throw createResponseFormatError(
+        'protocol',
+        res.status,
+        'model list response was not valid JSON',
+        'model list response was not valid JSON',
+      );
+    }
+    return parseModelListResponse(json, res.status);
   }
 
   async verify(): Promise<VerifyResult> {

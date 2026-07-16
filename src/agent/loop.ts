@@ -50,11 +50,17 @@ export interface GatekeeperCheck {
       params: unknown;
       effects: 'read' | 'write';
       target?: PendingToolExecution['target'];
+      phase?: 'initial' | 'dispatch';
+      approvedAuthorizationRevision?: string;
     },
     threadId: string,
   ): Promise<
     | { verdict: 'allow' }
-    | { verdict: 'ask'; request: ApprovalRequestPayload }
+    | {
+        verdict: 'ask';
+        request: ApprovalRequestPayload;
+        authorizationRevision?: string;
+      }
     | { verdict: 'deny'; reason: string }
   >;
 }
@@ -141,19 +147,75 @@ export interface TurnHandle {
 }
 
 const TARGET_IDENTITY_KEYS = ['tabId', 'frameId', 'origin', 'serverId'] as const;
+const TARGET_CHANGED_MESSAGE =
+  'The tool target changed after the permission check. Inspect the current browser state and issue a fresh tool call; do not reuse the previous approval.';
 
-async function assertPreparedTargetStillMatches(
+async function resolveVerifiedDispatchTarget(
   tool: AnyAgentTool,
   params: unknown,
   preparedTarget: PendingToolExecution['target'],
-): Promise<void> {
-  if (!tool.resolveTarget || !preparedTarget) return;
+): Promise<PendingToolExecution['target']> {
+  if (!tool.resolveTarget) return preparedTarget;
   const currentTarget = await tool.resolveTarget(params as never);
-  const changed = TARGET_IDENTITY_KEYS.some((key) => preparedTarget[key] !== currentTarget?.[key]);
+  if (!preparedTarget || !currentTarget) {
+    if (preparedTarget !== currentTarget) {
+      throw new Error(TARGET_CHANGED_MESSAGE);
+    }
+    return currentTarget;
+  }
+  const changed = TARGET_IDENTITY_KEYS.some((key) => preparedTarget[key] !== currentTarget[key]);
   if (changed) {
-    throw new Error(
-      'The tool target changed after the permission check. Inspect the current browser state and issue a fresh tool call; do not reuse the previous approval.',
-    );
+    throw new Error(TARGET_CHANGED_MESSAGE);
+  }
+  return currentTarget;
+}
+
+function sameApprovalRequest(left: ApprovalRequestPayload, right: ApprovalRequestPayload): boolean {
+  return (
+    left.tool === right.tool &&
+    left.targetOrigin === right.targetOrigin &&
+    JSON.stringify(left.params) === JSON.stringify(right.params) &&
+    JSON.stringify([...left.flags].sort()) === JSON.stringify([...right.flags].sort())
+  );
+}
+
+async function assertFinalAuthorization(
+  env: TurnEnv,
+  threadId: string,
+  tool: AnyAgentTool,
+  params: unknown,
+  preparedTool: PendingToolExecution,
+  initialVerdict: Awaited<ReturnType<GatekeeperCheck['check']>>,
+): Promise<void> {
+  const currentTarget = await resolveVerifiedDispatchTarget(tool, params, preparedTool.target);
+  const finalVerdict = await env.gatekeeper.check(
+    {
+      toolName: tool.name,
+      params,
+      effects: tool.effects,
+      target: currentTarget,
+      phase: 'dispatch',
+      ...(initialVerdict.verdict === 'ask' && initialVerdict.authorizationRevision
+        ? { approvedAuthorizationRevision: initialVerdict.authorizationRevision }
+        : {}),
+    },
+    threadId,
+  );
+  if (finalVerdict.verdict === 'deny') {
+    throw new Error(`Action denied by policy during final authorization: ${finalVerdict.reason}`);
+  }
+  if (finalVerdict.verdict === 'ask') {
+    const legacyEquivalentApproval =
+      initialVerdict.verdict === 'ask' &&
+      initialVerdict.authorizationRevision === undefined &&
+      finalVerdict.authorizationRevision === undefined &&
+      !finalVerdict.request.flags.includes('host_permission') &&
+      sameApprovalRequest(initialVerdict.request, finalVerdict.request);
+    if (!legacyEquivalentApproval) {
+      throw new Error(
+        'Tool authorization changed before dispatch. Review the current target and approve a fresh tool call.',
+      );
+    }
   }
 }
 
@@ -207,7 +269,9 @@ export function runTurn(
     );
     for (let index = 0; index < admissions.length; index++) {
       if (results[index]?.status === 'fulfilled') {
-        const [nodeId, admission] = admissions[index]!;
+        const entry = admissions[index];
+        if (!entry) continue;
+        const [nodeId, admission] = entry;
         cutoff.set(nodeId, admission.sequence);
       }
     }
@@ -366,7 +430,8 @@ export function runTurn(
           break;
         }
         const thread = await env.tree.getThread(threadId);
-        const ctx = await buildSessionContext(env.tree, threadId, thread!.leafId!);
+        if (!thread?.leafId) throw new Error(`Thread ${threadId} has no active leaf`);
+        const ctx = await buildSessionContext(env.tree, threadId, thread.leafId);
         const messages = [...ctx.messages];
         if (failureReminderPending) {
           messages.push({ role: 'user', content: [{ type: 'text', text: FAILURE_REMINDER }] });
@@ -602,9 +667,10 @@ export function runTurn(
           const verdictResult = await env.gatekeeper.check(
             {
               toolName: call.name,
-              params: call.params,
+              params: validation.params,
               effects: tool.effects,
               target: preparedTool.target,
+              phase: 'initial',
             },
             threadId,
           );
@@ -652,6 +718,19 @@ export function runTurn(
               continue;
             }
             const request = await tool.prepareInteraction(validation.params as never);
+            try {
+              await assertFinalAuthorization(
+                env,
+                threadId,
+                tool,
+                validation.params,
+                preparedTool,
+                verdictResult,
+              );
+            } catch (error) {
+              await fail(error instanceof Error ? error.message : String(error));
+              continue;
+            }
             const response = await env.requestInteraction(
               turnId,
               callItemId,
@@ -700,9 +779,14 @@ export function runTurn(
           }
 
           try {
-            if (tool.effects === 'write' || approvalWasRequired) {
-              await assertPreparedTargetStillMatches(tool, validation.params, preparedTool.target);
-            }
+            await assertFinalAuthorization(
+              env,
+              threadId,
+              tool,
+              validation.params,
+              preparedTool,
+              verdictResult,
+            );
             await env.setRunState?.('executing_tool', {
               pendingTool: { ...preparedTool, startedAt: Date.now() },
             });
@@ -797,6 +881,7 @@ export function runTurn(
                   params: escalationValidation.params,
                   effects: escalationTool.effects,
                   target: escalationTarget,
+                  phase: 'initial',
                 },
                 threadId,
               );
@@ -826,10 +911,13 @@ export function runTurn(
                 break loop;
               }
               try {
-                await assertPreparedTargetStillMatches(
+                await assertFinalAuthorization(
+                  env,
+                  threadId,
                   escalationTool,
                   escalationValidation.params,
-                  escalationPreparedTool.target,
+                  escalationPreparedTool,
+                  escalationVerdict,
                 );
                 await env.setRunState?.('executing_tool', {
                   pendingTool: { ...escalationPreparedTool, startedAt: Date.now() },

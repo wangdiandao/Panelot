@@ -119,7 +119,8 @@ export function onStorageChange(key: string, cb: (value: unknown) => void): () =
     };
   }
   const listener = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
-    if (area === 'local' && key in changes) cb(changes[key]!.newValue);
+    const change = changes[key];
+    if (area === 'local' && change) cb(change.newValue);
   };
   chrome.storage.onChanged.addListener(listener);
   return () => chrome.storage.onChanged.removeListener(listener);

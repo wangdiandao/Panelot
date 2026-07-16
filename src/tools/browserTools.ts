@@ -13,6 +13,7 @@ import { ActionRunner } from './action/runner';
 import { actionError, ActionError } from './action/errors';
 import { ActionDeadline, abortedAction, deadlineForTool, waitWithContext } from './action/deadline';
 import type { ActionEvidence } from './action/types';
+import { contentToolFieldSchemas, contentToolParameterShapes } from './content/protocol';
 
 /**
  * How much extracted markdown to feed the model per call. Beyond this the full
@@ -80,7 +81,9 @@ function contentResult(result: ExecuteResult) {
 
 function tabbedContentResult(result: ExecuteResult, fallbackTabId: number) {
   const rendered = contentResult(result);
-  rendered.content[0]!.text = `[tabId=${result.resultTabId ?? fallbackTabId}] ${rendered.content[0]!.text}`;
+  const first = rendered.content[0];
+  if (!first) throw new Error('Browser tool produced no content');
+  first.text = `[tabId=${result.resultTabId ?? fallbackTabId}] ${first.text}`;
   return rendered;
 }
 
@@ -131,17 +134,6 @@ export async function currentBrowserTarget(
 ): Promise<{ tabId: number; origin?: string }> {
   return tabTarget(await gateway.getOperationTab(getThreadId(), requestedTabId));
 }
-
-/** element + ref dual params (docs/05 §3): element for approval display & model self-check. */
-const elementRef = {
-  element: schema.string({
-    description: 'Human-readable description of the element, shown to the user in approvals',
-  }),
-  ref: schema.string({
-    description:
-      'Exact opaque ref copied from the LATEST snapshot. Fails if stale — re-run read_page.',
-  }),
-};
 
 // ---------------------------------------------------------------------------
 // L0 — tab management (no injection)
@@ -563,15 +555,38 @@ export function createL1Tools(
       }),
     ),
   };
-  const splitTabParams = (params: unknown): { tabId?: number; contentParams: unknown } => {
-    const { tabId, ...contentParams } = params as Record<string, unknown> & { tabId?: number };
+  const splitContentParams = (
+    tool: string,
+    params: unknown,
+  ): { tabId?: number; contentParams: unknown } => {
+    const source = params as Record<string, unknown> & { tabId?: number };
+    const { tabId, ...contentParams } = source;
+    if (['click', 'type', 'select_option', 'hover'].includes(tool)) {
+      delete contentParams.element;
+    }
+    if (tool === 'batch_actions' && Array.isArray(contentParams.actions)) {
+      contentParams.actions = contentParams.actions.map((action) => {
+        if (typeof action !== 'object' || action === null || Array.isArray(action)) return action;
+        const actionRecord = action as Record<string, unknown>;
+        if (
+          typeof actionRecord.params !== 'object' ||
+          actionRecord.params === null ||
+          Array.isArray(actionRecord.params)
+        ) {
+          return action;
+        }
+        const actionParams = { ...(actionRecord.params as Record<string, unknown>) };
+        delete actionParams.element;
+        return { ...actionRecord, params: actionParams };
+      });
+    }
     return { tabId, contentParams };
   };
   const resolveTarget = (params: { tabId?: number }) =>
     currentBrowserTarget(gateway, getThreadId, params.tabId);
   const call = async (tool: string, params: unknown, signal?: AbortSignal) => {
     const threadId = getThreadId();
-    const { tabId: requestedTabId, contentParams } = splitTabParams(params);
+    const { tabId: requestedTabId, contentParams } = splitContentParams(tool, params);
     const tabId = await gateway.getOperationTab(threadId, requestedTabId);
     const deadlineAt = deadlineForTool(tool, contentParams);
     try {
@@ -604,6 +619,35 @@ export function createL1Tools(
     }
   };
 
+  const batchActionParameters = {
+    actions: schema.array(
+      schema.union([
+        schema.object({
+          kind: schema.literal('click'),
+          params: schema.object({
+            ...contentToolParameterShapes.click,
+            element: contentToolFieldSchemas.element,
+          }),
+        }),
+        schema.object({
+          kind: schema.literal('type'),
+          params: schema.object({
+            ...contentToolParameterShapes.type,
+            element: contentToolFieldSchemas.element,
+          }),
+        }),
+        schema.object({
+          kind: schema.literal('select_option'),
+          params: schema.object({
+            ...contentToolParameterShapes.select_option,
+            element: contentToolFieldSchemas.element,
+          }),
+        }),
+      ]),
+      { min: 1, max: 4 },
+    ),
+  };
+
   const tools: AnyAgentTool[] = [
     {
       name: 'read_page',
@@ -612,8 +656,7 @@ export function createL1Tools(
         "Returns a snapshot of the page: each interactive element appears as `role \"name\" [ref=<snapshot-ref>]`. Copy the opaque ref exactly; call this before your first interaction with a page and whenever refs go stale. mode:'article' extracts readable text for content reading; 'snapshot' (default) is for interaction.",
       parameters: schema.object({
         ...tabIdParameter,
-        mode: schema.optional(schema.enum(['snapshot', 'article'])),
-        maxTokens: schema.optional(schema.number({ max: 6000 })),
+        ...contentToolParameterShapes.read_page,
       }),
       level: 'L1',
       effects: 'read',
@@ -624,7 +667,10 @@ export function createL1Tools(
       label: '页内查找',
       description:
         'Find elements/text in the current snapshot by query. Cheaper than a full read_page for targeted lookups. Returns matching snapshot lines with refs.',
-      parameters: schema.object({ ...tabIdParameter, query: schema.string({ min: 1 }) }),
+      parameters: schema.object({
+        ...tabIdParameter,
+        ...contentToolParameterShapes.find_in_page,
+      }),
       level: 'L1',
       effects: 'read',
       execute: (_id, params, signal) => call('find_in_page', params, signal),
@@ -636,12 +682,7 @@ export function createL1Tools(
         "Extract the page (or a ref'd subtree via scope) as clean Markdown with links preserved — cheaper and more readable than a full read_page snapshot for reading content or collecting URLs. Long pages truncate; pass fromChar to continue from where it stopped. Oversized results are saved to an attachment and summarized.",
       parameters: schema.object({
         ...tabIdParameter,
-        scope: schema.optional(
-          schema.string({
-            description:
-              'Ref of a container from the latest snapshot to limit extraction to that subtree',
-          }),
-        ),
+        ...contentToolParameterShapes.extract,
         fromChar: schema.optional(
           schema.number({
             description:
@@ -687,7 +728,10 @@ export function createL1Tools(
       name: 'get_selection',
       label: '获取选中文本',
       description: "Get the user's current text selection on the page.",
-      parameters: schema.object({ ...tabIdParameter }),
+      parameters: schema.object({
+        ...tabIdParameter,
+        ...contentToolParameterShapes.get_selection,
+      }),
       level: 'L1',
       effects: 'read',
       execute: (_id, params, signal) => call('get_selection', params, signal),
@@ -699,9 +743,8 @@ export function createL1Tools(
         'Click an element. element: human-readable description shown to the user for approval; ref: from the LATEST snapshot. Fails if the ref is stale — re-run read_page and retry with a fresh ref. If the click navigates, the result says so — do NOT retry a click that navigated.',
       parameters: schema.object({
         ...tabIdParameter,
-        ...elementRef,
-        button: schema.optional(schema.enum(['left', 'right'])),
-        doubleClick: schema.optional(schema.boolean()),
+        ...contentToolParameterShapes.click,
+        element: contentToolFieldSchemas.element,
       }),
       level: 'L1',
       effects: 'write',
@@ -714,11 +757,8 @@ export function createL1Tools(
         'Set a field value and dispatch input events. Use submit:true to press Enter after (may navigate — the result says so). mode:"append" keeps existing text. If the field ignores the input, retry with slowly:true.',
       parameters: schema.object({
         ...tabIdParameter,
-        ...elementRef,
-        text: schema.string(),
-        mode: schema.optional(schema.enum(['replace', 'append'])),
-        submit: schema.optional(schema.boolean()),
-        slowly: schema.optional(schema.boolean()),
+        ...contentToolParameterShapes.type,
+        element: contentToolFieldSchemas.element,
       }),
       level: 'L1',
       effects: 'write',
@@ -731,8 +771,8 @@ export function createL1Tools(
         'Select option(s) in a <select> by value or visible text. On mismatch the error lists available options.',
       parameters: schema.object({
         ...tabIdParameter,
-        ...elementRef,
-        values: schema.array(schema.string(), { min: 1 }),
+        ...contentToolParameterShapes.select_option,
+        element: contentToolFieldSchemas.element,
       }),
       level: 'L1',
       effects: 'write',
@@ -745,12 +785,8 @@ export function createL1Tools(
         "Press a key or combo with TRUSTED input (triggers native behavior: Enter submits, Tab moves focus, Escape dismisses). e.g. 'Enter', 'Escape', 'Control+a', 'Shift+Tab'. Optional ref focuses that element first. May trigger navigation — the result will say so.",
       parameters: schema.object({
         ...tabIdParameter,
-        key: schema.string({ min: 1 }),
-        ref: schema.optional(
-          schema.string({
-            description: 'Element to focus before pressing (from the latest snapshot)',
-          }),
-        ),
+        ...contentToolParameterShapes.press_key,
+        ref: schema.optional(contentToolFieldSchemas.ref),
       }),
       level: 'L2',
       effects: 'write',
@@ -768,13 +804,14 @@ export function createL1Tools(
             signal,
             deadlineAt,
           );
-        if (deps.dispatchKey && deps.getTabId) {
+        const dispatchKey = deps.dispatchKey;
+        if (dispatchKey && deps.getTabId) {
           const urlBefore = (await chrome.tabs.get(tabId)).url;
           const captured = await gateway.runWithNewTabCapture(
             threadId,
             tabId,
             async () => {
-              await deps.dispatchKey!(tabId, params.key, signal, deadlineAt);
+              await dispatchKey(tabId, params.key, signal, deadlineAt);
               // Key presses (Enter on forms) routinely navigate — report it.
               await waitWithContext(300, { signal, deadlineAt });
               return chrome.tabs.get(tabId);
@@ -814,7 +851,9 @@ export function createL1Tools(
           deadlineAt,
         );
         const r = contentResult(result);
-        r.content[0]!.text = `[tabId=${tabId}] ${r.content[0]!.text}\n[合成事件：可能未触发原生行为（表单提交/焦点移动）。]`;
+        const first = r.content[0];
+        if (!first) throw new Error('Browser tool produced no content');
+        first.text = `[tabId=${tabId}] ${first.text}\n[合成事件：可能未触发原生行为（表单提交/焦点移动）。]`;
         return r;
       },
     },
@@ -825,9 +864,7 @@ export function createL1Tools(
         "Scroll the page or a container (target ref). amount: 'page' (default), 'end', or pixels. New content may appear after scrolling — re-read if needed.",
       parameters: schema.object({
         ...tabIdParameter,
-        target: schema.optional(schema.string()),
-        direction: schema.enum(['up', 'down']),
-        amount: schema.optional(schema.union([schema.enum(['page', 'end']), schema.number()])),
+        ...contentToolParameterShapes.scroll,
       }),
       level: 'L1',
       effects: 'read',
@@ -838,7 +875,11 @@ export function createL1Tools(
       label: '悬停',
       description:
         'Hover over an element to reveal menus/tooltips. Follow with read_page to see what appeared.',
-      parameters: schema.object({ ...tabIdParameter, ...elementRef }),
+      parameters: schema.object({
+        ...tabIdParameter,
+        ...contentToolParameterShapes.hover,
+        element: contentToolFieldSchemas.element,
+      }),
       level: 'L1',
       effects: 'write',
       execute: (_id, params, signal) => call('hover', params, signal),
@@ -850,9 +891,7 @@ export function createL1Tools(
         'Wait for text to appear (text), disappear (textGone), or a fixed time (timeMs). Text conditions time out at 30s. Prefer text conditions over raw time after async actions.',
       parameters: schema.object({
         ...tabIdParameter,
-        text: schema.optional(schema.string()),
-        textGone: schema.optional(schema.union([schema.boolean(), schema.string()])),
-        timeMs: schema.optional(schema.number({ max: 30_000 })),
+        ...contentToolParameterShapes.wait_for,
       }),
       level: 'L1',
       effects: 'read',
@@ -952,13 +991,7 @@ export function createL1Tools(
         'Up to 4 click/type/select_option actions executed in order; stops early if the page changes significantly. Prefer this for multi-field forms — one approval, one round-trip.',
       parameters: schema.object({
         ...tabIdParameter,
-        actions: schema.array(
-          schema.object({
-            kind: schema.enum(['click', 'type', 'select_option']),
-            params: schema.record(schema.string(), schema.unknown()),
-          }),
-          { min: 1, max: 4 },
-        ),
+        ...batchActionParameters,
       }),
       level: 'L1',
       effects: 'write',

@@ -388,7 +388,8 @@ export class CdpManager {
         let index = 0;
         const seenBackendNodes = new Set<number>();
         for (const sessionId of [undefined, ...childSessions]) {
-          const sessionContext = sessionContexts.get(sessionId)!;
+          const sessionContext = sessionContexts.get(sessionId);
+          if (!sessionContext) throw new Error('CDP session context is unavailable');
           const { nodes } = await this.sendToSession<{ nodes: AxNode[] }>(
             sessionId,
             'Accessibility.getFullAXTree',
@@ -456,7 +457,8 @@ export class CdpManager {
               ),
             ];
             if (eventTypes.length === 0) continue;
-            const sessionContext = sessionContexts.get(undefined)!;
+            const sessionContext = sessionContexts.get(undefined);
+            if (!sessionContext) throw new Error('Top-level CDP session context is unavailable');
             const frame = this.frameIdentityForNode(sessionContext, node.frameId);
             const ref = `${refPrefix}_${++index}`;
             refs.set(ref, {
@@ -635,7 +637,8 @@ export class CdpManager {
   private removeChildSessionTree(state: ChildSessionState, sessionId: string): void {
     const queue = [sessionId];
     while (queue.length > 0) {
-      const current = queue.pop()!;
+      const current = queue.pop();
+      if (current === undefined) break;
       for (const [candidate, context] of state.sessions) {
         if (context.parentSessionId === current) queue.push(candidate);
       }
@@ -728,9 +731,22 @@ export class CdpManager {
     }>(target.sessionId, 'DOM.getBoxModel', { backendNodeId: target.backendNodeId });
     const quad = model.content ?? model.border;
     if (!quad || quad.length < 8) throw new Error(`Deep ref ${ref} 没有可操作区域。`);
+    const [x1, y1, x2, y2, x3, y3, x4, y4] = quad;
+    if (
+      x1 === undefined ||
+      y1 === undefined ||
+      x2 === undefined ||
+      y2 === undefined ||
+      x3 === undefined ||
+      y3 === undefined ||
+      x4 === undefined ||
+      y4 === undefined
+    ) {
+      throw new Error(`Deep ref ${ref} 的可操作区域不完整。`);
+    }
     return {
-      x: (quad[0]! + quad[2]! + quad[4]! + quad[6]!) / 4,
-      y: (quad[1]! + quad[3]! + quad[5]! + quad[7]!) / 4,
+      x: (x1 + x2 + x3 + x4) / 4,
+      y: (y1 + y2 + y3 + y4) / 4,
     };
   }
 
@@ -1052,7 +1068,8 @@ function randomRefToken(): string {
 function attributeMap(values: string[] | undefined): Record<string, string> {
   const result: Record<string, string> = {};
   for (let index = 0; index < (values?.length ?? 0); index += 2) {
-    result[values![index]!] = values![index + 1] ?? '';
+    const name = values?.[index];
+    if (name !== undefined) result[name] = values?.[index + 1] ?? '';
   }
   return result;
 }

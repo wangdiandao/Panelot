@@ -75,6 +75,8 @@ export function PluginsPage() {
   };
 
   useEffect(() => {
+    // Hydrate the view from IndexedDB on mount.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void refresh();
   }, []);
 
@@ -432,7 +434,8 @@ export function PluginsPage() {
               </div>
             </ScrollArea>
 
-            <DialogFooter className="border-t bg-background px-6 py-4">
+            <Separator />
+            <DialogFooter className="px-6 py-4">
               <DialogClose asChild>
                 <Button variant="outline" disabled={busy}>
                   {t('settings.plugins.cancel')}

@@ -34,7 +34,9 @@ interface Props {
 }
 
 export function PermissionSwitch({ value, onSelect }: Props) {
-  const active = TIERS.find((tier) => tier.id === value) ?? TIERS[1]!;
+  const active =
+    TIERS.find((tier) => tier.id === value) ?? TIERS.find((tier) => tier.id === 'untrusted');
+  if (!active) return null;
   const { Icon } = active;
   return (
     <DropdownMenu>

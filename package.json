@@ -2,10 +2,10 @@
   "name": "panelot",
   "description": "Chrome and Edge AI agent extension with BYOK providers, browser tools, Skills, and MCP",
   "private": true,
-  "version": "0.4.2",
+  "version": "0.4.3",
   "packageManager": "pnpm@9.12.3",
   "engines": {
-    "node": ">=20.19"
+    "node": "^20.19.0 || >=22.12.0"
   },
   "type": "module",
   "scripts": {
@@ -15,10 +15,10 @@
     "build:edge": "wxt build -b edge",
     "zip": "wxt zip",
     "zip:edge": "wxt zip -b edge",
-    "compile": "tsc --noEmit",
+    "compile": "tsc --noEmit && tsc --noEmit -p tsconfig.entrypoints.json && tsc --noEmit -p tsconfig.e2e.json && tsc --noEmit -p tsconfig.preview.json",
     "lint": "eslint . --max-warnings 0",
-    "format": "prettier --write \"{e2e,entrypoints,src,tests,scripts}/**/*.{ts,tsx,js,mjs,json}\" \"*.{ts,js,mjs,json}\"",
-    "format:check": "prettier --check \"{e2e,entrypoints,src,tests,scripts}/**/*.{ts,tsx,js,mjs,json}\" \"*.{ts,js,mjs,json}\"",
+    "format": "prettier --write \"{e2e,entrypoints,preview,src,tests,scripts}/**/*.{ts,tsx,js,mjs,json}\" \"*.{ts,js,mjs,json}\"",
+    "format:check": "prettier --check \"{e2e,entrypoints,preview,src,tests,scripts}/**/*.{ts,tsx,js,mjs,json}\" \"*.{ts,js,mjs,json}\"",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
@@ -64,6 +64,7 @@
     "@playwright/test": "^1.61.1",
     "@tailwindcss/vite": "^4.3.2",
     "@types/chrome": "^0.2.2",
+    "@types/node": "20.19.25",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",

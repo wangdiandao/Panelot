@@ -592,7 +592,7 @@ describe('gatekeeper integration', () => {
       { text: 'fill the form' },
     ).done;
 
-    expect(checked).toEqual(['type', 'type_trusted']);
+    expect(checked).toEqual(['type', 'type', 'type_trusted', 'type_trusted']);
     expect(approvals).toEqual(['type_trusted']);
     expect(trusted).toHaveBeenCalledOnce();
     const result = provider.requests[1]!.messages.find((message) => message.role === 'tool_result');
@@ -739,6 +739,262 @@ describe('gatekeeper integration', () => {
     expect((resultMsg?.content[0] as { text?: string }).text).toContain(
       'target changed after the permission check',
     );
+  });
+
+  it('uses the same verified target for the final authorization decision', async () => {
+    const executed = vi.fn(async () => ({ content: [{ type: 'text' as const, text: 'ran' }] }));
+    const resolveTarget = vi
+      .fn()
+      .mockResolvedValueOnce({ tabId: 7, origin: 'https://approved.example' })
+      .mockResolvedValueOnce({ tabId: 7, origin: 'https://approved.example' })
+      .mockResolvedValueOnce({ tabId: 7, origin: 'https://drifted.example' });
+    tools.register(makeEchoTool({ effects: 'write', execute: executed, resolveTarget }));
+    const check = vi
+      .fn<GatekeeperCheck['check']>()
+      .mockResolvedValueOnce({
+        verdict: 'ask',
+        authorizationRevision: 'revision-1',
+        request: {
+          tool: 'echo',
+          label: 'Echo',
+          params: { text: 'x' },
+          targetOrigin: 'https://approved.example',
+          flags: [],
+        },
+      })
+      .mockResolvedValueOnce({ verdict: 'allow' });
+    const thread = await tree.createThread({});
+    provider.queue(
+      { toolCalls: [{ id: 'c1', name: 'echo', params: { text: 'x' } }] },
+      { streamText: ['finished'] },
+    );
+
+    await runTurn(
+      makeEnv({ gatekeeper: { check }, requestApproval: async () => ({ kind: 'accept' }) }),
+      thread.id,
+      { text: 'go' },
+    ).done;
+
+    expect(resolveTarget).toHaveBeenCalledTimes(2);
+    expect(check.mock.calls[1]?.[0].target).toEqual({
+      tabId: 7,
+      origin: 'https://approved.example',
+    });
+    expect(executed).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a target that appears only after the initial authorization check', async () => {
+    const executed = vi.fn(async () => ({ content: [{ type: 'text' as const, text: 'ran' }] }));
+    const resolveTarget = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ tabId: 7, origin: 'https://appeared.example' });
+    tools.register(makeEchoTool({ effects: 'write', execute: executed, resolveTarget }));
+    const check = vi.fn<GatekeeperCheck['check']>().mockResolvedValue({
+      verdict: 'ask',
+      request: {
+        tool: 'echo',
+        label: 'Echo',
+        params: { text: 'x' },
+        targetOrigin: '',
+        flags: [],
+      },
+    });
+    const thread = await tree.createThread({});
+    provider.queue(
+      { toolCalls: [{ id: 'c1', name: 'echo', params: { text: 'x' } }] },
+      { streamText: ['target changed'] },
+    );
+
+    await runTurn(
+      makeEnv({ gatekeeper: { check }, requestApproval: async () => ({ kind: 'accept' }) }),
+      thread.id,
+      { text: 'go' },
+    ).done;
+
+    expect(executed).not.toHaveBeenCalled();
+    expect(check).toHaveBeenCalledOnce();
+    const resultMsg = provider.requests[1]?.messages.find(
+      (message) => message.role === 'tool_result',
+    );
+    expect((resultMsg?.content[0] as { text?: string }).text).toContain(
+      'target changed after the permission check',
+    );
+  });
+
+  it.each([
+    {
+      name: 'deny',
+      finalVerdict: { verdict: 'deny' as const, reason: 'rule changed' },
+      message: /denied by policy during final authorization: rule changed/,
+    },
+    {
+      name: 'ask',
+      finalVerdict: {
+        verdict: 'ask' as const,
+        authorizationRevision: 'revision-2',
+        request: {
+          tool: 'echo',
+          label: 'Echo',
+          params: { text: 'x' },
+          targetOrigin: 'https://example.com',
+          flags: [] as const,
+        },
+      },
+      message: /authorization changed before dispatch/,
+    },
+    {
+      name: 'revoked host permission',
+      finalVerdict: {
+        verdict: 'ask' as const,
+        authorizationRevision: 'revision-1',
+        request: {
+          tool: 'echo',
+          label: 'Allow access',
+          params: { text: 'x' },
+          targetOrigin: 'https://example.com/*',
+          flags: ['host_permission'] as const,
+        },
+      },
+      message: /authorization changed before dispatch/,
+    },
+  ])(
+    'blocks dispatch when final authorization becomes $name',
+    async ({ finalVerdict, message }) => {
+      const executed = vi.fn(async () => ({ content: [{ type: 'text' as const, text: 'ran' }] }));
+      tools.register(makeEchoTool({ effects: 'write', execute: executed }));
+      const check = vi
+        .fn<GatekeeperCheck['check']>()
+        .mockResolvedValueOnce({
+          verdict: 'ask',
+          authorizationRevision: 'revision-1',
+          request: {
+            tool: 'echo',
+            label: 'Echo',
+            params: { text: 'x' },
+            targetOrigin: 'https://example.com',
+            flags: [],
+          },
+        })
+        .mockResolvedValueOnce(finalVerdict as Awaited<ReturnType<GatekeeperCheck['check']>>);
+      const thread = await tree.createThread({});
+      provider.queue(
+        { toolCalls: [{ id: 'c1', name: 'echo', params: { text: 'x' } }] },
+        { streamText: ['authorization changed'] },
+      );
+
+      await runTurn(
+        makeEnv({ gatekeeper: { check }, requestApproval: async () => ({ kind: 'accept' }) }),
+        thread.id,
+        { text: 'go' },
+      ).done;
+
+      expect(check).toHaveBeenCalledTimes(2);
+      expect(check.mock.calls[1]?.[0]).toMatchObject({
+        phase: 'dispatch',
+        approvedAuthorizationRevision: 'revision-1',
+      });
+      expect(executed).not.toHaveBeenCalled();
+      const result = provider.requests[1]?.messages.find((entry) => entry.role === 'tool_result');
+      expect((result?.content[0] as { text?: string }).text).toMatch(message);
+    },
+  );
+
+  it('executes exactly once when the approved revision remains authorized at dispatch', async () => {
+    const executed = vi.fn(async () => ({ content: [{ type: 'text' as const, text: 'ran' }] }));
+    tools.register(makeEchoTool({ effects: 'write', execute: executed }));
+    const check = vi
+      .fn<GatekeeperCheck['check']>()
+      .mockResolvedValueOnce({
+        verdict: 'ask',
+        authorizationRevision: 'revision-1',
+        request: {
+          tool: 'echo',
+          label: 'Echo',
+          params: { text: 'x' },
+          targetOrigin: 'https://example.com',
+          flags: [],
+        },
+      })
+      .mockResolvedValueOnce({ verdict: 'allow' });
+    const thread = await tree.createThread({});
+    provider.queue(
+      { toolCalls: [{ id: 'c1', name: 'echo', params: { text: 'x' } }] },
+      { streamText: ['done'] },
+    );
+
+    await runTurn(
+      makeEnv({ gatekeeper: { check }, requestApproval: async () => ({ kind: 'accept' }) }),
+      thread.id,
+      { text: 'go' },
+    ).done;
+
+    expect(check).toHaveBeenCalledTimes(2);
+    expect(executed).toHaveBeenCalledOnce();
+  });
+
+  it('revalidates an approved interactive tool before registering its durable watcher', async () => {
+    tools.register({
+      name: 'watch_page',
+      label: 'Watch page',
+      description: 'Wait for a page condition.',
+      parameters: z.object({ tabId: z.number(), value: z.string() }),
+      level: 'builtin',
+      effects: 'read',
+      interaction: 'watch_page',
+      prepareInteraction: async (params) => ({
+        kind: 'watch_page',
+        tabId: params.tabId,
+        condition: { type: 'text', value: params.value },
+        deadlineAt: Date.now() + 60_000,
+      }),
+      execute: async () => ({ content: [] }),
+    });
+    const check = vi
+      .fn<GatekeeperCheck['check']>()
+      .mockResolvedValueOnce({
+        verdict: 'ask',
+        authorizationRevision: 'revision-1',
+        request: {
+          tool: 'watch_page',
+          label: 'Watch page',
+          params: { tabId: 7, value: 'Done' },
+          targetOrigin: 'https://example.com',
+          flags: ['host_permission'],
+        },
+      })
+      .mockResolvedValueOnce({
+        verdict: 'ask',
+        authorizationRevision: 'revision-1',
+        request: {
+          tool: 'watch_page',
+          label: 'Allow access',
+          params: { tabId: 7, value: 'Done' },
+          targetOrigin: 'https://example.com/*',
+          flags: ['host_permission'],
+        },
+      });
+    const requestInteraction = vi.fn();
+    const thread = await tree.createThread({});
+    provider.queue(
+      {
+        toolCalls: [{ id: 'c1', name: 'watch_page', params: { tabId: 7, value: 'Done' } }],
+      },
+      { streamText: ['permission changed'] },
+    );
+
+    await runTurn(
+      makeEnv({
+        gatekeeper: { check },
+        requestApproval: async () => ({ kind: 'accept' }),
+        requestInteraction,
+      }),
+      thread.id,
+      { text: 'watch it' },
+    ).done;
+
+    expect(check).toHaveBeenCalledTimes(2);
+    expect(requestInteraction).not.toHaveBeenCalled();
   });
 
   it('ask → declined with note → note reaches the model, tool NOT executed', async () => {
@@ -909,22 +1165,27 @@ describe('steering & interrupt (docs/04 §3)', () => {
   });
 
   it('interrupt aborts promptly with stopReason interrupted', async () => {
+    let markToolStarted: (() => void) | undefined;
+    const toolStarted = new Promise<void>((resolve) => {
+      markToolStarted = resolve;
+    });
     tools.register(
       makeEchoTool({
-        execute: (_id, _params, signal) =>
-          new Promise((_, reject) => {
+        execute: (_id, _params, signal) => {
+          markToolStarted?.();
+          return new Promise((_, reject) => {
             signal.addEventListener('abort', () =>
               reject(new DOMException('aborted', 'AbortError')),
             );
-          }),
+          });
+        },
       }),
     );
     const thread = await tree.createThread({});
     provider.queue({ toolCalls: [{ id: 'c1', name: 'echo', params: { text: 'x' } }] });
 
     const handle = runTurn(makeEnv(), thread.id, { text: 'go' });
-    // Let the loop reach the tool, then interrupt.
-    await new Promise((r) => setTimeout(r, 10));
+    await toolStarted;
     handle.interrupt();
     const stop = await handle.done;
     expect(stop).toBe('interrupted');

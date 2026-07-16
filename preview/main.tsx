@@ -295,7 +295,10 @@ function Preview() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
+const root = document.getElementById('root');
+if (!root) throw new Error('Preview root element is missing');
+
+ReactDOM.createRoot(root).render(
   <React.StrictMode>
     <TooltipProvider>
       <Preview />

@@ -12,6 +12,7 @@ import { attachSelectionFromTab, attachTab, listAttachableTabs } from '../pageCo
 import type { SkillFrontmatter, VariableDef } from '../../skills/parse';
 import type { TriggerItem, TriggerState } from './TriggerMenu';
 import { hostPermissionBroker } from '../../permissions/hostPermissionBroker';
+import { t } from '../i18n';
 
 export const DYNAMIC_VARIABLES = [
   'PAGE_URL',
@@ -141,7 +142,7 @@ export function useTriggerItems(trigger: TriggerState | null, cb: Callbacks): Tr
       const prompts: SkillCommand[] = (catalog.ok ? (catalog.prompts ?? []) : []).map((prompt) => ({
         command: prompt.command,
         skillName: `${prompt.serverId}:${prompt.prompt}`,
-        description: `MCP Prompt · ${prompt.serverId}`,
+        description: t('input.mcpPrompt', { server: prompt.serverId }),
         variables: prompt.args.map((argument) => ({
           key: argument.name,
           label: argument.name,
@@ -162,19 +163,19 @@ export function useTriggerItems(trigger: TriggerState | null, cb: Callbacks): Tr
       if (block) cb.attachContext(block);
     };
     return [
-      ...tabs.map((t) => ({
-        id: `tab-${t.id}`,
+      ...tabs.map((tab) => ({
+        id: `tab-${tab.id}`,
         kind: '@' as const,
-        group: '打开的标签页',
-        label: t.title,
-        hint: new URL(t.url).hostname,
+        group: t('input.group.openTabs'),
+        label: tab.title,
+        hint: new URL(tab.url).hostname,
         icon: 'tab' as const,
-        action: attach(() => attachTab(t.id, t.url)),
+        action: attach(() => attachTab(tab.id, tab.url)),
       })),
       ...mcpResources.map((resource) => ({
         id: `mcp-${resource.serverId}-${resource.uri}`,
         kind: '@' as const,
-        group: 'MCP Resources',
+        group: t('input.group.mcpResources'),
         label: resource.name,
         hint: resource.description ?? resource.uri,
         icon: 'page' as const,
@@ -197,7 +198,7 @@ export function useTriggerItems(trigger: TriggerState | null, cb: Callbacks): Tr
       ...cb.builtinCommands.map((c) => ({
         id: c.id,
         kind: '/' as const,
-        group: '内置命令',
+        group: t('input.group.builtinCommands'),
         label: c.id,
         hint: c.hint,
         icon: 'command' as const,
@@ -209,7 +210,7 @@ export function useTriggerItems(trigger: TriggerState | null, cb: Callbacks): Tr
       ...skillCommands.map((c) => ({
         id: c.command,
         kind: '/' as const,
-        group: 'Skills',
+        group: t('input.group.skills'),
         label: c.command,
         hint: c.description,
         icon: 'command' as const,
@@ -229,7 +230,7 @@ export function useTriggerItems(trigger: TriggerState | null, cb: Callbacks): Tr
   return DYNAMIC_VARIABLES.map((v) => ({
     id: v,
     kind: '{{' as const,
-    group: '动态变量（发送时求值）',
+    group: t('input.group.dynamicVariables'),
     label: `{{${v}}}`,
     icon: 'variable' as const,
     action: () => cb.replaceTrigger(`{{${v}}} `),

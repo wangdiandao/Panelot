@@ -39,6 +39,13 @@ const server: McpServerConfig = {
   connectOnStartup: false,
 };
 
+const secondServer: McpServerConfig = {
+  ...server,
+  id: 'server-2',
+  name: 'Second MCP',
+  url: 'https://second.example/mcp',
+};
+
 const permissionPlan: McpOAuthPermissionRequired = {
   status: 'permission_required',
   stage: 'oauth_endpoints',
@@ -139,6 +146,30 @@ describe('MCP OAuth staged permission UI', () => {
     expect(container.textContent).not.toContain('https://token.example');
     expect(oauthMessages()).toHaveLength(oauthCallsBefore);
   });
+
+  it('serializes rapid server updates without losing an earlier change', async () => {
+    const firstSave = deferred<void>();
+    storeMocks.listMcpServers.mockResolvedValue([
+      structuredClone(server),
+      structuredClone(secondServer),
+    ]);
+    storeMocks.saveMcpServers
+      .mockImplementationOnce(() => firstSave.promise)
+      .mockResolvedValue(undefined);
+    await renderPage();
+
+    await clickSwitch(server.name);
+    await clickSwitch(secondServer.name);
+
+    expect(storeMocks.saveMcpServers).toHaveBeenCalledOnce();
+    firstSave.resolve();
+    await vi.waitFor(() => expect(storeMocks.saveMcpServers).toHaveBeenCalledTimes(2));
+
+    expect(storeMocks.saveMcpServers).toHaveBeenLastCalledWith([
+      expect.objectContaining({ id: server.id, enabled: false }),
+      expect.objectContaining({ id: secondServer.id, enabled: false }),
+    ]);
+  });
 });
 
 async function renderPage(): Promise<void> {
@@ -161,6 +192,18 @@ async function click(text: string): Promise<void> {
   });
 }
 
+async function clickSwitch(label: string): Promise<void> {
+  const control = container.querySelector<HTMLButtonElement>(
+    `button[role="switch"][aria-label="${label}"]`,
+  );
+  if (!control) throw new Error(`Switch not found: ${label}`);
+  await act(async () => {
+    control.click();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
 function oauthMessages(): unknown[][] {
   return sendMessage.mock.calls.filter(
     ([message]) => (message as { type?: string }).type === 'panelot.mcpOauth',
@@ -174,4 +217,12 @@ function disconnectedDescription() {
     promptCount: 0,
     resourceCount: 0,
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }

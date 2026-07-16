@@ -9,7 +9,7 @@
 
 import { schema, type RuntimeSchema } from './schema';
 import type { ToolExecutionBinding, ToolRecoveryPolicy } from '../db/types';
-import type { ContentBlock, ToolLevel } from '../messaging/protocol';
+import type { AskUserQuestion, ContentBlock, ToolLevel } from '../messaging/protocol';
 import type { InteractionRequestPayload } from '../messaging/protocol';
 import type { ToolSchema } from '../providers/types';
 
@@ -60,12 +60,49 @@ export interface AgentTool<P = unknown, D = unknown> {
   ): Promise<ToolResult<D>>;
 }
 
-/**
- * Type-erased tool for registry storage. `P = any` is deliberate: params are
- * validated at runtime via `validateParams` before every execute call.
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type AnyAgentTool = AgentTool<any, unknown>;
+interface ErasedCallbackParams extends Readonly<Record<string, unknown>> {
+  question: string;
+  questions: AskUserQuestion[];
+  instruction: string;
+  tabId: number;
+  condition: 'text' | 'text_gone' | 'url';
+  value: string;
+  timeoutSeconds: number;
+  delaySeconds: number;
+  reason: string;
+  url: string;
+  sessionId: string;
+  text: string;
+}
+
+/** Type-erased tool for registry storage; callers validate unknown input first. */
+export interface AnyAgentTool {
+  name: string;
+  label: string;
+  description: string;
+  parameters: RuntimeSchema<unknown>;
+  inputSchema?: Record<string, unknown>;
+  level: ToolLevel;
+  effects: 'read' | 'write';
+  recovery?: ToolRecoveryPolicy;
+  resultTrust?: 'trusted' | 'untrusted';
+  resultProvenance?: 'user' | 'page' | 'mcp' | 'tool' | 'import' | 'plugin';
+  executionBinding?: ToolExecutionBinding;
+  interaction?: InteractionRequestPayload['kind'];
+  prepareInteraction?: (params: ErasedCallbackParams) => Promise<InteractionRequestPayload>;
+  resolveTarget?: (params: ErasedCallbackParams) => Promise<{
+    tabId?: number;
+    frameId?: number;
+    origin?: string;
+    serverId?: string;
+  }>;
+  execute(
+    toolCallId: string,
+    params: unknown,
+    signal: AbortSignal,
+    onUpdate?: (partial: ToolUpdate<unknown>) => void,
+  ): Promise<ToolResult<unknown>>;
+}
 
 // ---------------------------------------------------------------------------
 // Registry
@@ -74,9 +111,11 @@ export type AnyAgentTool = AgentTool<any, unknown>;
 export class ToolRegistry {
   private tools = new Map<string, AnyAgentTool>();
 
-  register(tool: AnyAgentTool): void {
+  register<P, D>(tool: AgentTool<P, D>): void;
+  register(tool: AnyAgentTool): void;
+  register(tool: AnyAgentTool | AgentTool<unknown, unknown>): void {
     if (this.tools.has(tool.name)) throw new Error(`tool ${tool.name} already registered`);
-    this.tools.set(tool.name, tool);
+    this.tools.set(tool.name, tool as unknown as AnyAgentTool);
   }
 
   unregister(name: string): void {
@@ -119,7 +158,15 @@ export class ToolRegistry {
 export function validateParams<P>(
   tool: AgentTool<P, unknown>,
   raw: unknown,
-): { ok: true; params: P } | { ok: false; error: string } {
+): { ok: true; params: P } | { ok: false; error: string };
+export function validateParams(
+  tool: AnyAgentTool,
+  raw: unknown,
+): { ok: true; params: unknown } | { ok: false; error: string };
+export function validateParams(
+  tool: { name: string; parameters: RuntimeSchema<unknown> },
+  raw: unknown,
+): { ok: true; params: unknown } | { ok: false; error: string } {
   const result = schema.safeParse(tool.parameters, raw);
   if (result.success) return { ok: true, params: result.data };
   const issues = result.error.issues

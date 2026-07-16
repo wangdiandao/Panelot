@@ -212,7 +212,8 @@ export class DataImportCoordinator {
       this.blocked = false;
       return 'rolled_forward';
     }
-    await this.restore(journal!);
+    if (!journal) throw new Error('IMPORT_JOURNAL_CORRUPT');
+    await this.restore(journal);
     await this.options.local.remove(DATA_IMPORT_JOURNAL_KEY);
     this.blocked = false;
     return 'rolled_back';
@@ -421,15 +422,45 @@ export async function clearImportSession(session: StorageAreaLike): Promise<void
 }
 
 function journalOf(value: unknown): DataImportJournal | undefined {
-  return record(value) &&
-    value.version === 1 &&
-    typeof value.operationId === 'string' &&
-    typeof value.digest === 'string' &&
-    ['prepared', 'settings_applied', 'db_committed', 'hydrated'].includes(String(value.phase)) &&
-    Number.isFinite(value.createdAt) &&
-    record(value.preimage)
-    ? (value as unknown as DataImportJournal)
-    : undefined;
+  const preimage = record(value) ? value.preimage : undefined;
+  if (
+    !record(value) ||
+    value.version !== 1 ||
+    typeof value.operationId !== 'string' ||
+    value.operationId.length === 0 ||
+    typeof value.digest !== 'string' ||
+    value.digest.length === 0 ||
+    !['prepared', 'settings_applied', 'db_committed', 'hydrated'].includes(String(value.phase)) ||
+    typeof value.createdAt !== 'number' ||
+    !Number.isSafeInteger(value.createdAt) ||
+    value.createdAt < 0 ||
+    !record(preimage)
+  ) {
+    return undefined;
+  }
+
+  const expectedKeys = new Set<string>(LOCAL_KEYS);
+  const entries = Object.entries(preimage);
+  if (entries.length < expectedKeys.size || entries.length > 10_000) return undefined;
+  if ([...expectedKeys].some((key) => !Object.hasOwn(preimage, key))) return undefined;
+  for (const [key, candidate] of entries) {
+    const allowedDynamicKey =
+      key.startsWith('thread_params:') && key.length > 'thread_params:'.length;
+    if (
+      (!expectedKeys.has(key) && !allowedDynamicKey) ||
+      !record(candidate) ||
+      typeof candidate.exists !== 'boolean'
+    ) {
+      return undefined;
+    }
+    const candidateKeys = Object.keys(candidate);
+    if (candidateKeys.some((entryKey) => entryKey !== 'exists' && entryKey !== 'value')) {
+      return undefined;
+    }
+    if (candidate.exists && !Object.hasOwn(candidate, 'value')) return undefined;
+    if (!candidate.exists && Object.hasOwn(candidate, 'value')) return undefined;
+  }
+  return value as unknown as DataImportJournal;
 }
 
 function completedOf(value: unknown) {

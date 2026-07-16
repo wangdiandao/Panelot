@@ -528,4 +528,31 @@ describe('key failover (docs/03 §8, sticky + failover)', () => {
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     expect(attempt).toHaveBeenCalledTimes(1);
   });
+
+  it('removes the abort listener after a retry delay completes normally', async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const add = vi.spyOn(controller.signal, 'addEventListener');
+      const remove = vi.spyOn(controller.signal, 'removeEventListener');
+      const keys = createKeyRing(['k']);
+      const attempt = vi
+        .fn()
+        .mockRejectedValueOnce(new ProviderError('network', 'down'))
+        .mockResolvedValueOnce('ok');
+      const pending = withRetry(keys, attempt, {
+        signal: controller.signal,
+        baseDelayMs: 10,
+      });
+      await Promise.resolve();
+      await vi.runAllTimersAsync();
+
+      await expect(pending).resolves.toBe('ok');
+      const abortListener = add.mock.calls.find(([type]) => type === 'abort')?.[1];
+      expect(abortListener).toBeDefined();
+      expect(remove).toHaveBeenCalledWith('abort', abortListener);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

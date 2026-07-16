@@ -7,6 +7,8 @@
 import { schema, type Infer } from '../agent/schema';
 import { CORE_SCHEMA, load } from 'js-yaml';
 
+export { skillMatchesUrl } from './siteMatch';
+
 export const VariableDef = schema.object({
   key: schema.string(),
   label: schema.string(),
@@ -49,7 +51,9 @@ export function parseSkill(raw: string): ParsedSkill {
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(raw.trim());
   if (!match) throw new Error('SKILL.md 缺少 YAML frontmatter（--- 包裹的头部）');
 
-  const fm = parseSimpleYaml(match[1]!);
+  const frontmatter = match[1];
+  if (frontmatter === undefined) throw new Error('SKILL.md frontmatter 缂哄け');
+  const fm = parseSimpleYaml(frontmatter);
   const result = schema.safeParse(SkillFrontmatter, fm);
   if (!result.success) {
     const issues = result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
@@ -89,27 +93,3 @@ export function parseSimpleYaml(text: string): Record<string, unknown> {
 // ---------------------------------------------------------------------------
 // Site matching (docs/08 §2) via URLPattern where available.
 // ---------------------------------------------------------------------------
-
-export function skillMatchesUrl(sites: string[] | undefined, url: string): boolean {
-  if (!sites || sites.length === 0) return false;
-  for (const pattern of sites) {
-    if (matchSite(pattern, url)) return true;
-  }
-  return false;
-}
-
-function matchSite(pattern: string, url: string): boolean {
-  let host: string;
-  try {
-    host = new URL(url).hostname;
-  } catch {
-    return false;
-  }
-  // Strip scheme/path from the pattern; support leading *.
-  const patternHost = pattern.replace(/^https?:\/\//, '').split('/')[0] ?? pattern;
-  if (patternHost.startsWith('*.')) {
-    const suffix = patternHost.slice(2);
-    return host === suffix || host.endsWith(`.${suffix}`);
-  }
-  return host === patternHost;
-}

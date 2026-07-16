@@ -37,6 +37,39 @@ interface StoredGatekeeperSessionState {
   grants: Array<[threadId: string, keys: string[]]>;
 }
 
+type StatefulGatekeeperVerdict =
+  | Exclude<GatekeeperVerdict, { verdict: 'ask' }>
+  | (Extract<GatekeeperVerdict, { verdict: 'ask' }> & { authorizationRevision: string });
+
+interface GatekeeperCheckPhase {
+  phase?: 'initial' | 'dispatch';
+  approvedAuthorizationRevision?: string;
+}
+
+function authorizationRevision(
+  permissionPolicy: PermissionPolicy,
+  rules: readonly PermissionRule[],
+  sensitivePatterns: readonly string[],
+): string {
+  return JSON.stringify([permissionPolicy, rules, sensitivePatterns]);
+}
+
+function finalizeGatekeeperVerdict(
+  verdict: GatekeeperVerdict,
+  revision: string,
+  phase: GatekeeperCheckPhase,
+): StatefulGatekeeperVerdict | { verdict: 'allow' } {
+  if (verdict.verdict !== 'ask') return verdict;
+  if (
+    phase.phase === 'dispatch' &&
+    phase.approvedAuthorizationRevision !== undefined &&
+    phase.approvedAuthorizationRevision === revision
+  ) {
+    return { verdict: 'allow' };
+  }
+  return { ...verdict, authorizationRevision: revision };
+}
+
 function currentSessionStorage(): SessionStorageArea | undefined {
   if (typeof chrome === 'undefined' || !chrome.storage?.session) return undefined;
   return chrome.storage.session as SessionStorageArea;
@@ -209,9 +242,9 @@ export class GatekeeperService {
     call: GatekeeperCall & {
       level?: string;
       target?: { origin?: string; serverId?: string };
-    },
+    } & GatekeeperCheckPhase,
     threadId: string,
-  ): Promise<GatekeeperVerdict> {
+  ): Promise<StatefulGatekeeperVerdict | { verdict: 'allow' }> {
     await this.ready();
     const [rules, sensitiveUser, thread, origin] = await Promise.all([
       storageGet<PermissionRule[]>(RULES_KEY, []),
@@ -236,22 +269,26 @@ export class GatekeeperService {
       (call.level === 'builtin' && !call.target?.origin && !destination);
     const targetOrigin = call.target?.origin ?? destination ?? (originless ? '' : origin);
 
+    const sensitivePatterns = [...DEFAULT_SENSITIVE_PATTERNS, ...sensitiveUser];
+    const revision = authorizationRevision(config.permissionPolicy, rules, sensitivePatterns);
     const verdict = checkGate(call, {
       threadId,
       targetOrigin,
       permissionPolicy: config.permissionPolicy,
       scopeOrigins: thread?.scopeOrigins ?? [],
       rules,
-      sensitivePatterns: [...DEFAULT_SENSITIVE_PATTERNS, ...sensitiveUser],
+      sensitivePatterns,
       sessionGrants: this.sessionGrants.get(threadId) ?? new Set(),
       originless,
     });
     if (verdict.verdict === 'deny' || originless || !/^https?:\/\//i.test(targetOrigin)) {
-      return verdict;
+      return finalizeGatekeeperVerdict(verdict, revision, call);
     }
-    if (typeof chrome === 'undefined' || !chrome.permissions) return verdict;
+    if (typeof chrome === 'undefined' || !chrome.permissions) {
+      return finalizeGatekeeperVerdict(verdict, revision, call);
+    }
     const permission = await this.hostPermissions.inspect(targetOrigin);
-    if (permission.granted) return verdict;
+    if (permission.granted) return finalizeGatekeeperVerdict(verdict, revision, call);
     if (verdict.verdict === 'ask') {
       return {
         ...verdict,
@@ -260,6 +297,7 @@ export class GatekeeperService {
           targetOrigin: permission.origin,
           flags: [...new Set([...verdict.request.flags, 'host_permission' as const])],
         },
+        authorizationRevision: revision,
       };
     }
     return {
@@ -271,6 +309,7 @@ export class GatekeeperService {
         targetOrigin: permission.origin,
         flags: ['host_permission'],
       },
+      authorizationRevision: revision,
     };
   }
 

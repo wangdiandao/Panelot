@@ -57,21 +57,41 @@ export function splitUnclosedFence(markdown: string): { closed: string; openTail
  */
 function CodeHeader({ lang, code }: { lang: string; code: string }) {
   const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mounted = useRef(true);
+  const copyGeneration = useRef(0);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      copyGeneration.current += 1;
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+      copiedTimer.current = null;
+    };
+  }, []);
   return (
     <div className="sticky top-0 z-10 flex items-center justify-between rounded-t-md bg-muted px-3 py-1 text-[11px] text-muted-foreground">
       <span className="truncate font-mono">{lang}</span>
       <Button
         variant="ghost"
-        size="sm"
+        size="xs"
         type="button"
         aria-label={t('actions.copy')}
         onClick={() => {
-          void navigator.clipboard.writeText(code).then(() => {
-            setCopied(true);
-            setTimeout(() => setCopied(false), 2000);
-          });
+          const generation = ++copyGeneration.current;
+          void navigator.clipboard.writeText(code).then(
+            () => {
+              if (!mounted.current || copyGeneration.current !== generation) return;
+              setCopied(true);
+              if (copiedTimer.current) clearTimeout(copiedTimer.current);
+              copiedTimer.current = setTimeout(() => {
+                copiedTimer.current = null;
+                if (mounted.current && copyGeneration.current === generation) setCopied(false);
+              }, 2000);
+            },
+            () => undefined,
+          );
         }}
-        className="h-6"
       >
         {copied ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />}
         {copied ? t('actions.copied') : t('actions.copy')}
@@ -183,7 +203,7 @@ export const Markdown = memo(function Markdown({ content, streaming }: MarkdownP
               );
             }
             if (match[1] === 'mermaid') return <MermaidBlock code={text} />;
-            return <ShikiBlock code={text} lang={match[1]!} />;
+            return <ShikiBlock code={text} lang={match[1] ?? ''} />;
           },
           a({ href, children }) {
             return (

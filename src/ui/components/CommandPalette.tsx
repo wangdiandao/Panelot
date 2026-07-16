@@ -72,10 +72,7 @@ export function CommandPalette({
   // Debounced full-text search (300ms — body scan hits IndexedDB).
   useEffect(() => {
     const generation = ++searchGeneration.current;
-    if (!open) {
-      setHits([]);
-      return;
-    }
+    if (!open) return;
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(
       () => {
@@ -90,12 +87,20 @@ export function CommandPalette({
     };
   }, [open, query]);
 
-  useEffect(() => {
-    if (!open) setQuery('');
-  }, [open]);
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen) {
+      searchGeneration.current += 1;
+      if (timer.current) clearTimeout(timer.current);
+      setQuery('');
+      setHits([]);
+    }
+    onOpenChange(nextOpen);
+  };
 
   const runAndClose = (fn: () => void) => () => {
     fn();
+    setQuery('');
+    setHits([]);
     onOpenChange(false);
   };
 
@@ -105,7 +110,7 @@ export function CommandPalette({
   return (
     <CommandDialog
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={handleOpenChange}
       title={t('palette.title')}
       description={t('palette.desc')}
       shouldFilter={false}

@@ -144,7 +144,7 @@ export class SecretStore {
     };
   }
 
-  async decryptBackup<T>(backup: EncryptedSecretBackup, passphrase: string): Promise<T> {
+  async decryptBackup(backup: EncryptedSecretBackup, passphrase: string): Promise<unknown> {
     if (
       backup.format !== 'panelot-secret-backup' ||
       backup.version !== 1 ||
@@ -159,7 +159,7 @@ export class SecretStore {
       await this.deriveBackupKey(passphrase, decode(backup.kdf.salt), ['decrypt']),
       decode(backup.ciphertext),
     );
-    return JSON.parse(new TextDecoder().decode(plaintext)) as T;
+    return JSON.parse(new TextDecoder().decode(plaintext)) as unknown;
   }
 
   private async localKey(): Promise<CryptoKey> {

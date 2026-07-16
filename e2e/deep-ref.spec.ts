@@ -13,13 +13,26 @@ test('CDP AXTree exposes a backend node inside a closed shadow root', async ({ p
   const button = nodes.find(
     (node) => node.role?.value === 'button' && node.name?.value === 'Closed action',
   );
-  expect(button?.backendDOMNodeId).toBeTruthy();
+  const backendNodeId = button?.backendDOMNodeId;
+  expect(backendNodeId).toBeTruthy();
+  if (!backendNodeId) throw new Error('Closed-shadow button has no backend DOM node');
   const { model } = await session.send('DOM.getBoxModel', {
-    backendNodeId: button!.backendDOMNodeId,
+    backendNodeId,
   });
   const quad = model.content;
-  const x = (quad[0] + quad[2] + quad[4] + quad[6]) / 4;
-  const y = (quad[1] + quad[3] + quad[5] + quad[7]) / 4;
+  if (quad.length < 8) throw new Error('Closed-shadow button has an incomplete content quad');
+  const [
+    leftTopX = 0,
+    leftTopY = 0,
+    rightTopX = 0,
+    rightTopY = 0,
+    rightBottomX = 0,
+    rightBottomY = 0,
+    leftBottomX = 0,
+    leftBottomY = 0,
+  ] = quad;
+  const x = (leftTopX + rightTopX + rightBottomX + leftBottomX) / 4;
+  const y = (leftTopY + rightTopY + rightBottomY + leftBottomY) / 4;
   await session.send('Input.dispatchMouseEvent', {
     type: 'mousePressed',
     x,
@@ -52,7 +65,8 @@ test('CDP AXTree exposes controls in a cross-origin iframe', async ({ page }) =>
   try {
     await page.goto(`http://localhost:${hostPort}/`);
     await expect.poll(() => page.frames().length).toBe(2);
-    const frame = page.frames().find((candidate) => candidate !== page.mainFrame())!;
+    const frame = page.frames().find((candidate) => candidate !== page.mainFrame());
+    if (!frame) throw new Error('Cross-origin child frame was not attached');
     session = await page.context().newCDPSession(frame);
     await session.send('Accessibility.enable');
     const { nodes } = await session.send('Accessibility.getFullAXTree');

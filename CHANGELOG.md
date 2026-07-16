@@ -4,6 +4,27 @@ All notable changes to Panelot are documented here.
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-07-16
+
+### Changed
+
+- Strengthened repository quality gates for TypeScript control flow, React hooks, unsafe type
+  assertions, auxiliary source type-checking, deterministic tests, and complete `src/` TS/TSX
+  coverage accounting.
+- Aligned the documented Node.js range with the Vite toolchain and made the local shadcn MCP use
+  the lockfile-installed CLI instead of executing an unpinned latest package.
+
+### Fixed
+
+- Revalidated Gatekeeper policy, browser targets, and host permissions immediately before tool
+  dispatch so an earlier approval cannot move to changed authorization state.
+- Made MCP connection attempts single-flight with serialized disconnect/reconnect barriers and
+  failed-client cleanup, validated worker, OAuth, and Provider discovery responses, and removed
+  abort-listener leaks from retries and interaction automation.
+- Added strict content-script request/result validation, import-journal and decrypted-secret
+  validation, reliable draft persistence errors, refreshed composer menus, and UI accessibility,
+  i18n, timer, and stale-state fixes.
+
 ## [0.4.2] - 2026-07-16
 
 ### Added
@@ -121,7 +142,8 @@ All notable changes to Panelot are documented here.
 - Plugin archives reject traversal, symlinks, executable payloads, and archive bombs.
 - Provider error details are sanitized before display or persistence.
 
-[Unreleased]: https://github.com/wangdiandao/Panelot/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/wangdiandao/Panelot/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/wangdiandao/Panelot/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/wangdiandao/Panelot/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/wangdiandao/Panelot/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/wangdiandao/Panelot/releases/tag/v0.4.0

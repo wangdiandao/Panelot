@@ -137,6 +137,44 @@ describe('i18n', () => {
     }
   });
 
+  it('defines bilingual labels for action evidence diagnostics', () => {
+    const keys = [
+      'evidence.strategy.l0',
+      'evidence.strategy.l1',
+      'evidence.strategy.l2',
+      ...['resolve', 'precheck', 'execute', 'settle', 'verify', 'recover'].map(
+        (phase) => `evidence.phase.${phase}`,
+      ),
+      ...[
+        'stale_ref',
+        'detached',
+        'not_visible',
+        'not_stable',
+        'disabled',
+        'not_editable',
+        'occluded',
+        'ambiguous_target',
+        'unsupported_frame',
+        'l1_not_effective',
+        'navigation_uncertain',
+        'safety_boundary_unavailable',
+        'timeout',
+        'aborted',
+        'unknown',
+      ].map((code) => `evidence.failure.${code}`),
+      ...['url_changed', 'dom_changed', 'target_state_changed', 'focus_changed', 'tab_created'].map(
+        (effect) => `evidence.observedEffect.${effect}`,
+      ),
+    ];
+
+    for (const key of keys) {
+      setLang('zh-CN');
+      expect(t(key), `${key} zh-CN`).not.toBe(key);
+      setLang('en');
+      expect(t(key), `${key} en`).not.toBe(key);
+    }
+  });
+
   it('provides bilingual labels for every settings section and primary empty state', () => {
     const keys = [
       'settings.section.attachments',

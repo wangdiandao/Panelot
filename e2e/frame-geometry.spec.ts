@@ -2,14 +2,20 @@ import { expect, test } from '@playwright/test';
 import { buildSync } from 'esbuild';
 import path from 'node:path';
 
-const executorSource = buildSync({
+function required<T>(value: T | null | undefined, message: string): T {
+  if (value === null || value === undefined) throw new Error(message);
+  return value;
+}
+
+const executorBundle = buildSync({
   entryPoints: [path.resolve('src/tools/content/executor.ts')],
   bundle: true,
   write: false,
   platform: 'browser',
   format: 'iife',
   globalName: '__panelotExecutor',
-}).outputFiles[0]!.text;
+});
+const executorSource = required(executorBundle.outputFiles[0], 'Executor bundle is missing').text;
 
 test('frame-aware bounds drive trusted click, element clip, and annotations', async ({ page }) => {
   await page.setViewportSize({ width: 1000, height: 700 });
@@ -19,13 +25,21 @@ test('frame-aware bounds drive trusted click, element clip, and annotations', as
   `);
   await installRandomUuid(page);
   const outerElement = page.locator('#outer');
-  const outer = await (await outerElement.elementHandle())!.contentFrame();
-  await outer!.setContent(`
+  const outerHandle = required(
+    await outerElement.elementHandle(),
+    'Outer iframe handle is missing',
+  );
+  const outer = required(await outerHandle.contentFrame(), 'Outer iframe content frame is missing');
+  await outer.setContent(`
     <style>html,body{margin:0}</style>
     <iframe id="inner" title="inner" style="position:absolute;left:30px;top:40px;width:140px;height:80px;border:6px solid #000;transform:scale(.8);transform-origin:0 0"></iframe>
   `);
-  const inner = await (await outer!.locator('#inner').elementHandle())!.contentFrame();
-  await inner!.setContent(`
+  const innerHandle = required(
+    await outer.locator('#inner').elementHandle(),
+    'Inner iframe handle is missing',
+  );
+  const inner = required(await innerHandle.contentFrame(), 'Inner iframe content frame is missing');
+  await inner.setContent(`
     <style>html,body{margin:0}</style>
     <button id="target" style="position:absolute;left:20px;top:15px;width:50px;height:24px" onclick="top.document.body.dataset.clicked='yes'">nested target</button>
   `);
@@ -58,23 +72,26 @@ test('frame-aware bounds drive trusted click, element clip, and annotations', as
       coordinateSpace: 'document',
     });
     await executor.executeContentTool('annotate_refs', {});
-    const badge = document
-      .querySelector('panelot-overlay')!
-      .shadowRoot!.querySelector<HTMLElement>('#ref-annotations > div')!
-      .getBoundingClientRect();
+    const overlay = document.querySelector('panelot-overlay');
+    const badgeElement = overlay?.shadowRoot?.querySelector<HTMLElement>('#ref-annotations > div');
+    if (!badgeElement || !viewport.rect || !documentRect.rect) {
+      throw new Error('Frame geometry result or annotation badge is missing');
+    }
+    const badge = badgeElement.getBoundingClientRect();
     return {
       ref,
-      viewport: viewport.rect!,
-      documentRect: documentRect.rect!,
+      viewport: viewport.rect,
+      documentRect: documentRect.rect,
       badge: { x: badge.x, y: badge.y },
     };
   });
-  const expected = await inner!.locator('#target').boundingBox();
+  const expected = await inner.locator('#target').boundingBox();
   expect(expected).not.toBeNull();
-  expect(result.viewport.x).toBeCloseTo(expected!.x, 3);
-  expect(result.viewport.y).toBeCloseTo(expected!.y, 3);
-  expect(result.viewport.width).toBeCloseTo(expected!.width, 3);
-  expect(result.viewport.height).toBeCloseTo(expected!.height, 3);
+  if (!expected) throw new Error('Nested target has no bounding box');
+  expect(result.viewport.x).toBeCloseTo(expected.x, 3);
+  expect(result.viewport.y).toBeCloseTo(expected.y, 3);
+  expect(result.viewport.width).toBeCloseTo(expected.width, 3);
+  expect(result.viewport.height).toBeCloseTo(expected.height, 3);
   expect(result.documentRect.x).toBeCloseTo(result.viewport.x, 3);
   expect(result.documentRect.y).toBeCloseTo(result.viewport.y + 300, 3);
   expect(result.badge.x).toBeCloseTo(result.viewport.x, 3);
@@ -103,8 +120,15 @@ test('frame geometry fails closed for rotation', async ({ page }) => {
     '<iframe id="frame" title="frame" style="width:200px;height:100px;transform:rotate(5deg)"></iframe>',
   );
   await installRandomUuid(page);
-  const frame = await (await page.locator('#frame').elementHandle())!.contentFrame();
-  await frame!.setContent('<button>rotated target</button>');
+  const frameHandle = required(
+    await page.locator('#frame').elementHandle(),
+    'Rotated iframe handle is missing',
+  );
+  const frame = required(
+    await frameHandle.contentFrame(),
+    'Rotated iframe content frame is missing',
+  );
+  await frame.setContent('<button>rotated target</button>');
   await page.addScriptTag({ content: executorSource });
 
   const failure = await page.evaluate(async () => {

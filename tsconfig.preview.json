@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["chrome", "node"]
+  },
+  "include": [".wxt/wxt.d.ts", "src/**/*.d.ts", "preview/**/*.ts", "preview/**/*.tsx"],
+  "exclude": ["dist", "node_modules"]
+}

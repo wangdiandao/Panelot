@@ -176,7 +176,8 @@ export function matchRules(
     return b.createdAt - a.createdAt;
   });
   // The most restrictive verdict wins over a same-specificity, same-source rival.
-  const top = hits[0]!;
+  const top = hits[0];
+  if (!top) return null;
   const rival = hits.find(
     (h) =>
       h !== top &&

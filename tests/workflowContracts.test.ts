@@ -45,7 +45,8 @@ describe('repository delivery contracts', () => {
         match,
         `Action reference is not an immutable SHA with a version comment: ${line}`,
       ).not.toBeNull();
-      const [, action, sha, tag] = match!;
+      if (!match) throw new Error(`Invalid Action reference: ${line}`);
+      const [, action, sha, tag] = match;
       const key = `${action}@${tag}`;
       expect(actionPins.get(key), `Unreviewed Action tag: ${key}`).toBe(sha);
       observed.add(key);
@@ -107,33 +108,73 @@ describe('repository delivery contracts', () => {
     expect(extensionTest).toContain('expect(manifest.version).toBe(packageJson.version)');
   });
 
-  it('keeps scratch out of TypeScript and points contributors at current docs', () => {
-    const tsconfig = JSON.parse(read('tsconfig.json')) as { exclude?: string[] };
+  it('keeps the runtime and quality-gate contracts aligned', () => {
+    const tsconfig = JSON.parse(read('tsconfig.json')) as {
+      compilerOptions?: Record<string, unknown>;
+      exclude?: string[];
+    };
     expect(tsconfig.exclude).toContain('scratch');
+    expect(tsconfig.compilerOptions).toMatchObject({
+      noImplicitReturns: true,
+      noFallthroughCasesInSwitch: true,
+      allowUnreachableCode: false,
+      allowUnusedLabels: false,
+    });
     const packageJson = JSON.parse(read('package.json')) as { engines?: { node?: string } };
-    const packageMinimum = packageJson.engines?.node?.match(/^>=(\d+\.\d+)$/)?.[1];
-    const readmeMinimum = read('README.zh-CN.md').match(
-      /Node\.js\s+\*\*(\d+\.\d+)\s+或更高版本\*\*/,
-    )?.[1];
-    const contributingMinimum = read('CONTRIBUTING.md').match(
-      /Node\.js\s+(\d+\.\d+)\s+or newer/,
-    )?.[1];
+    const supportedNodeRange = '^20.19.0 || >=22.12.0';
+    expect(packageJson.engines?.node).toBe(supportedNodeRange);
+    expect(read('README.md')).toContain(`Node.js \`${supportedNodeRange}\``);
+    expect(read('README.zh-CN.md')).toContain(`Node.js **\`${supportedNodeRange}\`**`);
+    expect(read('CONTRIBUTING.md')).toContain(`Node.js \`${supportedNodeRange}\``);
     const developmentGuide = read('docs/development.md');
-    const developmentMinimum = developmentGuide.match(
-      /^\|\s*Node\.js\s*\|\s*`>=(\d+\.\d+)`\s*\|/m,
-    )?.[1];
-    expect(packageMinimum).toBeDefined();
-    expect([readmeMinimum, contributingMinimum, developmentMinimum]).toEqual([
-      packageMinimum,
-      packageMinimum,
-      packageMinimum,
-    ]);
+    expect(developmentGuide).toContain(`\`${supportedNodeRange}\``);
     expect(developmentGuide).toContain('GitHub Actions 固定使用 `22.12.0`');
+
+    const scripts = JSON.parse(read('package.json')) as { scripts: Record<string, string> };
+    expect(scripts.scripts.compile).toContain('tsconfig.entrypoints.json');
+    expect(scripts.scripts.compile).toContain('tsconfig.e2e.json');
+    expect(scripts.scripts.compile).toContain('tsconfig.preview.json');
+    expect(scripts.scripts['format:check']).toContain('preview');
+    expect(read('.github/workflows/ci.yml')).toContain('- run: pnpm compile');
+    expect(read('.github/workflows/release.yml')).toContain('- run: pnpm compile');
+
+    const vitest = read('vitest.config.ts');
+    expect(vitest).toContain("include: ['src/**/*.{ts,tsx}']");
+
+    const mcp = JSON.parse(read('.mcp.json')) as {
+      mcpServers?: { shadcn?: { command?: string; args?: string[] } };
+    };
+    expect(mcp.mcpServers?.shadcn).toMatchObject({
+      command: 'pnpm',
+      args: ['exec', 'shadcn', 'mcp'],
+    });
 
     const files = [...sourceFiles('src'), ...sourceFiles('tests')];
     if (existsSync(path.join(root, 'AGENTS.md'))) files.push('AGENTS.md');
     const missingDesignReference = new RegExp(`DES${'IGN'}(?:\\.md|\\s*§)`);
     const offenders = files.filter((file) => missingDesignReference.test(read(file)));
     expect(offenders).toEqual([]);
+  });
+
+  it('keeps coding rules enforceable and exceptions narrowly scoped', () => {
+    const config = read('eslint.config.mjs');
+    for (const rule of [
+      'no-console',
+      'no-eval',
+      'no-new-func',
+      'react-hooks/refs',
+      'react-hooks/set-state-in-effect',
+      'react-hooks/static-components',
+      '@typescript-eslint/no-explicit-any',
+      '@typescript-eslint/no-non-null-assertion',
+    ]) {
+      expect(config).toContain(`'${rule}': 'error'`);
+    }
+    expect(config).toContain("reportUnusedDisableDirectives: 'error'");
+    expect(config.match(/'react-hooks\/static-components': 'off'/g)).toHaveLength(1);
+    expect(config.match(/'no-console': 'off'/g)).toHaveLength(1);
+    expect(config).toContain("files: ['scripts/**/*.{js,mjs,cjs}']");
+    expect(config.match(/'@typescript-eslint\/no-non-null-assertion': 'off'/g)).toHaveLength(1);
+    expect(config).toContain("files: ['tests/**/*.{ts,tsx}']");
   });
 });

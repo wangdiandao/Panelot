@@ -138,9 +138,10 @@ export async function validateMaterializedSettings(
   const key = local ?? existing;
   const secrets = materializedSecrets(settings);
   if (secrets.length && !key) throw new Error('IMPORT_SECRET_KEY_MISSING');
+  if (!key) return;
   for (const secret of secrets) {
     try {
-      await unsealSecretWithRawKey(secret.value, secret.purpose, key!);
+      await unsealSecretWithRawKey(secret.value, secret.purpose, key);
     } catch {
       throw new Error(`IMPORT_SECRET_AUTH:${secret.label}`);
     }
@@ -1181,10 +1182,14 @@ function sameJsonValue(left: unknown, right: unknown): boolean {
   const rightKeys = Object.keys(rightRecord).sort();
   return (
     leftKeys.length === rightKeys.length &&
-    leftKeys.every(
-      (key, index) =>
-        key === rightKeys[index] && sameJsonValue(leftRecord[key], rightRecord[rightKeys[index]!]),
-    )
+    leftKeys.every((key, index) => {
+      const rightKey = rightKeys[index];
+      return (
+        rightKey !== undefined &&
+        key === rightKey &&
+        sameJsonValue(leftRecord[key], rightRecord[rightKey])
+      );
+    })
   );
 }
 

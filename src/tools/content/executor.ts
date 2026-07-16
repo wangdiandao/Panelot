@@ -26,6 +26,9 @@ import {
 import { ensureActionable } from './actionability';
 import type { ActionEvidence } from '../action/types';
 import { diffSnapshotYaml } from '../snapshot/diff';
+import { parseContentToolCall, type BatchActionsParams, type ExecuteResult } from './protocol';
+
+export type { ExecuteResult } from './protocol';
 
 // ---------------------------------------------------------------------------
 // State (per tab, in-memory only — docs/02 §2.2 "not persisted")
@@ -164,8 +167,9 @@ function resolveRefWithRecovery(
         candidate.label === previous.hint.label &&
         candidate.placeholder === previous.hint.placeholder,
     );
+    const snapshot = currentSnapshot;
     const matches = hintMatches.filter(([candidateRef]) => {
-      const identity = refDocumentIdentity(currentSnapshot!, candidateRef);
+      const identity = refDocumentIdentity(snapshot, candidateRef);
       return identity !== undefined && sameRefDocumentIdentity(previous.identity, identity);
     });
     if (matches.length === 0 && hintMatches.length > 0) throw error;
@@ -176,7 +180,9 @@ function resolveRefWithRecovery(
         'recover',
       );
     }
-    const [recoveredRef] = matches[0]!;
+    const match = matches[0];
+    if (!match) throw error;
+    const [recoveredRef] = match;
     return { element: resolveRef(recoveredRef), recoveredRef };
   }
 }
@@ -273,9 +279,14 @@ function getRefViewportRect(ref: string): RefRect {
     width: source.width,
     height: source.height,
   };
-  const frameChain = currentSnapshot!.frameMap.get(ref) ?? [];
+  const snapshot = currentSnapshot;
+  if (!snapshot)
+    throw actionError('stale_ref', '当前没有可用页面快照；请重新 read_page。', 'resolve', true);
+  const frameChain = snapshot.frameMap.get(ref) ?? [];
   for (let index = frameChain.length - 1; index >= 0; index--) {
-    rect = mapRectToParentViewport(rect, frameChain[index]!.frame);
+    const frameContext = frameChain[index];
+    if (!frameContext) throw unsupportedFrameGeometry('missing_frame_context');
+    rect = mapRectToParentViewport(rect, frameContext.frame);
   }
   return rect;
 }
@@ -328,9 +339,9 @@ function getOverlay(): ShadowRoot {
     overlayHost.style.cssText =
       'all:initial;position:fixed;z-index:2147483647;pointer-events:none;';
     document.documentElement.appendChild(overlayHost);
-    overlayHost.attachShadow({ mode: 'open' });
+    return overlayHost.attachShadow({ mode: 'open' });
   }
-  return overlayHost.shadowRoot!;
+  return overlayHost.shadowRoot ?? overlayHost.attachShadow({ mode: 'open' });
 }
 
 function highlight(ref: string): void {
@@ -370,12 +381,14 @@ export function hideIndicator(requestId: string): void {
 
 function annotateRefs(): string {
   if (!currentSnapshot) takeSnapshot({});
+  const snapshot = currentSnapshot;
+  if (!snapshot) throw new Error('页面快照不可用');
   const shadow = getOverlay();
   shadow.getElementById('ref-annotations')?.remove();
   const layer = document.createElement('div');
   layer.id = 'ref-annotations';
   const legend: string[] = [];
-  for (const [ref, element] of currentSnapshot!.refMap) {
+  for (const [ref, element] of snapshot.refMap) {
     const rect = getRefViewportRect(ref);
     if (rect.width <= 0 || rect.height <= 0) continue;
     const badge = document.createElement('div');
@@ -732,7 +745,8 @@ async function doSelect(
 async function doPressKey(params: { key: string }): Promise<string> {
   // 'Control+a' style combos.
   const parts = params.key.split('+');
-  const key = parts[parts.length - 1]!;
+  const key = parts.at(-1);
+  if (!key) throw new Error('press_key 需要非空按键');
   const init: KeyboardEventInit = {
     key,
     bubbles: true,
@@ -854,8 +868,10 @@ function doFindInPage(params: { query: string }): string {
   if (!currentSnapshot) {
     takeSnapshot({});
   }
+  const snapshot = currentSnapshot;
+  if (!snapshot) throw new Error('页面快照不可用');
   const q = params.query.toLowerCase();
-  const hits = currentSnapshot!.yaml
+  const hits = snapshot.yaml
     .split('\n')
     .filter((line) => line.toLowerCase().includes(q))
     .slice(0, 20);
@@ -874,7 +890,11 @@ function takeSnapshot(params: { maxTokens?: number }): string {
       const identity = refDocumentIdentity(currentSnapshot, ref);
       if (identity) priorHints.set(ref, { hint, identity });
     }
-    while (priorHints.size > 500) priorHints.delete(priorHints.keys().next().value!);
+    while (priorHints.size > 500) {
+      const oldest = priorHints.keys().next();
+      if (oldest.done) break;
+      priorHints.delete(oldest.value);
+    }
   }
   snapshotCounter++;
   currentSnapshot = buildSnapshot(window, {
@@ -992,13 +1012,8 @@ function domToMarkdown(root: HTMLElement): string {
 // batch_actions — sequential with change-interruption (docs/05 §3, browser-use)
 // ---------------------------------------------------------------------------
 
-interface BatchAction {
-  kind: 'click' | 'type' | 'select_option';
-  params: Record<string, unknown>;
-}
-
 async function doBatch(
-  params: { actions: BatchAction[] },
+  params: BatchActionsParams,
   context: ActionExecutionContext,
 ): Promise<ExecutedAction> {
   if (params.actions.length > 4) throw new Error('batch_actions 最多 4 个动作');
@@ -1060,17 +1075,6 @@ async function doBatch(
 // Dispatch
 // ---------------------------------------------------------------------------
 
-export interface ExecuteResult {
-  resultText: string;
-  /** The tab that now represents the action result (for example, a link-opened child tab). */
-  resultTabId?: number;
-  /** New incremental snapshot after write actions. */
-  snapshot?: string;
-  pageStabilized?: boolean;
-  rect?: { x: number; y: number; width: number; height: number };
-  evidence?: ActionEvidence;
-}
-
 const WRITE_ACTIONS = new Set([
   'click',
   'type',
@@ -1100,31 +1104,31 @@ export async function executeContentTool(
   let effectsStopped = false;
   let actionDispatched = false;
   try {
-    // Params were zod-validated at the AgentTool layer before dispatch.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const p = (params ?? {}) as any;
+    const parsedCall = parseContentToolCall(tool, params);
+    if (!parsedCall.ok) throw new Error(`content script 参数无效：${parsedCall.diagnostic}`);
+    const call = parsedCall.value;
     let resultText: string;
     let executedAction: ExecutedAction | undefined;
     const actionStart = Date.now();
     const actionGeneration = currentSnapshot?.snapshotId;
 
-    switch (tool) {
+    switch (call.tool) {
       case 'read_page': {
-        const mode = (p as { mode?: string }).mode ?? 'snapshot';
-        resultText = mode === 'article' ? articleExtract() : takeSnapshot(p);
+        const mode = call.params.mode ?? 'snapshot';
+        resultText = mode === 'article' ? articleExtract() : takeSnapshot(call.params);
         return { resultText };
       }
       case 'find_in_page':
-        return { resultText: doFindInPage(p) };
+        return { resultText: doFindInPage(call.params) };
       case 'extract':
-        return { resultText: doExtract(p) };
+        return { resultText: doExtract(call.params) };
       case 'get_selection':
         return { resultText: doGetSelection() };
       case 'get_rect': {
-        const rect = getRefViewportRect(p.ref);
-        const documentCoordinates = p.coordinateSpace !== 'viewport';
+        const rect = getRefViewportRect(call.params.ref);
+        const documentCoordinates = call.params.coordinateSpace !== 'viewport';
         return {
-          resultText: `Bounds for ${p.ref}`,
+          resultText: `Bounds for ${call.params.ref}`,
           rect: {
             x: rect.left + (documentCoordinates ? window.scrollX : 0),
             y: rect.top + (documentCoordinates ? window.scrollY : 0),
@@ -1134,7 +1138,7 @@ export async function executeContentTool(
         };
       }
       case 'validate_ref':
-        resolveRef(p.ref);
+        resolveRef(call.params.ref);
         return { resultText: 'ref valid' };
       case 'annotate_refs':
         return { resultText: annotateRefs() };
@@ -1143,52 +1147,52 @@ export async function executeContentTool(
         return { resultText: 'annotations cleared' };
       case 'click':
         actionDispatched = true;
-        executedAction = await doClick(p, context);
+        executedAction = await doClick(call.params, context);
         resultText = executedAction.text;
         break;
       case 'type':
         actionDispatched = true;
-        executedAction = await doType(p, context);
+        executedAction = await doType(call.params, context);
         resultText = executedAction.text;
         break;
       case 'select_option':
         actionDispatched = true;
-        executedAction = await doSelect(p, context);
+        executedAction = await doSelect(call.params, context);
         resultText = executedAction.text;
         break;
       case 'focus': {
         // Focus for the CDP press_key path: bring the element into view and
         // give it keyboard focus so the trusted key lands on it.
-        const el = resolveRef(p.ref) as HTMLElement;
+        const el = resolveRef(call.params.ref) as HTMLElement;
         el.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior });
         el.focus();
         return { resultText: '已聚焦' };
       }
       case 'press_key':
         actionDispatched = true;
-        resultText = await doPressKey(p);
+        resultText = await doPressKey(call.params);
         break;
       case 'scroll':
-        resultText = await doScroll(p);
+        resultText = await doScroll(call.params);
         break;
       case 'hover':
         actionDispatched = true;
-        resultText = await doHover(p);
+        resultText = await doHover(call.params);
         break;
       case 'wait_for':
-        return { resultText: await doWaitFor(p, context) };
+        return { resultText: await doWaitFor(call.params, context) };
       case 'batch_actions':
         actionDispatched = true;
-        executedAction = await doBatch(p, context);
+        executedAction = await doBatch(call.params, context);
         resultText = executedAction.text;
         break;
       case 'upload':
         actionDispatched = true;
-        executedAction = await doUpload(p);
+        executedAction = await doUpload(call.params);
         resultText = executedAction.text;
         break;
       default:
-        throw new Error(`content script 不支持工具: ${tool}`);
+        throw new Error('content script 不支持未知工具');
     }
 
     // Write actions: stabilize, then return a fresh snapshot (docs/05 §1.3).

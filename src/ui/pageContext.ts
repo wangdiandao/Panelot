@@ -10,6 +10,7 @@ import type {
   ContextBlock,
   SubmissionBrowserContext,
 } from '../messaging/protocol';
+import { t } from './i18n';
 
 /** Rough token estimate (~4 chars/token). */
 const approxTokens = (s: string) => Math.ceil(s.length / 4);
@@ -53,9 +54,9 @@ export async function captureSubmissionBrowserContext(
 ): Promise<SubmissionBrowserContext> {
   const referencedTabs = [
     ...new Map(
-      contexts
-        .filter((context) => context.tab)
-        .map((context) => [context.tab!.tabId, context.tab!]),
+      contexts.flatMap((context) =>
+        context.tab ? ([[context.tab.tabId, context.tab]] as const) : [],
+      ),
     ).values(),
   ];
   let active: chrome.tabs.Tab | null = null;
@@ -86,13 +87,20 @@ async function attachTabById(
     const page = result?.result as PageExtract | undefined;
     if (!page?.text) return null;
     const clipped =
-      page.text.length > MAX_CHARS ? `${page.text.slice(0, MAX_CHARS)}\n[内容已截断]` : page.text;
+      page.text.length > MAX_CHARS
+        ? `${page.text.slice(0, MAX_CHARS)}\n${t('context.contentTruncated')}`
+        : page.text;
     return {
       kind,
       label: page.title || new URL(page.url).hostname,
       origin: new URL(page.url).origin,
       tab: { tabId, url: page.url, title: page.title || page.url },
-      content: [{ type: 'text', text: `Page: ${page.title}\nURL: ${page.url}\n\n${clipped}` }],
+      content: [
+        {
+          type: 'text',
+          text: t('context.pageContent', { title: page.title, url: page.url, content: clipped }),
+        },
+      ],
       approxTokens: approxTokens(clipped),
     };
   } catch {
@@ -137,7 +145,7 @@ export async function attachScreenshot(): Promise<ContextBlock | null> {
     if (!base64) return null;
     return {
       kind: 'screenshot',
-      label: `截图 (${tab.title ?? '当前页'})`,
+      label: t('context.screenshot', { title: tab.title ?? t('context.currentPage') }),
       origin: new URL(tab.url).origin,
       tab: tabIdentity(tab),
       content: [{ type: 'image', mime: 'image/png', data: base64 }],
@@ -173,10 +181,15 @@ export async function attachSelectionFromTab(
     if (!sel?.text.trim()) return null;
     return {
       kind: 'selection',
-      label: `选中文本 (${sel.title})`,
+      label: t('context.selection', { title: sel.title }),
       origin: new URL(sel.url).origin,
       tab: { tabId: tab.tabId, url: sel.url, title: sel.title || sel.url },
-      content: [{ type: 'text', text: `Selection from ${sel.url}:\n\n${sel.text}` }],
+      content: [
+        {
+          type: 'text',
+          text: t('context.selectionContent', { url: sel.url, content: sel.text }),
+        },
+      ],
       approxTokens: approxTokens(sel.text),
     };
   } catch {

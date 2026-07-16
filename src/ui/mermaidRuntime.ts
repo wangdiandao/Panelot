@@ -81,7 +81,8 @@ function renderFlowchart(id: string, source: string): string {
 
   const nodeSvg = ordered
     .map((entry) => {
-      const position = positions.get(entry.id)!;
+      const position = positions.get(entry.id);
+      if (!position) return '';
       const label = `<text x="${position.x}" y="${position.y + 4}" text-anchor="middle">${xml(entry.label)}</text>`;
       if (entry.shape === 'diamond') {
         return `<polygon points="${position.x},${position.y - 38} ${position.x + 68},${position.y} ${position.x},${position.y + 38} ${position.x - 68},${position.y}"/>${label}`;
@@ -125,14 +126,16 @@ function renderSequence(id: string, source: string): string {
   const markerId = `arrow-${safeId(id)}`;
   const actors = ordered
     .map(([key, label]) => {
-      const center = x.get(key)!;
+      const center = x.get(key);
+      if (center === undefined) return '';
       return `<rect x="${center - 65}" y="20" width="130" height="38" rx="6"/><text x="${center}" y="44" text-anchor="middle">${xml(label)}</text><line class="lifeline" x1="${center}" y1="58" x2="${center}" y2="${height - 20}"/>`;
     })
     .join('');
   const arrows = messages
     .map((message, index) => {
-      const from = x.get(message.from)!;
-      const to = x.get(message.to)!;
+      const from = x.get(message.from);
+      const to = x.get(message.to);
+      if (from === undefined || to === undefined) return '';
       const y = 95 + index * 70;
       return `<text x="${(from + to) / 2}" y="${y - 9}" text-anchor="middle">${xml(message.label)}</text><line${message.dashed ? ' class="dashed"' : ''} x1="${from}" y1="${y}" x2="${to}" y2="${y}" marker-end="url(#${markerId})"/>`;
     })

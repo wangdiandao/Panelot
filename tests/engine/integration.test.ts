@@ -1597,7 +1597,7 @@ describe('engine integration (Op → events → DB)', () => {
       level: 'builtin',
       effects: 'read',
       execute: (_id, _params, signal) =>
-        new Promise((_, reject) => {
+        new Promise<never>((_, reject) => {
           toolStarted!();
           signal.addEventListener('abort', () => {
             abortObserved!();
@@ -1659,7 +1659,7 @@ describe('engine integration (Op → events → DB)', () => {
       level: 'builtin',
       effects: 'read',
       execute: (_id, _p, signal) =>
-        new Promise((_, reject) =>
+        new Promise<never>((_, reject) =>
           signal.addEventListener('abort', () => reject(new DOMException('x', 'AbortError'))),
         ),
     });
@@ -2302,7 +2302,7 @@ describe('engine integration (Op → events → DB)', () => {
       effects: 'read',
       recovery: 'inspect-first',
       execute: (_id, _params, signal) =>
-        new Promise((_resolve, reject) => {
+        new Promise<never>((_resolve, reject) => {
           const onAbort = () => {
             sawAbort = true;
             reject(new DOMException('aborted', 'AbortError'));

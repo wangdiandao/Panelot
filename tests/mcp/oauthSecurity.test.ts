@@ -3,6 +3,7 @@ import {
   authorize,
   canonicalMcpResource,
   discoverAuthServer,
+  registerClient,
   refreshTokens,
 } from '../../src/mcp/oauth';
 
@@ -24,6 +25,29 @@ afterEach(() => {
 });
 
 describe('MCP OAuth endpoint policy', () => {
+  it.each([null, [], {}, { client_id: '' }, { client_id: 42 }, { client_id: 'x'.repeat(4097) }])(
+    'rejects an invalid dynamic registration client_id: %j',
+    async (payload) => {
+      vi.stubGlobal('chrome', {
+        identity: { getRedirectURL: vi.fn(() => redirectUri) },
+      });
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(
+          async () =>
+            new Response(JSON.stringify(payload), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            }),
+        ),
+      );
+
+      await expect(registerClient(metadata)).rejects.toThrow(
+        /registration response must (?:be an object|contain a valid client_id)/,
+      );
+    },
+  );
+
   it('canonicalizes an origin resource without adding a root slash', () => {
     expect(canonicalMcpResource('https://MCP.Example.com')).toBe('https://mcp.example.com');
   });

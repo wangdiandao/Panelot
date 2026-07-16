@@ -46,6 +46,8 @@ interface McpServerConfig {
 
 后台启动只连接 `enabled && connectOnStartup` 的服务器；其它 enabled 服务器在首次列能力或调用时懒连接。storage 变化会 reconcile 已连接会话。
 
+同一 server 的并发连接请求共享一个进行中的 attempt；connect、disconnect、reconnect 按 server 串行，disconnect 形成屏障，后续 connect 不会错误复用屏障前的 attempt。候选 client 只有在完整握手后才进入 ready map，失败或断开会关闭候选并移除 runtime listener。offscreen worker 返回的 envelope、catalog、tool result、prompt 和 resource 均在写入目录或返回调用方前做运行时校验，畸形 changed event 不污染已有目录。OAuth DCR 返回的 `client_id` 在持久化和授权前必须通过对象、非空字符串与长度校验。
+
 ## 3. OAuth 2.1 时序
 
 实现以 MCP Authorization `2025-06-18` 为兼容底线，并采用 `2025-11-25` 中明确的 discovery、OIDC fallback、scope challenge 和 PKCE 能力校验规则。仓库固定使用 `@modelcontextprotocol/sdk` `1.29.0`，并复用它的 `WWW-Authenticate` 解析。

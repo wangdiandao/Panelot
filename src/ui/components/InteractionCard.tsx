@@ -5,7 +5,7 @@ import { t } from '../i18n';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Card, CardAction, CardContent, CardFooter, CardHeader, CardTitle } from './ui/card';
-import { Field, FieldGroup } from './ui/field';
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from './ui/field';
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from './ui/input-group';
 import { Textarea } from './ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from './ui/toggle-group';
@@ -16,25 +16,49 @@ interface Props {
 }
 
 export function InteractionCard({ interaction, onResponse }: Props) {
-  const ref = useRef<HTMLDivElement>(null);
   const request = interaction.request;
-  const [structuredValue, setStructuredValue] = useState('{}');
-  const [structuredError, setStructuredError] = useState<string | null>(null);
-
-  useEffect(() => ref.current?.focus(), [interaction.interactionId]);
-
-  const respond = (response: InteractionResponse) =>
-    onResponse(interaction.interactionId, response);
 
   if (request.kind === 'ask_user') {
     return (
       <AskUserSelector
+        key={interaction.interactionId}
         interactionId={interaction.interactionId}
         questions={request.questions}
         onResponse={onResponse}
       />
     );
   }
+
+  return (
+    <InteractionRequestCard
+      key={interaction.interactionId}
+      interactionId={interaction.interactionId}
+      request={request}
+      onResponse={onResponse}
+    />
+  );
+}
+
+interface InteractionRequestCardProps {
+  interactionId: string;
+  request: Exclude<PendingInteraction['request'], { kind: 'ask_user' }>;
+  onResponse: (interactionId: string, response: InteractionResponse) => void;
+}
+
+function InteractionRequestCard({
+  interactionId,
+  request,
+  onResponse,
+}: InteractionRequestCardProps) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [structuredValue, setStructuredValue] = useState('{}');
+  const [structuredError, setStructuredError] = useState<string | null>(null);
+  const structuredDescriptionId = `${interactionId}-structured-description`;
+  const structuredErrorId = `${interactionId}-structured-error`;
+
+  useEffect(() => ref.current?.focus(), []);
+
+  const respond = (response: InteractionResponse) => onResponse(interactionId, response);
 
   const submit = () => {
     if (request.kind === 'mcp_elicitation') {
@@ -64,18 +88,32 @@ export function InteractionCard({ interaction, onResponse }: Props) {
           </p>
         )}
         {request.kind === 'mcp_elicitation' && (
-          <div className="flex flex-col gap-2">
-            <p className="whitespace-pre-wrap text-sm">{request.message}</p>
-            <Textarea
-              value={structuredValue}
-              onChange={(event) => {
-                setStructuredValue(event.target.value);
-                setStructuredError(null);
-              }}
-              className="font-mono text-xs"
-            />
-            {structuredError && <p className="text-xs text-destructive">{structuredError}</p>}
-          </div>
+          <FieldGroup>
+            <Field data-invalid={Boolean(structuredError)}>
+              <FieldLabel htmlFor={`${interactionId}-structured-response`}>
+                {t('interaction.jsonInput')}
+              </FieldLabel>
+              <Textarea
+                id={`${interactionId}-structured-response`}
+                value={structuredValue}
+                aria-invalid={Boolean(structuredError)}
+                aria-describedby={
+                  structuredError
+                    ? `${structuredDescriptionId} ${structuredErrorId}`
+                    : structuredDescriptionId
+                }
+                onChange={(event) => {
+                  setStructuredValue(event.target.value);
+                  setStructuredError(null);
+                }}
+                className="font-mono text-xs"
+              />
+              <FieldDescription id={structuredDescriptionId} className="whitespace-pre-wrap">
+                {request.message}
+              </FieldDescription>
+              {structuredError && <FieldError id={structuredErrorId}>{structuredError}</FieldError>}
+            </Field>
+          </FieldGroup>
         )}
       </CardContent>
       <CardFooter className="flex justify-end gap-2">
@@ -117,10 +155,8 @@ function AskUserSelector({ interactionId, questions, onResponse }: AskUserSelect
   const question = questions[currentIndex];
 
   useEffect(() => {
-    setCurrentIndex(0);
-    setAnswers({});
     ref.current?.focus();
-  }, [interactionId]);
+  }, []);
 
   if (!question) {
     return null;
@@ -128,10 +164,15 @@ function AskUserSelector({ interactionId, questions, onResponse }: AskUserSelect
 
   const respond = (response: InteractionResponse) => onResponse(interactionId, response);
   const submitAnswers = (nextAnswers: Record<string, AskUserAnswer>) => {
+    const submittedAnswers = questions.flatMap((item) => {
+      const answer = nextAnswers[item.id];
+      return answer ? [{ id: item.id, ...answer }] : [];
+    });
+    if (submittedAnswers.length !== questions.length) return;
     respond({
       kind: 'submit',
       value: {
-        answers: questions.map((item) => ({ id: item.id, ...nextAnswers[item.id]! })),
+        answers: submittedAnswers,
       },
     });
   };
@@ -148,6 +189,7 @@ function AskUserSelector({ interactionId, questions, onResponse }: AskUserSelect
     );
   };
   const currentAnswer = answers[question.id];
+  const questionTitleId = `${interactionId}-question-title`;
   const freeformValue = currentAnswer?.source === 'freeform' ? currentAnswer.value : '';
   const submitFreeform = () => {
     const value = freeformValue.trim();
@@ -157,7 +199,9 @@ function AskUserSelector({ interactionId, questions, onResponse }: AskUserSelect
   return (
     <Card ref={ref} tabIndex={-1} role="region" className="mx-4 mb-4 gap-0 overflow-hidden py-0">
       <CardHeader className="gap-2 px-4 py-2 has-data-[slot=card-action]:grid-cols-1 sm:has-data-[slot=card-action]:grid-cols-[1fr_auto]">
-        <CardTitle className="min-w-0 whitespace-normal">{question.question}</CardTitle>
+        <CardTitle id={questionTitleId} className="min-w-0 whitespace-normal">
+          {question.question}
+        </CardTitle>
         <CardAction className="col-start-1 row-start-2 flex items-center gap-1 sm:col-start-2 sm:row-span-2 sm:row-start-1">
           {questions.length > 1 && (
             <>
@@ -169,7 +213,7 @@ function AskUserSelector({ interactionId, questions, onResponse }: AskUserSelect
                 disabled={currentIndex === 0}
                 onClick={() => setCurrentIndex((index) => Math.max(0, index - 1))}
               >
-                <ChevronLeft />
+                <ChevronLeft data-icon="inline-start" />
               </Button>
               <span className="text-xs text-muted-foreground">
                 {currentIndex + 1} {t('interaction.questionProgress')} {questions.length}
@@ -184,7 +228,7 @@ function AskUserSelector({ interactionId, questions, onResponse }: AskUserSelect
                   setCurrentIndex((index) => Math.min(questions.length - 1, index + 1))
                 }
               >
-                <ChevronRight />
+                <ChevronRight data-icon="inline-start" />
               </Button>
             </>
           )}
@@ -195,19 +239,20 @@ function AskUserSelector({ interactionId, questions, onResponse }: AskUserSelect
             aria-label={t('app.cancel')}
             onClick={() => respond({ kind: 'cancel' })}
           >
-            <X />
+            <X data-icon="inline-start" />
           </Button>
         </CardAction>
       </CardHeader>
       <CardContent className="px-2">
         <FieldGroup className="gap-1">
-          <Field>
+          <Field aria-labelledby={questionTitleId}>
             <ToggleGroup
               type="single"
               orientation="vertical"
               value={currentAnswer?.source === 'option' ? currentAnswer.value : ''}
               onValueChange={(value) => value && answerQuestion({ value, source: 'option' })}
               className="w-full flex-col items-stretch gap-1"
+              aria-labelledby={questionTitleId}
             >
               {question.options?.map((option, index) => {
                 const presentation = optionPresentation(option.label);
@@ -292,7 +337,7 @@ function AskUserSelector({ interactionId, questions, onResponse }: AskUserSelect
 
 function optionPresentation(label: string): { label: string; recommendation?: string } {
   const match = label.match(/^(.*?)\s*[（(](推荐|Recommended)[）)]\s*$/i);
-  return match ? { label: match[1]!.trim(), recommendation: match[2] } : { label };
+  return match ? { label: (match[1] ?? label).trim(), recommendation: match[2] } : { label };
 }
 
 function interactionTitle(kind: PendingInteraction['request']['kind']): string {

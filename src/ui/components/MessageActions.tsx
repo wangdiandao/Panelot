@@ -10,7 +10,7 @@
  * Approval keys (Y/S/A/N) never appear here — that contract is fixed.
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Check, Copy, Info, Pencil, RefreshCw } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
@@ -51,12 +51,34 @@ export function MessageActions({
   align = 'start',
 }: MessageActionsProps) {
   const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mounted = useRef(true);
+  const copyGeneration = useRef(0);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      copyGeneration.current += 1;
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+      copiedTimer.current = null;
+    };
+  }, []);
 
   const copy = () => {
-    void navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 3000);
-    });
+    const generation = ++copyGeneration.current;
+    void navigator.clipboard.writeText(text).then(
+      () => {
+        if (!mounted.current || copyGeneration.current !== generation) return;
+        setCopied(true);
+        if (copiedTimer.current) clearTimeout(copiedTimer.current);
+        copiedTimer.current = setTimeout(() => {
+          copiedTimer.current = null;
+          if (mounted.current && copyGeneration.current === generation) setCopied(false);
+        }, 3000);
+      },
+      () => undefined,
+    );
   };
 
   return (
@@ -108,16 +130,16 @@ export function MessageActions({
                 </div>
               )}
               <div className="flex justify-between">
-                <span>input</span>
+                <span>{t('actions.usageInput')}</span>
                 <span>{fmt(usage.input)}</span>
               </div>
               <div className="flex justify-between">
-                <span>output</span>
+                <span>{t('actions.usageOutput')}</span>
                 <span>{fmt(usage.output)}</span>
               </div>
               {usage.cacheRead !== undefined && (
                 <div className="flex justify-between">
-                  <span>cache read</span>
+                  <span>{t('actions.usageCacheRead')}</span>
                   <span>{fmt(usage.cacheRead)}</span>
                 </div>
               )}

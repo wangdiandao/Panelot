@@ -10,6 +10,7 @@
  */
 
 import type { ProviderErrorDetails } from '../providers/types';
+import type { ExecuteResult } from '../tools/content/protocol';
 
 export const PROTOCOL_VERSION = 1;
 export const ENGINE_PROTOCOL = 'panelot/engine-v1' as const;
@@ -17,7 +18,7 @@ export const ENGINE_SCHEMA_HASH =
   'fbf1e682038a1c5ecdc4d783b2c86579305392561714cf3afb00d5a3f05862bf' as const;
 export const CONTENT_SCRIPT_PROTOCOL = 'panelot/content-v1' as const;
 export const CONTENT_SCRIPT_SCHEMA_HASH =
-  '5183fbae23c854482874412b8703bf669cc2a0b00f0fca5413559b51da9067cd' as const;
+  '17913cdb3e3a729f5d7e3bba42e3038340a18c0f82f350764d06d76bc9bc74d9' as const;
 export { DATA_IMPORT_RPC_TYPE } from '../data/maintenanceRpcProtocol';
 
 // ---------------------------------------------------------------------------
@@ -586,7 +587,7 @@ export type ContentScriptResult =
       schemaHash: typeof CONTENT_SCRIPT_SCHEMA_HASH;
       requestId: string;
       ok: true;
-      result: unknown;
+      result: ExecuteResult | 'pong' | 'cancelled';
     }
   | {
       protocol: typeof CONTENT_SCRIPT_PROTOCOL;

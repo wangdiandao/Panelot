@@ -272,7 +272,9 @@ export class ThreadTree {
         .filter((n) => n.threadId === threadId && !n.deleted)
         .sort((a, b) => a.seq - b.seq);
       if (children.length === 0) break;
-      currentId = children[children.length - 1]!.id;
+      const lastChild = children.at(-1);
+      if (!lastChild) break;
+      currentId = lastChild.id;
     }
     await this.updateThread(threadId, { leafId: currentId });
     return currentId;

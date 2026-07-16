@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { setImmediate } from 'node:timers';
 import {
   allocateEngineStreamEpoch,
   EngineHost,
@@ -21,7 +22,7 @@ function collect(transport: EngineTransport): AgentEvent[] {
   return events;
 }
 
-const flush = () => new Promise((r) => setTimeout(r, 30));
+const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 function init(transport: EngineTransport, threadId?: string) {
   transport.send({
@@ -94,32 +95,37 @@ describe('EngineHost handshake', () => {
   });
 
   it('times out a never-settling barrier for every connection and disconnects them', async () => {
-    const host = new EngineHost(new StubEngineCore(), new Promise<void>(() => {}), {
-      startupRecoveryTimeoutMs: 5,
-    });
-    const first = connect(host);
-    const second = connect(host);
-    const firstEvents = collect(first);
-    const secondEvents = collect(second);
-    const firstDisconnected = vi.fn();
-    const secondDisconnected = vi.fn();
-    first.onDisconnect(firstDisconnected);
-    second.onDisconnect(secondDisconnected);
+    vi.useFakeTimers();
+    try {
+      const host = new EngineHost(new StubEngineCore(), new Promise<void>(() => {}), {
+        startupRecoveryTimeoutMs: 5,
+      });
+      const first = connect(host);
+      const second = connect(host);
+      const firstEvents = collect(first);
+      const secondEvents = collect(second);
+      const firstDisconnected = vi.fn();
+      const secondDisconnected = vi.fn();
+      first.onDisconnect(firstDisconnected);
+      second.onDisconnect(secondDisconnected);
 
-    init(first);
-    init(second);
-    await flush();
+      init(first);
+      init(second);
+      await vi.advanceTimersByTimeAsync(5);
 
-    for (const events of [firstEvents, secondEvents]) {
-      expect(events).toContainEqual(
-        expect.objectContaining({
-          type: 'fatal.reload_required',
-          message: expect.stringContaining('startup deadline'),
-        }),
-      );
+      for (const events of [firstEvents, secondEvents]) {
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: 'fatal.reload_required',
+            message: expect.stringContaining('startup deadline'),
+          }),
+        );
+      }
+      expect(firstDisconnected).toHaveBeenCalledOnce();
+      expect(secondDisconnected).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
     }
-    expect(firstDisconnected).toHaveBeenCalledOnce();
-    expect(secondDisconnected).toHaveBeenCalledOnce();
   });
 
   it('answers initialize with protocol version and no snapshot for unknown thread', async () => {
@@ -445,7 +451,9 @@ describe('EngineHost bounded queue', () => {
 
     // a2 must wait for a1; b1 must not.
     expect(order).toEqual(['start:a1', 'start:b1']);
-    gates.get('a1')!();
+    const releaseA1 = gates.get('a1');
+    if (!releaseA1) throw new Error('a1 gate was not registered');
+    releaseA1();
     await flush();
     expect(order).toContain('start:a2');
   });
@@ -567,14 +575,19 @@ describe('EngineHost event routing', () => {
     init(t, 'tC');
     await flush();
 
-    for (const ch of ['H', 'e', 'l', 'l', 'o']) {
-      host.broadcast({ type: 'item.delta', threadId: 'tC', itemId: 'i1', delta: { text: ch } });
-    }
-    await flush();
+    vi.useFakeTimers();
+    try {
+      for (const ch of ['H', 'e', 'l', 'l', 'o']) {
+        host.broadcast({ type: 'item.delta', threadId: 'tC', itemId: 'i1', delta: { text: ch } });
+      }
+      await vi.advanceTimersByTimeAsync(16);
 
-    const deltas = events.filter((e) => e.type === 'item.delta');
-    expect(deltas).toHaveLength(1);
-    expect(deltas[0]).toMatchObject({ itemId: 'i1', threadId: 'tC', delta: { text: 'Hello' } });
+      const deltas = events.filter((e) => e.type === 'item.delta');
+      expect(deltas).toHaveLength(1);
+      expect(deltas[0]).toMatchObject({ itemId: 'i1', threadId: 'tC', delta: { text: 'Hello' } });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('flushes buffered deltas before a non-delta event (ordering preserved)', async () => {

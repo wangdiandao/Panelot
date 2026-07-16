@@ -342,7 +342,10 @@ async function tryMetadata(
 
 function selectAuthorizationServer(servers: string[], preferredIssuer?: string): string {
   const validated = servers.map((server) => validateIssuer(server, 'OAuth authorization server'));
-  if (validated.length === 1) return validated[0]!;
+  if (validated.length === 1) {
+    const onlyServer = validated[0];
+    if (onlyServer) return onlyServer;
+  }
   if (preferredIssuer) {
     const preferred = validated.find((server) => server === preferredIssuer);
     if (preferred) return preferred;
@@ -398,8 +401,15 @@ export async function registerClient(
     }),
   });
   if (!res.ok) throw new Error(`动态客户端注册失败: ${res.status}`);
-  const json = (await res.json()) as { client_id: string };
-  return json.client_id;
+  const json: unknown = await res.json();
+  if (!json || typeof json !== 'object' || Array.isArray(json)) {
+    throw new Error('OAuth dynamic client registration response must be an object');
+  }
+  const clientId = (json as Record<string, unknown>).client_id;
+  if (typeof clientId !== 'string' || clientId.trim().length === 0 || clientId.length > 4096) {
+    throw new Error('OAuth dynamic client registration response must contain a valid client_id');
+  }
+  return clientId;
 }
 
 // ---- Authorization code flow ----------------------------------------------

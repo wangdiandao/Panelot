@@ -152,6 +152,7 @@ sequenceDiagram
   EN-->>UI: approval.request{完整参数}
   UI->>EN: approval.response{acceptForSite}
   EN->>EN: 落库 approval_decision + 更新站点规则
+  EN->>GK: dispatch 前复验目标、规则版本与 host permission
   EN->>CS: execute click(ref)
   CS-->>EN: ToolResult{content, details:高亮坐标}
   EN->>EN: 落库 tool_call + tool_result

@@ -409,6 +409,8 @@ function ConnectionForm({
     const generation = ++headerHydrationGeneration.current;
     headersDirty.current = false;
     if (!connection.customHeaders) {
+      // Reset the editor when switching to a connection without persisted headers.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setHeadersText('');
       return;
     }

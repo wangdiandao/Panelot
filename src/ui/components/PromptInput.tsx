@@ -16,7 +16,7 @@
  * [+ attach] | divider | pill strip … [send/stop circle].
  */
 
-import { useRef, useState, type RefObject } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import { ArrowUp, FileText, Paperclip, Plus, Sparkles, Square, Upload, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from './ui/badge';
@@ -145,6 +145,34 @@ export function PromptInput({
   const menuRef = useRef<TriggerMenuHandle>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const submissionTail = useRef<Promise<void>>(Promise.resolve());
+  const hintTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const blurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const menuLoadGeneration = useRef(0);
+  const submissionGeneration = useRef(0);
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      menuLoadGeneration.current += 1;
+      submissionGeneration.current += 1;
+      if (hintTimer.current) clearTimeout(hintTimer.current);
+      if (blurTimer.current) clearTimeout(blurTimer.current);
+      hintTimer.current = null;
+      blurTimer.current = null;
+    };
+  }, []);
+
+  const showSteerHint = (message: string) => {
+    if (!mounted.current) return;
+    setSteerHint(message);
+    if (hintTimer.current) clearTimeout(hintTimer.current);
+    hintTimer.current = setTimeout(() => {
+      hintTimer.current = null;
+      setSteerHint(null);
+    }, 3000);
+  };
 
   const refreshTrigger = (value: string, caret: number) => {
     setTrigger(detectTrigger(value, caret));
@@ -189,10 +217,14 @@ export function PromptInput({
       running,
       steerable,
     };
+    const generation = submissionGeneration.current;
     const dispatch = async () => {
+      if (!mounted.current || submissionGeneration.current !== generation) return;
       try {
         const capturedBrowserContext = await browserContext;
+        if (!mounted.current || submissionGeneration.current !== generation) return;
         const resolved = await evaluateVariables(submission.trimmed, capturedBrowserContext);
+        if (!mounted.current || submissionGeneration.current !== generation) return;
         const accepted =
           submission.explicit === 'enqueue'
             ? await submission.onEnqueue(
@@ -205,20 +237,18 @@ export function PromptInput({
                 submission.expectedThreadId,
                 capturedBrowserContext,
               );
+        if (!mounted.current || submissionGeneration.current !== generation) return;
         if (!accepted) {
-          setSteerHint(t('input.threadChangedBeforeSend'));
-          setTimeout(() => setSteerHint(null), 3000);
+          showSteerHint(t('input.threadChangedBeforeSend'));
           return;
         }
         if (submission.explicit === 'send') {
           if (submission.running) {
-            setSteerHint(submission.steerable ? t('input.steered') : t('input.queuedInstead'));
-            setTimeout(() => setSteerHint(null), 3000);
+            showSteerHint(submission.steerable ? t('input.steered') : t('input.queuedInstead'));
           }
         }
       } catch {
-        setSteerHint(t('input.variableExpansionFailed'));
-        setTimeout(() => setSteerHint(null), 3000);
+        showSteerHint(t('input.variableExpansionFailed'));
       }
     };
     submissionTail.current = submissionTail.current.then(dispatch, dispatch);
@@ -272,8 +302,21 @@ export function PromptInput({
     null,
   );
   const loadMenu = () => {
-    if (menuSkills === null) void listSkillCommands().then(setMenuSkills);
-    if (menuTabs === null) void listAttachableTabs().then(setMenuTabs);
+    const generation = ++menuLoadGeneration.current;
+    setMenuSkills(null);
+    setMenuTabs(null);
+    void Promise.allSettled([listSkillCommands(), listAttachableTabs()]).then(
+      ([skillsResult, tabsResult]) => {
+        if (menuLoadGeneration.current !== generation) return;
+        if (skillsResult.status === 'fulfilled') setMenuSkills(skillsResult.value);
+        else setMenuSkills([]);
+        if (tabsResult.status === 'fulfilled') setMenuTabs(tabsResult.value);
+        else setMenuTabs([]);
+        if (skillsResult.status === 'rejected' || tabsResult.status === 'rejected') {
+          toast.error(t('input.menuLoadFailed'));
+        }
+      },
+    );
   };
   const attachTab = async (tabId: number, url: string) => {
     const block = await attachTabFromMenu(tabId, url);
@@ -376,10 +419,18 @@ export function PromptInput({
           }}
           onPaste={onPaste}
           onClick={(e) => refreshTrigger(text, e.currentTarget.selectionStart)}
-          onFocus={() => setFocused(true)}
+          onFocus={() => {
+            if (blurTimer.current) clearTimeout(blurTimer.current);
+            blurTimer.current = null;
+            setFocused(true);
+          }}
           onBlur={() => {
             setFocused(false);
-            setTimeout(() => setTrigger(null), 150); /* let menu clicks land first */
+            if (blurTimer.current) clearTimeout(blurTimer.current);
+            blurTimer.current = setTimeout(() => {
+              blurTimer.current = null;
+              if (mounted.current) setTrigger(null);
+            }, 150); /* let menu clicks land first */
           }}
           disabled={disabled}
           placeholder={

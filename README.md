@@ -74,7 +74,7 @@ and tests remain authoritative when a document and the implementation disagree.
 
 ## Development
 
-Requirements: Node.js 20.19 or newer, pnpm 9.12.3, and Chrome 116 or newer.
+Requirements: Node.js `^20.19.0 || >=22.12.0`, pnpm 9.12.3, and Chrome 116 or newer.
 
 ```bash
 pnpm install

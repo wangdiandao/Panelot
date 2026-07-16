@@ -217,13 +217,14 @@ export function buildRows(items: SnapshotItem[], liveItems: LiveItem[]): Row[] {
   // remains inspectable while it is active; approval rows never participate.
   let lastUserIdx = -1;
   for (let i = rows.length - 1; i >= 0; i--) {
-    if (rows[i]!.kind === 'user') {
+    if (rows[i]?.kind === 'user') {
       lastUserIdx = i;
       break;
     }
   }
   for (let i = 0; i < lastUserIdx; i++) {
-    const row = rows[i]!;
+    const row = rows[i];
+    if (!row) continue;
     if (row.kind === 'assistant') {
       row.historical = true;
       for (const segment of row.segments) {
@@ -333,11 +334,13 @@ export function MessageStream({
   // Ctrl/Cmd+↑↓ operates on the last branchable message (docs/09 §6).
   const lastBranchNodeId = useMemo(() => {
     for (let i = rows.length - 1; i >= 0; i--) {
-      const r = rows[i]!;
+      const r = rows[i];
+      if (!r) continue;
       if (r.kind === 'user' && r.branch && r.branch.count > 1 && r.nodeId) return r.nodeId;
       if (r.kind === 'assistant') {
         for (let j = r.segments.length - 1; j >= 0; j--) {
-          const segment = r.segments[j]!;
+          const segment = r.segments[j];
+          if (!segment) continue;
           if (
             segment.kind === 'message' &&
             segment.branch &&
@@ -374,7 +377,8 @@ export function MessageStream({
   // Last message-like row: its action bar stays permanently visible.
   const lastMessageKey = useMemo(() => {
     for (let i = rows.length - 1; i >= 0; i--) {
-      const r = rows[i]!;
+      const r = rows[i];
+      if (!r) continue;
       if (r.kind === 'user' || r.kind === 'assistant') return r.key;
     }
     return null;
@@ -480,14 +484,15 @@ function renderRow(row: Row, ctx: RowCtx) {
   switch (row.kind) {
     case 'user': {
       const text = userText(row.payload);
-      if (row.nodeId && ctx.editingNodeId === row.nodeId && onForkAt) {
+      const nodeId = row.nodeId;
+      if (nodeId && ctx.editingNodeId === nodeId && onForkAt) {
         return (
           <EditInPlace
             initial={text}
             onCancel={() => ctx.setEditingNodeId(null)}
             onResend={(edited) => {
               ctx.setEditingNodeId(null);
-              onForkAt(row.nodeId!, edited);
+              onForkAt(nodeId, edited);
             }}
           />
         );
@@ -519,9 +524,7 @@ function renderRow(row: Row, ctx: RowCtx) {
                 text={text}
                 align="end"
                 isLast={row.key === ctx.lastMessageKey}
-                onEdit={
-                  row.nodeId && onForkAt ? () => ctx.setEditingNodeId(row.nodeId!) : undefined
-                }
+                onEdit={nodeId && onForkAt ? () => ctx.setEditingNodeId(nodeId) : undefined}
               />
             </MessageFooter>
           </MessageContent>
@@ -710,11 +713,12 @@ function AssistantResponse({
                 isLast={row.key === ctx.lastMessageKey}
                 usage={finalMessage.payload.usage}
                 model={finalMessage.payload.model || undefined}
-                onRegenerate={
-                  regenerateFrom && ctx.onForkAt
-                    ? () => ctx.onForkAt!(regenerateFrom.nodeId, regenerateFrom.text)
-                    : undefined
-                }
+                onRegenerate={(() => {
+                  const onForkAt = ctx.onForkAt;
+                  return regenerateFrom && onForkAt
+                    ? () => onForkAt(regenerateFrom.nodeId, regenerateFrom.text)
+                    : undefined;
+                })()}
               />
               {branchSwitcher(finalMessage)}
             </div>
@@ -814,7 +818,8 @@ function EditInPlace({
           className="w-full resize-none border-0 bg-transparent shadow-none focus-visible:ring-0"
         />
       </CardContent>
-      <CardFooter className="justify-end gap-2 border-t border-border-soft bg-muted/40 px-3 py-2">
+      <Separator />
+      <CardFooter className="justify-end gap-2 px-3 py-2">
         <span className="mr-auto text-[11px] text-faint-foreground">{t('actions.editHint')}</span>
         <Button variant="outline" size="sm" onClick={onCancel}>
           {t('app.cancel')}

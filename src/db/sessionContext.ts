@@ -86,7 +86,8 @@ export async function buildSessionContext(
   // Find the last turn_context.
   let turnContext: TurnContextPayload | null = null;
   for (let i = path.length - 1; i >= 0; i--) {
-    const node = path[i]!;
+    const node = path[i];
+    if (!node) continue;
     if (node.type === 'turn_context') {
       turnContext = node.payload as TurnContextPayload;
       break;

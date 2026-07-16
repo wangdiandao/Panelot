@@ -291,4 +291,98 @@ describe('cross-context runtime validation', () => {
       }).ok,
     ).toBe(false);
   });
+
+  it('validates content-tool parameters at the cross-context boundary', () => {
+    const envelope = {
+      protocol: CONTENT_SCRIPT_PROTOCOL,
+      schemaHash: CONTENT_SCRIPT_SCHEMA_HASH,
+      kind: 'execute' as const,
+      requestId: 'execute-params',
+      deadlineAt: 100,
+    };
+    expect(
+      parseContentScriptOp({
+        ...envelope,
+        tool: 'click',
+        params: { ref: 'ref-1', button: 'left' },
+      }).ok,
+    ).toBe(true);
+    expect(
+      parseContentScriptOp({
+        ...envelope,
+        tool: 'click',
+        params: { element: 'Submit', ref: 'ref-1' },
+      }).ok,
+    ).toBe(false);
+    expect(
+      parseContentScriptOp({
+        ...envelope,
+        tool: 'click',
+        params: { ref: 17 },
+      }),
+    ).toMatchObject({ ok: false, requestId: 'execute-params' });
+    expect(
+      parseContentScriptOp({
+        ...envelope,
+        tool: 'unknown_tool',
+        params: {},
+      }).ok,
+    ).toBe(false);
+    expect(
+      parseContentScriptOp({
+        ...envelope,
+        tool: 'batch_actions',
+        params: { actions: [{ kind: 'type', params: { ref: 'ref-1' } }] },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('validates content-tool results and structured failures', () => {
+    const envelope = {
+      protocol: CONTENT_SCRIPT_PROTOCOL,
+      schemaHash: CONTENT_SCRIPT_SCHEMA_HASH,
+      requestId: 'execute-result',
+    };
+    expect(
+      parseContentScriptResult({
+        ...envelope,
+        ok: true,
+        result: {
+          resultText: 'clicked',
+          rect: { x: 1, y: 2, width: 3, height: 4 },
+          evidence: {
+            attemptId: 'attempt-1',
+            attempts: [],
+            effectState: 'verified',
+            observedEffects: ['focus_changed'],
+            outcome: 'verified',
+          },
+        },
+      }).ok,
+    ).toBe(true);
+    expect(parseContentScriptResult({ ...envelope, ok: true, result: { resultText: 17 } }).ok).toBe(
+      false,
+    );
+    expect(
+      parseContentScriptResult({
+        ...envelope,
+        ok: false,
+        error: 'failed',
+        failure: {
+          code: 'stale_ref',
+          message: 'stale',
+          phase: 'resolve',
+          retryable: true,
+        },
+      }).ok,
+    ).toBe(true);
+    expect(
+      parseContentScriptResult({
+        ...envelope,
+        ok: false,
+        error: 'failed',
+        failure: { code: 'invented', message: 'bad', phase: 'resolve', retryable: true },
+      }).ok,
+    ).toBe(false);
+  });
 });

@@ -2,6 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { extractWWWAuthenticateParams } from '@modelcontextprotocol/sdk/client/auth.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { ElicitRequestSchema, type ElicitResult } from '@modelcontextprotocol/sdk/types.js';
+import packageJson from '../../package.json' with { type: 'json' };
 import type { McpOAuthChallenge } from './types';
 
 export interface McpTool {
@@ -54,7 +55,7 @@ export class McpClient {
 
   async connect(): Promise<void> {
     const sdk = new Client(
-      { name: 'Panelot', version: '0.4.2' },
+      { name: 'Panelot', version: packageJson.version },
       {
         capabilities: { elicitation: { form: {} } },
         listChanged: {
@@ -79,10 +80,17 @@ export class McpClient {
     const transport = new StreamableHTTPClientTransport(new URL(this.opts.url), {
       fetch: (input, init) => this.fetchWithAuth(input, init),
     });
-    await sdk.connect(transport);
-    this.sdk = sdk;
-    this.transport = transport;
-    await this.refreshCapabilities();
+    try {
+      await sdk.connect(transport);
+      this.sdk = sdk;
+      this.transport = transport;
+      await this.refreshCapabilities();
+    } catch (error) {
+      this.sdk = null;
+      this.transport = null;
+      await sdk.close().catch(() => undefined);
+      throw error;
+    }
   }
 
   async close(): Promise<void> {
@@ -130,7 +138,7 @@ export class McpClient {
     context?: McpToolCallContext,
   ): Promise<{ content: { type: string; text?: string }[]; isError?: boolean }> {
     const previous = this.toolCallTail;
-    let release!: () => void;
+    let release = (): void => undefined;
     this.toolCallTail = new Promise<void>((resolve) => {
       release = resolve;
     });

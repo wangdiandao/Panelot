@@ -6,7 +6,7 @@
  * dialog: vertical tabs + grouped forms + immediate persistence.
  */
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
   Bot,
   Code2,
@@ -155,7 +155,8 @@ export function filterSections(query: string): SettingsSectionId[] {
 }
 
 export function settingsSectionLabel(id: SettingsSectionId): string {
-  return t(SECTIONS.find((section) => section.id === id)!.labelKey);
+  const section = SECTIONS.find((candidate) => candidate.id === id);
+  return section ? t(section.labelKey) : id;
 }
 
 interface Props {
@@ -168,20 +169,17 @@ export function SettingsPanel({ initialSection = 'providers', footer }: Props) {
   const [query, setQuery] = useState('');
   const [active, setActive] = useState<SettingsSectionId>(initialSection);
   const visible = filterSections(query);
+  const visibleActive = visible.includes(active) ? active : (visible[0] ?? active);
 
   // If the active tab is filtered out, jump to the first surviving match
   // (OpenWebUI behavior — searching '密钥' lands you inside Providers).
-  useEffect(() => {
-    if (visible.length > 0 && !visible.includes(active)) setActive(visible[0]!);
-  }, [query]); // eslint-disable-line react-hooks/exhaustive-deps
-
   // Layout classes are all EXPLICIT (flex/flex-col/w-full/h-auto) rather than
   // relying on the tabs.tsx group-data-[orientation] variant chain — the
   // vertical variants proved fragile across build targets and a collapsed
   // list is unusable (user-reported regression).
   return (
     <Tabs
-      value={active}
+      value={visibleActive}
       onValueChange={(v) => setActive(v as SettingsSectionId)}
       orientation="vertical"
       className="flex h-full min-h-0 flex-col gap-0 bg-background text-foreground sm:flex-row"

@@ -167,6 +167,74 @@ describe('GatekeeperService', () => {
     });
   });
 
+  it('revalidates host permission at dispatch even when the policy revision is unchanged', async () => {
+    vi.stubGlobal('chrome', { permissions: {} });
+    const { db } = makeDb(['https://example.com']);
+    const inspect = vi
+      .fn()
+      .mockResolvedValueOnce({ granted: true, origin: 'https://example.com/*' })
+      .mockResolvedValueOnce({ granted: false, origin: 'https://example.com/*' });
+    const service = new GatekeeperService(db as never, async () => 'https://example.com', {
+      inspect,
+    } as never);
+    service.setThreadConfig('thread-1', { permissionPolicy: 'untrusted' });
+    const initial = await service.check(
+      { toolName: 'click', params: {}, effects: 'write', phase: 'initial' },
+      'thread-1',
+    );
+    expect(initial).toMatchObject({ verdict: 'ask' });
+    if (initial.verdict !== 'ask') throw new Error('Expected initial approval request');
+
+    await expect(
+      service.check(
+        {
+          toolName: 'click',
+          params: {},
+          effects: 'write',
+          phase: 'dispatch',
+          approvedAuthorizationRevision: initial.authorizationRevision,
+        },
+        'thread-1',
+      ),
+    ).resolves.toMatchObject({
+      verdict: 'ask',
+      request: { flags: expect.arrayContaining(['host_permission']) },
+    });
+    expect(inspect).toHaveBeenCalledTimes(2);
+  });
+
+  it('finalizes an unchanged approval only after host permission is still granted', async () => {
+    vi.stubGlobal('chrome', { permissions: {} });
+    const { db } = makeDb(['https://example.com']);
+    const inspect = vi.fn(async () => ({
+      granted: true,
+      origin: 'https://example.com/*',
+    }));
+    const service = new GatekeeperService(db as never, async () => 'https://example.com', {
+      inspect,
+    } as never);
+    service.setThreadConfig('thread-1', { permissionPolicy: 'untrusted' });
+    const initial = await service.check(
+      { toolName: 'click', params: {}, effects: 'write', phase: 'initial' },
+      'thread-1',
+    );
+    if (initial.verdict !== 'ask') throw new Error('Expected initial approval request');
+
+    await expect(
+      service.check(
+        {
+          toolName: 'click',
+          params: {},
+          effects: 'write',
+          phase: 'dispatch',
+          approvedAuthorizationRevision: initial.authorizationRevision,
+        },
+        'thread-1',
+      ),
+    ).resolves.toEqual({ verdict: 'allow' });
+    expect(inspect).toHaveBeenCalledTimes(2);
+  });
+
   it('keeps durable page watches inside the target origin permission boundary', async () => {
     vi.stubGlobal('chrome', { permissions: {} });
     const { db } = makeDb();

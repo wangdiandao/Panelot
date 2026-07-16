@@ -941,7 +941,8 @@ export class EngineSession {
       const turnLive = snapshotTurnLive || currentTurnLive;
       const persistedStopReason = (() => {
         for (let i = snap.items.length - 1; i >= 0; i--) {
-          const item = snap.items[i]!;
+          const item = snap.items[i];
+          if (!item) continue;
           if (item.kind !== 'assistant_message') continue;
           const reason = (item.payload as { providerStopReason?: unknown }).providerStopReason;
           if (reason === 'tool_use') return null;

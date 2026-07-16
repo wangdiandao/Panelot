@@ -94,6 +94,52 @@ describe('Provider request redirect policy', () => {
   );
 });
 
+describe('Provider model list validation', () => {
+  const adapters = [
+    { name: 'OpenAI', make: () => new OpenAiAdapter(conn()) },
+    {
+      name: 'Anthropic',
+      make: () =>
+        new AnthropicAdapter(conn({ kind: 'anthropic', baseUrl: 'https://api.anthropic.com' })),
+    },
+  ] as const;
+
+  it.each(adapters)(
+    'rejects malformed $name model entries as protocol errors',
+    async ({ make }) => {
+      mockFetchOnce(
+        new Response(JSON.stringify({ data: [{ id: '' }, { id: 42 }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+      await expect(make().listModels()).rejects.toMatchObject({
+        kind: 'protocol',
+        details: {
+          status: 200,
+          reason: 'response_format',
+          upstreamMessage: expect.stringContaining('non-empty id'),
+        },
+      });
+    },
+  );
+
+  it.each(adapters)('rejects a malformed $name model-list envelope', async ({ make }) => {
+    mockFetchOnce(
+      new Response(JSON.stringify({ models: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await expect(make().listModels()).rejects.toMatchObject({
+      kind: 'protocol',
+      details: { status: 200, reason: 'response_format' },
+    });
+  });
+});
+
 describe('OpenAiAdapter streaming', () => {
   it('streams text deltas and aggregates the final message + usage', async () => {
     mockFetchOnce(

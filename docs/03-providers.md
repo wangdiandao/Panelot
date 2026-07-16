@@ -166,6 +166,7 @@ interface QuirkFlags {
 ## 6. Verify 连接测试与模型拉取
 
 - **Verify**：OpenAI 路径依次 ① `GET /models`（底层 4s 超时）② 最小 streaming chat 请求 ③ echo 工具探测；Anthropic 路径执行最小 streaming/tool 探测。产出可达性 / key / 流式 / 工具结构化结果，设置页在发请求前动态申请 endpoint host permission。
+- `/models` 响应在使用前必须是包含非空字符串 `id` 的 `data` 数组；非 JSON、缺字段或畸形条目归类为 protocol 错误，不把未经校验的 Provider 数据写入模型列表。
 - **模型拉取**：所有 enabled 连接并发拉取，adapter `listModels()` 各自使用 4s timeout；失败连接独立返回 error。对话内的 ModelSelector 在组件首次打开时拉取；设置页的默认模型选择器会立即拉取，以保证其值始终指向一个明确的可用模型。结果缓存到组件实例，当前没有 1h TTL 或手动刷新按钮。
 
 ## 7. 错误归一化与重试
@@ -182,6 +183,7 @@ type ProviderError =
 ```
 
 重试只发生在「本次 LLM 调用」层；工具执行错误不在此层（那是模型自纠的领域）。`rate_limit`、`overloaded`、`network` 可重试；`auth`、`context_too_long`、`content_filter`、`protocol` 和未知类型默认不可重试。这里的 `content_filter` 错误不同于成功响应中的同名 `stopReason`：后者必须保留响应并向用户说明停止原因。
+重试退避的 timer 与 abort listener 在成功、取消和超时路径都会成对清理，避免长会话累积失效监听器。
 错误详情保留 OpenAI `x-request-id` 或 Anthropic `request-id`，用于问题定位；不记录 API Key 或完整响应体。
 
 ## 8. 当前约束

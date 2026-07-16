@@ -28,6 +28,90 @@ export interface MaterializedImportSettings {
   localSecretKey?: number[];
 }
 
+const MAX_PORTABLE_SECRET_ENTRIES = 10_000;
+
+function object(value: unknown, code: string): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error(code);
+  return value as Record<string, unknown>;
+}
+
+function exact(value: Record<string, unknown>, keys: readonly string[], code: string): void {
+  const allowed = new Set(keys);
+  if (Object.keys(value).some((key) => !allowed.has(key))) throw new Error(code);
+}
+
+function string(value: unknown, code: string, allowEmpty = false): string {
+  if (typeof value !== 'string' || (!allowEmpty && value.length === 0)) throw new Error(code);
+  return value;
+}
+
+function optionalString(value: unknown, code: string): string | undefined {
+  return value === undefined ? undefined : string(value, code, true);
+}
+
+function portableSecretArray(value: unknown, code: string): unknown[] {
+  if (!Array.isArray(value) || value.length > MAX_PORTABLE_SECRET_ENTRIES) throw new Error(code);
+  return value;
+}
+
+export function parsePortableSecrets(value: unknown): PortableSecrets {
+  const root = object(value, 'IMPORT_SECRET_BACKUP');
+  exact(root, ['connections', 'mcpServers'], 'IMPORT_SECRET_BACKUP');
+  const connectionIds = new Set<string>();
+  const connections = portableSecretArray(root.connections, 'IMPORT_SECRET_BACKUP_CONNECTIONS').map(
+    (candidate) => {
+      const entry = object(candidate, 'IMPORT_SECRET_BACKUP_CONNECTION');
+      exact(entry, ['id', 'apiKeys', 'customHeaders'], 'IMPORT_SECRET_BACKUP_CONNECTION');
+      const id = string(entry.id, 'IMPORT_SECRET_BACKUP_CONNECTION_ID');
+      if (connectionIds.has(id)) throw new Error('IMPORT_SECRET_BACKUP_CONNECTION_ID');
+      connectionIds.add(id);
+      const apiKeys = portableSecretArray(entry.apiKeys, 'IMPORT_SECRET_BACKUP_KEYS').map((key) =>
+        string(key, 'IMPORT_SECRET_BACKUP_KEY', true),
+      );
+      let customHeaders: Record<string, string> | undefined;
+      if (entry.customHeaders !== undefined) {
+        const headers = object(entry.customHeaders, 'IMPORT_SECRET_BACKUP_HEADERS');
+        if (Object.keys(headers).length > MAX_PORTABLE_SECRET_ENTRIES) {
+          throw new Error('IMPORT_SECRET_BACKUP_HEADERS');
+        }
+        customHeaders = Object.fromEntries(
+          Object.entries(headers).map(([name, headerValue]) => [
+            string(name, 'IMPORT_SECRET_BACKUP_HEADER_NAME'),
+            string(headerValue, 'IMPORT_SECRET_BACKUP_HEADER', true),
+          ]),
+        );
+      }
+      return { id, apiKeys, ...(customHeaders ? { customHeaders } : {}) };
+    },
+  );
+
+  const serverIds = new Set<string>();
+  const mcpServers = portableSecretArray(root.mcpServers, 'IMPORT_SECRET_BACKUP_MCP_SERVERS').map(
+    (candidate) => {
+      const entry = object(candidate, 'IMPORT_SECRET_BACKUP_MCP_SERVER');
+      exact(
+        entry,
+        ['id', 'bearer', 'oauthAccess', 'oauthRefresh'],
+        'IMPORT_SECRET_BACKUP_MCP_SERVER',
+      );
+      const id = string(entry.id, 'IMPORT_SECRET_BACKUP_MCP_SERVER_ID');
+      if (serverIds.has(id)) throw new Error('IMPORT_SECRET_BACKUP_MCP_SERVER_ID');
+      serverIds.add(id);
+      const bearer = optionalString(entry.bearer, 'IMPORT_SECRET_BACKUP_BEARER');
+      const oauthAccess = optionalString(entry.oauthAccess, 'IMPORT_SECRET_BACKUP_OAUTH_ACCESS');
+      const oauthRefresh = optionalString(entry.oauthRefresh, 'IMPORT_SECRET_BACKUP_OAUTH_REFRESH');
+      return {
+        id,
+        ...(bearer !== undefined ? { bearer } : {}),
+        ...(oauthAccess !== undefined ? { oauthAccess } : {}),
+        ...(oauthRefresh !== undefined ? { oauthRefresh } : {}),
+      };
+    },
+  );
+
+  return { connections, mcpServers };
+}
+
 export async function materializeImportSettings(
   bundle: ExportBundle,
   passphrase?: string,
@@ -35,7 +119,9 @@ export async function materializeImportSettings(
   let secrets: PortableSecrets = { connections: [], mcpServers: [] };
   if (bundle.encryptedSecrets) {
     if (!passphrase) throw new Error('该备份包含加密秘密，请输入备份口令');
-    secrets = await secretStore.decryptBackup<PortableSecrets>(bundle.encryptedSecrets, passphrase);
+    secrets = parsePortableSecrets(
+      await secretStore.decryptBackup(bundle.encryptedSecrets, passphrase),
+    );
   }
 
   let rawKey: number[] | undefined;

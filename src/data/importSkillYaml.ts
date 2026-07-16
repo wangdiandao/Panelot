@@ -12,11 +12,13 @@ export function parseImportedSkillRaw(raw: string): {
 } {
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(raw.trim());
   if (!match) throw new Error('IMPORT_SKILL_CONTENT');
-  if (/(?:^|\s)[&*][a-z0-9_-]+/im.test(match[1]!)) {
+  const frontmatter = match[1];
+  if (frontmatter === undefined) throw new Error('IMPORT_SKILL_CONTENT');
+  if (/(?:^|\s)[&*][a-z0-9_-]+/im.test(frontmatter)) {
     throw new Error('IMPORT_SKILL_CONTENT');
   }
   return {
-    frontmatter: new ImportYamlParser(match[1]!).parse(),
+    frontmatter: new ImportYamlParser(frontmatter).parse(),
     body: (match[2] ?? '').trim(),
   };
 }
@@ -117,7 +119,8 @@ class ImportYamlParser {
     let end = start;
     let contentIndent = Number.POSITIVE_INFINITY;
     while (end < this.lines.length) {
-      const line = this.lines[end]!;
+      const line = this.lines[end];
+      if (!line) break;
       if (line.raw.trim() && line.indent <= parentIndent) break;
       if (line.raw.trim()) contentIndent = Math.min(contentIndent, line.indent);
       end += 1;
@@ -131,7 +134,7 @@ class ImportYamlParser {
   }
 
   private skipBlank(): void {
-    while (this.index < this.lines.length && !this.lines[this.index]!.text.trim()) {
+    while (this.index < this.lines.length && !this.lines[this.index]?.text.trim()) {
       this.index += 1;
     }
   }
@@ -147,7 +150,7 @@ function trySplitPair(value: string): [string, string] | null {
   let quote = '';
   let depth = 0;
   for (let index = 0; index < value.length; index += 1) {
-    const char = value[index]!;
+    const char = value.charAt(index);
     if (quote) {
       if (char === quote && (quote === "'" || value[index - 1] !== '\\')) quote = '';
       continue;
@@ -217,7 +220,7 @@ class FlowParser {
     if (char === '{') return this.object();
     if (char === '"' || char === "'") return this.quoted(char);
     const start = this.index;
-    while (this.index < this.source.length && !/[,\]}:]/.test(this.source[this.index]!)) {
+    while (this.index < this.source.length && !/[,\]}:]/.test(this.source.charAt(this.index))) {
       this.index += 1;
     }
     return parseScalar(this.source.slice(start, this.index));
@@ -283,7 +286,7 @@ function stripComment(value: string): string {
   let quote = '';
   let depth = 0;
   for (let index = 0; index < value.length; index += 1) {
-    const char = value[index]!;
+    const char = value.charAt(index);
     if (quote) {
       if (char === quote && (quote === "'" || value[index - 1] !== '\\')) quote = '';
       continue;
@@ -291,7 +294,7 @@ function stripComment(value: string): string {
     if (char === '"' || char === "'") quote = char;
     else if (char === '[' || char === '{') depth += 1;
     else if (char === ']' || char === '}') depth -= 1;
-    else if (char === '#' && depth === 0 && (index === 0 || /\s/.test(value[index - 1]!))) {
+    else if (char === '#' && depth === 0 && (index === 0 || /\s/.test(value.charAt(index - 1)))) {
       return value.slice(0, index);
     }
   }

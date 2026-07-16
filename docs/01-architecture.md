@@ -292,7 +292,7 @@ tool_call
      └─ 内置 → 引擎内直接执行（fetch_url / memory 等）
 ```
 
-- content script 消息协议同样定义在 `protocol.ts`（`ContentScriptOp` / `ContentScriptResult`），带超时（默认 10s）与单次重注入重试。
+- content script 消息协议同样定义在 `protocol.ts`（`ContentScriptOp` / `ContentScriptResult`），带超时（默认 10s）与单次重注入重试。消息入口除校验 protocol/schema hash 和 request ownership 外，还按工具校验 `params`，并对成功结果、动作证据与结构化失败做运行时校验；未知工具或畸形跨上下文载荷不会进入 DOM 执行器。
 - debugger attach 以 tab 为粒度记录；当前在最后一次 CDP 调用空闲 30s 后自动 detach，没有 turn-complete 立即 detach。
 
 ## 6. 当前约束

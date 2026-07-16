@@ -31,21 +31,31 @@ export class InteractionAutomation {
     chrome.alarms.create(`${ALARM_PREFIX}${interactionId}`, { when });
     if (request.kind === 'schedule') return;
     if (request.condition.type === 'url') {
-      void this.watchUrl(interactionId, request, abort.signal);
+      this.runWatcher(this.watchUrl(interactionId, request, abort.signal));
       return;
     }
     if (request.condition.type === 'download') {
-      void this.watchDownload(interactionId, request.condition.downloadId, abort.signal);
+      this.runWatcher(
+        this.watchDownload(interactionId, request.condition.downloadId, abort.signal),
+      );
       return;
     }
-    void this.watchText(threadId, interactionId, request, abort.signal);
+    this.runWatcher(this.watchText(threadId, interactionId, request, abort.signal));
+  }
+
+  private runWatcher(watcher: Promise<void>): void {
+    void watcher.catch(() => undefined);
+  }
+
+  private isActive(interactionId: string, signal: AbortSignal): boolean {
+    return !signal.aborted && this.active.get(interactionId)?.signal === signal;
   }
 
   clear(interactionId: string): void {
     this.active.get(interactionId)?.abort();
     this.active.delete(interactionId);
     this.targets.delete(interactionId);
-    void chrome.alarms.clear(`${ALARM_PREFIX}${interactionId}`);
+    void chrome.alarms.clear(`${ALARM_PREFIX}${interactionId}`).catch(() => undefined);
   }
 
   handleAlarm(name: string): boolean {
@@ -58,7 +68,9 @@ export class InteractionAutomation {
         ? { kind: 'submit', value: { resumedAt: Date.now(), reason: target.request.reason } }
         : { kind: 'timeout', value: { deadlineAt: target.request.deadlineAt } };
     void this.resolve(interactionId, response).catch(() => {
-      chrome.alarms.create(`${ALARM_PREFIX}${interactionId}`, { when: Date.now() + 60_000 });
+      if (this.targets.get(interactionId) === target) {
+        chrome.alarms.create(`${ALARM_PREFIX}${interactionId}`, { when: Date.now() + 60_000 });
+      }
     });
     return true;
   }
@@ -68,40 +80,46 @@ export class InteractionAutomation {
     request: Extract<InteractionRequestPayload, { kind: 'watch_page' }>,
     signal: AbortSignal,
   ): Promise<void> {
-    const check = async () => {
-      const tab = await chrome.tabs.get(request.tabId);
-      return (
-        tab.url?.includes('value' in request.condition ? request.condition.value : '') ?? false
-      );
-    };
-    if (await check()) {
+    const initialTab = await chrome.tabs.get(request.tabId);
+    if (
+      initialTab.url?.includes('value' in request.condition ? request.condition.value : '') &&
+      this.isActive(interactionId, signal)
+    ) {
       await this.resolve(interactionId, {
         kind: 'submit',
-        value: { matched: true, url: (await chrome.tabs.get(request.tabId)).url },
+        value: { matched: true, url: initialTab.url },
       });
       return;
     }
+    if (!this.isActive(interactionId, signal)) return;
     await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        chrome.tabs.onUpdated.removeListener(listener);
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      };
       const listener = (tabId: number, changeInfo: { url?: string }) => {
         if (
           tabId === request.tabId &&
           changeInfo.url?.includes('value' in request.condition ? request.condition.value : '')
         ) {
-          chrome.tabs.onUpdated.removeListener(listener);
-          resolve();
+          finish();
         }
       };
-      const onAbort = () => {
-        chrome.tabs.onUpdated.removeListener(listener);
-        resolve();
-      };
+      const onAbort = () => finish();
       chrome.tabs.onUpdated.addListener(listener);
       signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) onAbort();
     });
-    if (signal.aborted) return;
+    if (!this.isActive(interactionId, signal)) return;
+    const matchedTab = await chrome.tabs.get(request.tabId);
+    if (!this.isActive(interactionId, signal)) return;
     await this.resolve(interactionId, {
       kind: 'submit',
-      value: { matched: true, url: (await chrome.tabs.get(request.tabId)).url },
+      value: { matched: true, url: matchedTab.url },
     });
   }
 
@@ -111,23 +129,29 @@ export class InteractionAutomation {
     signal: AbortSignal,
   ): Promise<void> {
     const [download] = await chrome.downloads.search({ id: downloadId });
+    if (signal.aborted) return;
     if (download?.state === 'complete') {
       await this.resolve(interactionId, { kind: 'submit', value: { downloadId, completed: true } });
       return;
     }
     await new Promise<void>((resolve) => {
-      const listener = (delta: chrome.downloads.DownloadDelta) => {
-        if (delta.id === downloadId && delta.state?.current === 'complete') {
-          chrome.downloads.onChanged.removeListener(listener);
-          resolve();
-        }
-      };
-      const onAbort = () => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
         chrome.downloads.onChanged.removeListener(listener);
+        signal.removeEventListener('abort', onAbort);
         resolve();
       };
+      const listener = (delta: chrome.downloads.DownloadDelta) => {
+        if (delta.id === downloadId && delta.state?.current === 'complete') {
+          finish();
+        }
+      };
+      const onAbort = () => finish();
       chrome.downloads.onChanged.addListener(listener);
       signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) onAbort();
     });
     if (!signal.aborted) {
       await this.resolve(interactionId, { kind: 'submit', value: { downloadId, completed: true } });

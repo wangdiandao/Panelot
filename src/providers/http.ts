@@ -28,7 +28,8 @@ function redactCredentials(value: string): string {
 function stripUnsafeControlCharacters(value: string): string {
   let visible = '';
   for (const character of value) {
-    const codePoint = character.codePointAt(0)!;
+    const codePoint = character.codePointAt(0);
+    if (codePoint === undefined) continue;
     const isUnsafeControl =
       codePoint <= 0x08 ||
       codePoint === 0x0b ||
@@ -68,6 +69,48 @@ export function createResponseFormatError(
     raw: raw || undefined,
   };
   return new ProviderError(kind, details.upstreamMessage ?? fallback, undefined, details);
+}
+
+export function parseModelListResponse(value: unknown, status: number): string[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw createResponseFormatError(
+      'protocol',
+      status,
+      'model list response must be an object',
+      'model list response must be an object',
+    );
+  }
+  const data = (value as Record<string, unknown>).data;
+  if (!Array.isArray(data)) {
+    throw createResponseFormatError(
+      'protocol',
+      status,
+      'model list response must contain a data array',
+      'model list response must contain a data array',
+    );
+  }
+  const models: string[] = [];
+  for (const entry of data) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw createResponseFormatError(
+        'protocol',
+        status,
+        'model list entry must be an object',
+        'model list entry must be an object',
+      );
+    }
+    const id = (entry as Record<string, unknown>).id;
+    if (typeof id !== 'string' || id.trim().length === 0) {
+      throw createResponseFormatError(
+        'protocol',
+        status,
+        'model list entry must contain a non-empty id',
+        'model list entry must contain a non-empty id',
+      );
+    }
+    models.push(id);
+  }
+  return models;
 }
 
 function createProviderFrameDetails(
@@ -283,7 +326,7 @@ export function createKeyRing(keys: string[]): KeyRing {
   let index = 0;
   let failures = 0;
   return {
-    current: () => ring[index % ring.length]!,
+    current: () => ring[index % ring.length] ?? '',
     advance: () => {
       failures++;
       if (failures >= ring.length) return false;
@@ -372,15 +415,18 @@ const defaultSleep = (ms: number, signal?: AbortSignal) =>
       reject(new DOMException('aborted', 'AbortError'));
       return;
     }
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timer);
-        reject(new DOMException('aborted', 'AbortError'));
-      },
-      { once: true },
-    );
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      callback();
+    };
+    const onAbort = () => finish(() => reject(new DOMException('aborted', 'AbortError')));
+    const timer = setTimeout(() => finish(resolve), ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) onAbort();
   });
 
 /**

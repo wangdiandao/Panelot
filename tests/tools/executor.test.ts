@@ -452,25 +452,47 @@ describe('click / type / select', () => {
 
 describe('wait_for (docs/05 §3 three modes)', () => {
   it('resolves when text appears', async () => {
-    document.body.innerHTML = '<div id="root">加载中</div>';
-    setTimeout(() => {
-      document.getElementById('root')!.textContent = '加载完成';
-    }, 100);
-    const r = await executeContentTool('wait_for', { text: '加载完成' });
-    expect(r.resultText).toContain('已出现');
+    vi.useFakeTimers();
+    try {
+      document.body.innerHTML = '<div id="root">加载中</div>';
+      setTimeout(() => {
+        const root = document.getElementById('root');
+        if (root) root.textContent = '加载完成';
+      }, 100);
+      const pending = executeContentTool('wait_for', { text: '加载完成' });
+      await vi.advanceTimersByTimeAsync(200);
+      await expect(pending).resolves.toMatchObject({
+        resultText: expect.stringContaining('已出现'),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('resolves when text disappears', async () => {
-    document.body.innerHTML = '<div id="spinner">加载中</div>';
-    setTimeout(() => document.getElementById('spinner')!.remove(), 100);
-    const r = await executeContentTool('wait_for', { text: '加载中', textGone: true });
-    expect(r.resultText).toContain('已消失');
+    vi.useFakeTimers();
+    try {
+      document.body.innerHTML = '<div id="spinner">加载中</div>';
+      setTimeout(() => document.getElementById('spinner')?.remove(), 100);
+      const pending = executeContentTool('wait_for', { text: '加载中', textGone: true });
+      await vi.advanceTimersByTimeAsync(200);
+      await expect(pending).resolves.toMatchObject({
+        resultText: expect.stringContaining('已消失'),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('waits fixed time with timeMs', async () => {
-    const start = Date.now();
-    await executeContentTool('wait_for', { timeMs: 150 });
-    expect(Date.now() - start).toBeGreaterThanOrEqual(140);
+    vi.useFakeTimers();
+    try {
+      const pending = executeContentTool('wait_for', { timeMs: 150 });
+      await vi.advanceTimersByTimeAsync(150);
+      await expect(pending).resolves.toMatchObject({ resultText: '已等待 150ms' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

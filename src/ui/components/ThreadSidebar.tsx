@@ -402,6 +402,8 @@ function ThreadRow({
 
   useEffect(() => {
     if (!renaming) return;
+    // Entering rename mode snapshots the latest external title into the editor.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDraft(thread.title);
     requestAnimationFrame(() => {
       inputRef.current?.focus();

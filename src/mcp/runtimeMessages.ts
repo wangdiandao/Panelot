@@ -47,15 +47,16 @@ export function handleMcpRuntimeMessage(
     return;
   }
   if (m.type === 'panelot.mcpOauth' && m.id) {
+    const id = m.id;
     void mcp
-      .runOAuthFlow(m.id, {}, m.permissionApproval)
+      .runOAuthFlow(id, {}, m.permissionApproval)
       .then(async (result) => {
         if (result.status === 'permission_required') {
           sendResponse({ ok: false, permissionRequired: result });
           return;
         }
-        await mcp.connect(m.id!);
-        sendResponse({ ok: true, description: mcp.describeServer(m.id!) });
+        await mcp.connect(id);
+        sendResponse({ ok: true, description: mcp.describeServer(id) });
       })
       .catch((error: unknown) =>
         sendResponse({
@@ -80,22 +81,24 @@ export function handleMcpRuntimeMessage(
     return;
   }
   if ((m.type === 'panelot.mcpConnect' || m.type === 'panelot.mcpStatus') && m.id) {
-    void (m.type === 'panelot.mcpConnect' ? mcp.connect(m.id) : Promise.resolve())
-      .then(() => sendResponse({ ok: true, description: mcp.describeServer(m.id!) }))
+    const id = m.id;
+    void (m.type === 'panelot.mcpConnect' ? mcp.connect(id) : Promise.resolve())
+      .then(() => sendResponse({ ok: true, description: mcp.describeServer(id) }))
       .catch((error: unknown) =>
         sendResponse({
           ok: false,
           error: errorMessage(error),
           permissionRequired: permissionRequiredFromError(error),
-          description: mcp.describeServer(m.id!),
+          description: mcp.describeServer(id),
         }),
       );
     return;
   }
   if (m.type === 'panelot.mcpDisconnect' && m.id) {
+    const id = m.id;
     void mcp
-      .disconnect(m.id)
-      .then(() => sendResponse({ ok: true, description: mcp.describeServer(m.id!) }))
+      .disconnect(id)
+      .then(() => sendResponse({ ok: true, description: mcp.describeServer(id) }))
       .catch(() => sendResponse({ ok: false, error: 'MCP disconnect failed' }));
     return;
   }

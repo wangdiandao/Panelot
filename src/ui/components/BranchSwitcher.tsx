@@ -10,6 +10,7 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { Button } from './ui/button';
 import { PanelotDB } from '../../db/schema';
 import { ThreadTree } from '../../db/tree';
+import { t } from '../i18n';
 
 const db = new PanelotDB();
 const tree = new ThreadTree(db);
@@ -44,7 +45,7 @@ export function BranchSwitcher({ threadId, nodeId, branch, onSelectBranch }: Pro
         variant="ghost"
         size="icon-xs"
         disabled={branch.index <= 1}
-        aria-label="上一分支"
+        aria-label={t('app.previousBranch')}
         onClick={() => void go(-1)}
       >
         <ChevronLeft data-icon="inline-start" />
@@ -56,7 +57,7 @@ export function BranchSwitcher({ threadId, nodeId, branch, onSelectBranch }: Pro
         variant="ghost"
         size="icon-xs"
         disabled={branch.index >= branch.count}
-        aria-label="下一分支"
+        aria-label={t('app.nextBranch')}
         onClick={() => void go(1)}
       >
         <ChevronRight data-icon="inline-start" />
