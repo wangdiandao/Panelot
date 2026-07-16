@@ -14,3 +14,4 @@ scratch/
 *.pem
 *.crx
 AGENTS.md
+.mcp.json
