@@ -427,9 +427,8 @@ test('recovers an approved browser action through a production module service wo
     const stopWorker = internalsPage.locator('cr-button[data-command="stop"]');
     await expect(stopWorker).toHaveCount(1);
     await stopWorker.click();
-    await expect(internalsPage.locator('body')).toContainText('Running Status: STOPPED', {
-      timeout: 15_000,
-    });
+    // Chrome may immediately restart the worker for an extension client, so the
+    // stream epoch assertion below is the durable evidence that this stop took effect.
     await internalsPage.close();
 
     const recoveredPage = await context.newPage();
