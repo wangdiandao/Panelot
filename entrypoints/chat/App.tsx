@@ -220,14 +220,17 @@ export function App() {
         void tree.updateThread(thread.id, { title }).then(refreshThreads)
       }
       onDelete={(thread) =>
-        void tree.deleteThread(thread.id).then(async () => {
-          try {
-            await clearThreadRuntimeState(thread.id);
-          } finally {
-            await refreshThreads();
-            if (state.threadId === thread.id) session.startDraft();
-          }
-        })
+        void session
+          .deleteThread(thread.id)
+          .then(async () => {
+            try {
+              await clearThreadRuntimeState(thread.id);
+            } finally {
+              await refreshThreads();
+              if (state.threadId === thread.id) session.startDraft();
+            }
+          })
+          .catch(() => undefined)
       }
       collapsedGroups={collapsedGroups}
       onToggleGroup={(groupId) =>

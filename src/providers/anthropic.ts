@@ -17,12 +17,11 @@ import {
   createKeyRing,
   createProviderFrameError,
   createResponseFormatError,
-  normalizeHttpError,
+  modelDiscoveryRetryOptions,
   parseModelListResponse,
-  withRetry,
+  requestWithRetry,
 } from './http';
 import {
-  ProviderError,
   type Connection,
   type FinalResult,
   type FinalToolCall,
@@ -203,6 +202,7 @@ export class AnthropicAdapter implements ProviderAdapter {
 
     const url = `${this.connection.baseUrl}/v1/messages`;
     const headers = (k: string) => this.headers(k);
+    const maxAttempts = Math.max(4, this.connection.apiKeys.length);
 
     const textParts: string[] = [];
     const reasoningParts: string[] = [];
@@ -217,41 +217,17 @@ export class AnthropicAdapter implements ProviderAdapter {
     let recognizedFrame = false;
 
     async function* run(): AsyncGenerator<StreamEvent> {
-      const response = await withRetry(
+      const response = await requestWithRetry(
         keys,
-        async (apiKey) => {
-          let res: Response;
-          try {
-            res = await fetch(url, {
-              method: 'POST',
-              redirect: 'error',
-              headers: headers(apiKey),
-              body: JSON.stringify(body),
-              signal: req.signal,
-            });
-          } catch (e) {
-            if (e instanceof DOMException && e.name === 'AbortError') throw e;
-            throw new ProviderError('network', `fetch failed: ${(e as Error).message}`);
-          }
-          if (!res.ok) {
-            throw normalizeHttpError(
-              res.status,
-              await res.text().catch(() => ''),
-              res.headers.get('retry-after'),
-              res.headers.get('request-id'),
-            );
-          }
-          if (!res.body) {
-            throw createResponseFormatError(
-              'protocol',
-              res.status,
-              'response has no body',
-              'response has no body',
-            );
-          }
-          return res;
-        },
-        { signal: req.signal },
+        (apiKey) =>
+          fetch(url, {
+            method: 'POST',
+            redirect: 'error',
+            headers: headers(apiKey),
+            body: JSON.stringify(body),
+            signal: req.signal,
+          }),
+        { signal: req.signal, maxAttempts, requestIdHeaders: 'request-id' },
       );
 
       const responseBody = response.body;
@@ -485,18 +461,21 @@ export class AnthropicAdapter implements ProviderAdapter {
 
   async listModels(): Promise<string[]> {
     const keys = createKeyRing(this.connection.apiKeys);
-    const res = await fetch(`${this.connection.baseUrl}/v1/models`, {
-      redirect: 'error',
-      headers: this.headers(keys.current()),
-      signal: AbortSignal.timeout(4000),
-    });
-    if (!res.ok)
-      throw normalizeHttpError(
-        res.status,
-        await res.text().catch(() => ''),
-        res.headers.get('retry-after'),
-        res.headers.get('request-id'),
-      );
+    const signal = AbortSignal.timeout(4000);
+    const res = await requestWithRetry(
+      keys,
+      (apiKey) =>
+        fetch(`${this.connection.baseUrl}/v1/models`, {
+          redirect: 'error',
+          headers: this.headers(apiKey),
+          signal,
+        }),
+      {
+        ...modelDiscoveryRetryOptions(this.connection.apiKeys.length),
+        signal,
+        requestIdHeaders: 'request-id',
+      },
+    );
     let json: unknown;
     try {
       json = await res.json();

@@ -164,15 +164,20 @@ export function ModelSelector({
             <ChevronDown data-icon="inline-end" />
           </Button>
         ) : (
-          <Button variant="ghost" size="xs" aria-label={t('model.select')}>
+          <Button
+            variant="ghost"
+            size="xs"
+            aria-label={t('model.select')}
+            className="min-w-0 max-w-full"
+          >
             <Cpu data-icon="inline-start" />
-            <span className="max-w-32 truncate">{current}</span>
+            <span className="max-w-20 truncate min-[400px]:max-w-32">{current}</span>
             <ChevronDown data-icon="inline-end" />
           </Button>
         )}
       </PopoverTrigger>
       <PopoverContent
-        className="w-80 p-0"
+        className="w-[min(20rem,calc(100vw-1rem))] p-0"
         align="start"
         side={variant === 'header' ? 'bottom' : 'top'}
       >

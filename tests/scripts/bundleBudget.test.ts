@@ -36,7 +36,7 @@ describe('bundle budget static graph', () => {
     );
     await writeFile(
       join(root, 'chunks/b.js'),
-      `export const value = 1;\n${' '.repeat(120 * 1024)}`,
+      `export const value = 1;\n${' '.repeat(128 * 1024)}`,
     );
 
     const result = spawnSync(process.execPath, [script, root], { encoding: 'utf8' });
@@ -51,7 +51,7 @@ describe('bundle budget static graph', () => {
 
   it('keeps a separate cap on the service worker entry', async () => {
     const root = await fixture();
-    await writeFile(join(root, 'background.js'), `${' '.repeat(209 * 1024)}`);
+    await writeFile(join(root, 'background.js'), `${' '.repeat(231 * 1024)}`);
 
     const result = spawnSync(process.execPath, [script, root], { encoding: 'utf8' });
 
@@ -73,6 +73,47 @@ describe('bundle budget static graph', () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('PASS background.js entry');
     expect(result.stdout).toContain('PASS background static graph');
+  });
+
+  it('rejects a window-only Vite preload runtime in the service worker static graph', async () => {
+    const root = await fixture();
+    await writeFile(join(root, 'background.js'), `import './chunks/preload.js';`);
+    await writeFile(
+      join(root, 'chunks/preload.js'),
+      `window.dispatchEvent(new Event('vite:preloadError'));`,
+    );
+
+    const result = spawnSync(process.execPath, [script, root], { encoding: 'utf8' });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('FAIL background worker excludes window-only preload runtime');
+    expect(result.stdout).toMatch(/chunks[\\/]preload\.js/);
+  });
+
+  it('allows a worker-safe Vite preload error dispatcher', async () => {
+    const root = await fixture();
+    await writeFile(join(root, 'background.js'), `import './chunks/preload.js';`);
+    await writeFile(
+      join(root, 'chunks/preload.js'),
+      `globalThis.dispatchEvent(new Event('vite:preloadError'));`,
+    );
+
+    const result = spawnSync(process.execPath, [script, root], { encoding: 'utf8' });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('PASS background worker excludes window-only preload runtime');
+  });
+
+  it('rejects dynamic imports in the service worker static graph', async () => {
+    const root = await fixture();
+    await writeFile(join(root, 'background.js'), `void import('./chunks/lazy.js');`);
+    await writeFile(join(root, 'chunks/lazy.js'), `export const value = 1;`);
+
+    const result = spawnSync(process.execPath, [script, root], { encoding: 'utf8' });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('FAIL background worker excludes dynamic import()');
+    expect(result.stdout).toContain(`'./chunks/lazy.js'`);
   });
 
   it('rejects a static import that escapes the build root', async () => {

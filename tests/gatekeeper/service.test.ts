@@ -146,6 +146,21 @@ describe('GatekeeperService', () => {
     await expect(GatekeeperService.listRules()).resolves.toEqual([]);
   });
 
+  it('seeds the run_javascript default once and preserves an intentional deletion', async () => {
+    await GatekeeperService.seedDefaultRules();
+    const [defaultRule] = await GatekeeperService.listRules();
+    expect(defaultRule).toMatchObject({
+      tool: 'run_javascript',
+      origin: '*',
+      verdict: 'deny',
+    });
+
+    await GatekeeperService.removeRule(defaultRule!.id);
+    await GatekeeperService.seedDefaultRules();
+
+    await expect(GatekeeperService.listRules()).resolves.toEqual([]);
+  });
+
   it('adds host-permission context without requesting permission itself', async () => {
     vi.stubGlobal('chrome', { permissions: {} });
     const { db } = makeDb(['https://example.com']);

@@ -179,14 +179,145 @@ describe('integrity validation (docs/02 §3.4)', () => {
 });
 
 describe('thread deletion', () => {
-  it('marks deleting before physical removal and hides the thread immediately', async () => {
-    const { thread } = await seedThread();
-    await db.threads.update(thread.id, { deleting: true });
-    expect(await tree.getThread(thread.id)).toBeUndefined();
+  async function seedRuntimeState(threadId: string) {
+    await db.attachments.add({
+      id: 'attachment-delete',
+      threadId,
+      createdAt: 1,
+      kind: 'file',
+      mime: 'text/plain',
+      bytes: new Blob(['delete me']),
+    });
+    await db.runs.add({
+      id: 'run-delete',
+      threadId,
+      turnId: 'turn-delete',
+      clientId: 'run-client',
+      submissionId: 'run-submission',
+      input: { text: 'delete me' },
+      state: 'waiting_approval',
+      revision: 1,
+      stepCursor: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    await db.approvals.add({
+      id: 'approval-delete',
+      threadId,
+      runId: 'run-delete',
+      turnId: 'turn-delete',
+      request: {
+        tool: 'write',
+        label: 'Write',
+        params: {},
+        targetOrigin: 'https://example.test',
+        flags: [],
+      },
+      status: 'pending',
+      requestedAt: 1,
+    });
+    await db.interactions.add({
+      id: 'interaction-delete',
+      threadId,
+      runId: 'run-delete',
+      turnId: 'turn-delete',
+      itemId: 'call-delete',
+      request: { kind: 'ask_user', questions: [{ id: 'choice', question: 'Continue?' }] },
+      status: 'pending',
+      requestedAt: 1,
+    });
+  }
 
-    await tree.deleteThread(thread.id);
+  async function seedDeleteReceipt() {
+    await db.commandReceipts.add({
+      id: 'delete-client\u0000delete-submission',
+      clientId: 'delete-client',
+      submissionId: 'delete-submission',
+      commandType: 'thread.delete',
+      status: 'processing',
+      createdAt: 1,
+      updatedAt: 1,
+      expiresAt: 10_000,
+    });
+  }
+
+  it('atomically removes all thread-owned records and acknowledges the command', async () => {
+    const { thread } = await seedThread();
+    const other = await tree.createThread({ title: 'keep' });
+    await tree.appendNode(other.id, { type: 'user_message', payload: msg('keep') });
+    await seedRuntimeState(thread.id);
+    await seedDeleteReceipt();
+
+    await tree.deleteThread(thread.id, {
+      clientId: 'delete-client',
+      submissionId: 'delete-submission',
+      commandType: 'thread.delete',
+    });
+
     expect(await db.nodes.where('threadId').equals(thread.id).count()).toBe(0);
+    expect(await db.attachments.where('threadId').equals(thread.id).count()).toBe(0);
+    expect(await db.runs.where('threadId').equals(thread.id).count()).toBe(0);
+    expect(await db.approvals.where('threadId').equals(thread.id).count()).toBe(0);
+    expect(await db.interactions.where('threadId').equals(thread.id).count()).toBe(0);
     expect(await db.threads.get(thread.id)).toBeUndefined();
+    expect(await db.threads.get(other.id)).toBeDefined();
+    expect(await db.nodes.where('threadId').equals(other.id).count()).toBe(1);
+    expect(await db.commandReceipts.get('delete-client\u0000delete-submission')).toMatchObject({
+      status: 'acknowledged',
+      response: { type: 'command.ack', threadId: thread.id },
+    });
+  });
+
+  it('rolls back the cascade when its durable command receipt is missing', async () => {
+    const { thread } = await seedThread();
+    await seedRuntimeState(thread.id);
+
+    await expect(
+      tree.deleteThread(thread.id, {
+        clientId: 'missing-client',
+        submissionId: 'missing-submission',
+        commandType: 'thread.delete',
+      }),
+    ).rejects.toThrow(/processing command receipt not found/);
+
+    expect(await db.threads.get(thread.id)).toBeDefined();
+    expect(await db.nodes.where('threadId').equals(thread.id).count()).toBe(3);
+    expect(await db.attachments.where('threadId').equals(thread.id).count()).toBe(1);
+    expect(await db.runs.where('threadId').equals(thread.id).count()).toBe(1);
+    expect(await db.approvals.where('threadId').equals(thread.id).count()).toBe(1);
+    expect(await db.interactions.where('threadId').equals(thread.id).count()).toBe(1);
+  });
+
+  it('rolls back deletion when its transaction identity does not match the receipt payload', async () => {
+    const { thread } = await seedThread();
+    await seedRuntimeState(thread.id);
+    await db.commandReceipts.add({
+      id: 'delete-client\u0000fingerprint-mismatch',
+      clientId: 'delete-client',
+      submissionId: 'fingerprint-mismatch',
+      commandType: 'thread.delete',
+      requestFingerprint: 'expected-fingerprint',
+      status: 'processing',
+      createdAt: 1,
+      updatedAt: 1,
+      expiresAt: 10_000,
+    });
+
+    await expect(
+      tree.deleteThread(thread.id, {
+        clientId: 'delete-client',
+        submissionId: 'fingerprint-mismatch',
+        commandType: 'thread.delete',
+        requestFingerprint: 'different-fingerprint',
+      }),
+    ).rejects.toThrow(/payload fingerprint mismatch/);
+
+    expect(await db.threads.get(thread.id)).toBeDefined();
+    expect(await db.nodes.where('threadId').equals(thread.id).count()).toBe(3);
+    expect(await db.commandReceipts.get('delete-client\u0000fingerprint-mismatch')).toMatchObject({
+      status: 'processing',
+      requestFingerprint: 'expected-fingerprint',
+    });
   });
 });
 

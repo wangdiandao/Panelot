@@ -9,7 +9,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('built-in artifact capability', () => {
+describe('createArtifactTool', () => {
   it('stores generated text as a trusted thread attachment before downloading it', async () => {
     const db = new PanelotDB(`artifact-tool-${Date.now()}`);
     const thread = await new ThreadTree(db).createThread({ title: 'artifact' });

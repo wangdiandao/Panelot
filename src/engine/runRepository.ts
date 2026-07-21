@@ -11,6 +11,15 @@ import type { TurnOverrides, Usage, UserInput } from '../messaging/protocol';
 import { ThreadTree, type AppendNodeInput } from '../db/tree';
 import { assertRunTransition, recoverInterruptedRun } from './runState';
 import { isRunEnvironmentSnapshot, resealRunEnvironmentSnapshot } from './runEnvironmentSnapshot';
+import {
+  assertPreparedToolCall,
+  persistStableToolCallNode,
+  stablePersistenceKey,
+} from './toolCallPersistence';
+import {
+  completeCommandReceiptInTransaction,
+  type CommandTransactionContext,
+} from './commandReceipts';
 
 interface RunRepositoryOptions {
   now?: () => number;
@@ -41,6 +50,8 @@ export interface AttachmentLink {
   attachmentIds: readonly string[];
   nodeId: string;
 }
+
+type PreparedToolRunState = 'waiting_approval' | 'waiting_interaction' | 'executing_tool';
 
 export type RecoveredRun = RunRecord & {
   recoveryAction:
@@ -73,7 +84,14 @@ export class RunRepository {
     this.now = options.now ?? Date.now;
   }
 
-  async enqueue(input: EnqueueRunInput): Promise<RunRecord> {
+  async enqueue(input: EnqueueRunInput, command?: CommandTransactionContext): Promise<RunRecord> {
+    if (
+      command &&
+      command.commandType !== 'turn.enqueue' &&
+      command.commandType !== 'turn.submit'
+    ) {
+      throw new Error(`Invalid command transaction for run enqueue: ${command.commandType}`);
+    }
     const now = this.now();
     const run: RunRecord = {
       id: crypto.randomUUID(),
@@ -89,8 +107,23 @@ export class RunRepository {
       createdAt: now,
       updatedAt: now,
     };
-    await this.db.runs.add(run);
-    return run;
+    return this.db.transaction('rw', [this.db.runs, this.db.commandReceipts], async () => {
+      await this.db.runs.add(run);
+      if (command) {
+        await completeCommandReceiptInTransaction(
+          this.db,
+          command,
+          {
+            type: 'command.ack',
+            threadId: run.threadId,
+            runId: run.id,
+            revision: run.revision,
+          },
+          now,
+        );
+      }
+      return run;
+    });
   }
 
   async nextQueued(threadId: string): Promise<RunRecord | undefined> {
@@ -124,8 +157,15 @@ export class RunRepository {
       .sortBy('createdAt');
   }
 
-  async updateQueued(id: string, patch: UpdateQueuedRunInput): Promise<RunRecord> {
-    return this.db.transaction('rw', this.db.runs, async () => {
+  async updateQueued(
+    id: string,
+    patch: UpdateQueuedRunInput,
+    command?: CommandTransactionContext,
+  ): Promise<RunRecord> {
+    if (command && command.commandType !== 'queue.update') {
+      throw new Error(`Invalid command transaction for queue update: ${command.commandType}`);
+    }
+    return this.db.transaction('rw', [this.db.runs, this.db.commandReceipts], async () => {
       const current = await this.db.runs.get(id);
       if (!current) throw new Error(`Run not found: ${id}`);
       if (current.state !== 'queued') throw new Error(`Run ${id} is not queued`);
@@ -137,12 +177,28 @@ export class RunRepository {
         updatedAt: this.now(),
       };
       await this.db.runs.put(updated);
+      if (command) {
+        await completeCommandReceiptInTransaction(
+          this.db,
+          command,
+          {
+            type: 'command.ack',
+            threadId: updated.threadId,
+            runId: updated.id,
+            revision: updated.revision,
+          },
+          updated.updatedAt,
+        );
+      }
       return updated;
     });
   }
 
-  async removeQueued(id: string): Promise<RunRecord> {
-    return this.db.transaction('rw', this.db.runs, async () => {
+  async removeQueued(id: string, command?: CommandTransactionContext): Promise<RunRecord> {
+    if (command && command.commandType !== 'queue.remove') {
+      throw new Error(`Invalid command transaction for queue removal: ${command.commandType}`);
+    }
+    return this.db.transaction('rw', [this.db.runs, this.db.commandReceipts], async () => {
       const current = await this.db.runs.get(id);
       if (!current) throw new Error(`Run not found: ${id}`);
       if (current.state !== 'queued') throw new Error(`Run ${id} is not queued`);
@@ -154,6 +210,19 @@ export class RunRepository {
         updatedAt: this.now(),
       };
       await this.db.runs.put(updated);
+      if (command) {
+        await completeCommandReceiptInTransaction(
+          this.db,
+          command,
+          {
+            type: 'command.ack',
+            threadId: updated.threadId,
+            runId: updated.id,
+            revision: updated.revision,
+          },
+          updated.updatedAt,
+        );
+      }
       return updated;
     });
   }
@@ -222,6 +291,51 @@ export class RunRepository {
     attachmentLink?: AttachmentLink,
   ): Promise<RunRecord> {
     return this.appendNodesAndTransition(id, [node], state, patch, attachmentLink);
+  }
+
+  async prepareToolCall(
+    id: string,
+    node: AppendNodeInput,
+    state: PreparedToolRunState,
+    pendingTool: PendingToolExecution,
+  ): Promise<RunRecord> {
+    assertPreparedToolCall(node, pendingTool);
+    const nodeId = node.id;
+
+    return this.db.transaction('rw', [this.db.runs, this.db.threads, this.db.nodes], async () => {
+      const current = await this.db.runs.get(id);
+      if (!current) throw new Error(`Run not found: ${id}`);
+      const existing = await this.db.nodes.get(nodeId);
+      if (existing) {
+        await persistStableToolCallNode(this.db, current.threadId, node);
+        if (
+          current.state === state &&
+          stablePersistenceKey(current.pendingTool) === stablePersistenceKey(pendingTool)
+        ) {
+          return current;
+        }
+        if (current.state === state) {
+          throw new Error(`Prepared tool call pendingTool collision: ${nodeId}`);
+        }
+        const thread = await this.db.threads.get(current.threadId);
+        if (thread?.leafId !== existing.id) {
+          throw new Error(`Prepared tool call ${nodeId} is no longer the thread leaf`);
+        }
+      } else {
+        await persistStableToolCallNode(this.db, current.threadId, node);
+      }
+
+      assertRunTransition(current.state, state);
+      const updated: RunRecord = {
+        ...current,
+        state,
+        pendingTool: structuredClone(pendingTool),
+        revision: current.revision + 1,
+        updatedAt: this.now(),
+      };
+      await this.db.runs.put(updated);
+      return updated;
+    });
   }
 
   async acceptSteer(
@@ -313,6 +427,16 @@ export class RunRepository {
     patch: RunTransitionPatch = {},
     attachmentLink?: AttachmentLink,
   ): Promise<RunRecord> {
+    if (
+      nodes.length === 1 &&
+      nodes[0]?.type === 'tool_call' &&
+      patch.pendingTool &&
+      (state === 'waiting_approval' ||
+        state === 'waiting_interaction' ||
+        state === 'executing_tool')
+    ) {
+      return this.prepareToolCall(id, nodes[0], state, patch.pendingTool);
+    }
     return this.db.transaction(
       'rw',
       [this.db.runs, this.db.threads, this.db.nodes, this.db.attachments],

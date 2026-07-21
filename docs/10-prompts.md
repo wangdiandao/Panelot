@@ -54,6 +54,8 @@ Anthropic adapter 当前把整个 system 字符串作为一个带 `cache_control
 | `extract`       | "Returns clean Markdown (links preserved) of the page or a ref'd subtree (scope); cheaper and more readable than a full snapshot for reading content or collecting URLs. Long pages return one window — use fromChar to page through; the full body is saved to an attachment." |
 | `load_skill`    | "Load the full instructions of a skill by name. Call before executing any task matching a skill description."                                                                                                                                                                   |
 
+本轮发送给 Provider 的工具名称、description 和参数 JSON Schema 来自 `ToolRegistry` 已规范化的 capability descriptor；同一个 descriptor 也进入 Run 环境快照并参与摘要。Prompt 不复制 level/effect/recovery 或 execution binding，也不能覆盖它们。新增本地、交互、升级或 MCP 工具时，必须通过注册边界提供一致元数据；注册冲突或不完整的交互描述会在构建工具目录时直接失败，而不是到模型调用或恢复阶段再采用宽泛 fallback。
+
 `ask_user` 只用于答案会实质改变下一步的澄清，必须单独调用且一次 1–3 个简短问题；普通确认不使用。`request_user_action` 用于 Agent 不应代办的敏感输入或真人验证；`watch_page` 与 `schedule_resume` 用于可持久恢复的等待，避免模型轮询。审批仍由引擎 RPC 自动发起，不应让模型用文本或 `ask_user` 模拟审批。
 
 内核额外约束工具调用格式：模型要执行工具时必须使用 Provider 的原生 tool-call 通道，不能用正文、Markdown 或代码块代替；每个调用只提交一个 JSON 参数对象，不得额外包装 tool/name/arguments 信封、把多个调用塞进同一数组、混入说明文字/注释/尾逗号，或把嵌套对象/数组再次字符串化。必填字段、允许字段、类型和枚举以本轮 tool schema 为准；`tabId`、snapshot ref、MCP resource name 等不透明值只能从最新上下文或工具结果原样复制，缺失时先读取或询问，不能猜测。多个并行调用必须互不依赖并分别携带完整参数；收到未知工具、JSON 解析或参数校验错误后，只修正错误调用，不原样重试。

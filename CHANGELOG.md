@@ -4,6 +4,49 @@ All notable changes to Panelot are documented here.
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-07-21
+
+### Changed
+
+- Centralized tool capability normalization so Provider schemas, recovery fingerprints, trust,
+  provenance, and execution bindings derive from one immutable registration contract.
+- Consolidated engine event validation behind exhaustive protocol catalogs, preserving forward
+  compatibility only for genuinely unknown event types while rejecting malformed known events;
+  bounded Engine, content-script, and MCP worker payload resources; and added AST-derived Engine
+  and content-script manifests that prevent imported contract changes from leaving stale hashes.
+- Added a payload-bound command transaction context so Thread creation, deletion, fork and branch
+  selection, queue mutations, approval decisions, and interaction responses commit their domain
+  state and idempotent receipt as one database work unit.
+- Unified Provider fetch error normalization and retry policy across streaming requests and model
+  discovery, including provider-specific request correlation identifiers.
+
+### Fixed
+
+- Removed dynamic imports from the MV3 service worker, where Chrome forbids them, and made Vite's
+  error dispatch worker-safe so any future import failure preserves its real cause.
+- Stopped replaying page writes after an ambiguous content-script channel failure, preventing
+  duplicate clicks, submissions, or text entry when the first operation may already have applied.
+- Kept recovered approval and interaction runs as exclusive thread owners until continuation,
+  preventing new turns, resumes, queue drains, or branch switches from corrupting their path.
+- Reconnected MCP clients when their endpoint or authentication binding changes, and rejected
+  connection candidates whose configuration drifted during the handshake.
+- Isolated MCP offscreen sessions by connection identity and preserved cancellation across
+  cancel-before-admission races, reconnects, replacements, and stale close messages.
+- Made thread deletion a background-owned, recovery-safe operation that stops active work and
+  atomically removes all thread records while retaining its idempotent command receipt.
+- Preserved snapshot-before-live-event ordering during subscriptions, including coalesced stream
+  deltas, so reconnecting clients cannot miss or apply events ahead of their snapshot.
+- Persisted tool calls with their Run pending state as one work unit, and kept terminal command
+  receipts immutable when a later continuation reports an error.
+- Applied exact origin semantics to sensitive HTTPS sites and rotated through every configured
+  Provider key for authentication failover, including model discovery.
+- Made the side-panel conversation layout resilient across narrow and tall viewport ratios, with
+  content-measured long-text composer growth, bounded scrolling, and viewport-safe controls.
+- Restored the side panel to its last selected conversation after a browser restart, and replaced
+  misleading Provider diagnostics and endless loading when the UI must reload to match the worker.
+- Simplified default permission-policy cards to their titles and preserved deletion of the shipped
+  `run_javascript` deny rule across Service Worker and browser restarts.
+
 ## [0.4.3] - 2026-07-16
 
 ### Changed
@@ -142,7 +185,8 @@ All notable changes to Panelot are documented here.
 - Plugin archives reject traversal, symlinks, executable payloads, and archive bombs.
 - Provider error details are sanitized before display or persistence.
 
-[Unreleased]: https://github.com/wangdiandao/Panelot/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/wangdiandao/Panelot/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/wangdiandao/Panelot/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/wangdiandao/Panelot/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/wangdiandao/Panelot/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/wangdiandao/Panelot/compare/v0.4.0...v0.4.1

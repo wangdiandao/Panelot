@@ -242,6 +242,219 @@ describe('EngineHost handshake', () => {
     });
   });
 
+  it.each(['initialize', 'subscribe'] as const)(
+    'admits the snapshot before replaying live events during %s',
+    async (mode) => {
+      let resolveSnapshot!: (snapshot: ThreadSnapshot) => void;
+      const snapshotReady = new Promise<ThreadSnapshot>((resolve) => {
+        resolveSnapshot = resolve;
+      });
+      const snapshot: ThreadSnapshot = {
+        meta: {
+          id: 't-live',
+          revision: 0,
+          title: 'Before live events',
+          createdAt: 1,
+          updatedAt: 1,
+          leafId: null,
+          archived: false,
+          pinned: false,
+          stats: { turns: 0, totalTokens: 0, costUsd: 0 },
+        },
+        items: [],
+        activeTurn: null,
+        pendingApprovals: [],
+        queuedInputs: 0,
+        queuedRuns: [],
+        recoverableRuns: [],
+      };
+      const core: EngineCore = {
+        handleOp: vi.fn(async () => {}),
+        getSnapshot: () => snapshotReady,
+        threadIdOf: () => null,
+      };
+      const host = new EngineHost(core, Promise.resolve(), { streamEpoch: 17 });
+      const transport = connect(host);
+      const events = collect(transport);
+
+      if (mode === 'initialize') {
+        init(transport, 't-live');
+      } else {
+        init(transport);
+        await flush();
+        events.length = 0;
+        transport.send({
+          type: 'thread.subscribe',
+          submissionId: 'subscribe-live',
+          threadId: 't-live',
+        });
+      }
+      await flush();
+
+      host.broadcast({
+        type: 'item.start',
+        threadId: 't-live',
+        turnId: 'turn-live',
+        itemId: 'item-live',
+        kind: 'assistant_message',
+        meta: {},
+      });
+      host.broadcast({
+        type: 'item.delta',
+        threadId: 't-live',
+        itemId: 'item-live',
+        delta: { text: 'hel' },
+      });
+      host.broadcast({
+        type: 'item.delta',
+        threadId: 't-live',
+        itemId: 'item-live',
+        delta: { text: 'lo' },
+      });
+      host.broadcast({
+        type: 'item.complete',
+        threadId: 't-live',
+        itemId: 'item-live',
+        result: { ok: true },
+      });
+      await flush();
+      expect(events).toEqual([]);
+
+      resolveSnapshot(snapshot);
+      await flush();
+
+      expect(events.map((event) => event.type)).toEqual([
+        'initialized',
+        'item.start',
+        'item.delta',
+        'item.complete',
+      ]);
+      expect(events[0]).toMatchObject({
+        stream: { threadId: 't-live', epoch: 17, sequence: 1 },
+        snapshot: { stream: { threadId: 't-live', epoch: 17, sequence: 1 } },
+      });
+      expect(events[1]).toMatchObject({ stream: { epoch: 17, sequence: 2 } });
+      expect(events[2]).toMatchObject({
+        delta: { text: 'hello' },
+        stream: { epoch: 17, sequence: 4 },
+      });
+      expect(events[3]).toMatchObject({ stream: { epoch: 17, sequence: 5 } });
+    },
+  );
+
+  it('restores the previous subscription and drops buffered events when a snapshot fails', async () => {
+    let resolveSnapshot!: (snapshot: ThreadSnapshot | null) => void;
+    const snapshotReady = new Promise<ThreadSnapshot | null>((resolve) => {
+      resolveSnapshot = resolve;
+    });
+    const oldSnapshot: ThreadSnapshot = {
+      meta: {
+        id: 't-old',
+        revision: 0,
+        title: 'Old',
+        createdAt: 1,
+        updatedAt: 1,
+        leafId: null,
+        archived: false,
+        pinned: false,
+        stats: { turns: 0, totalTokens: 0, costUsd: 0 },
+      },
+      items: [],
+      activeTurn: null,
+      pendingApprovals: [],
+      queuedInputs: 0,
+      queuedRuns: [],
+      recoverableRuns: [],
+    };
+    const core: EngineCore = {
+      handleOp: vi.fn(async () => {}),
+      getSnapshot: (threadId) =>
+        threadId === 't-old' ? Promise.resolve(oldSnapshot) : snapshotReady,
+      threadIdOf: () => null,
+    };
+    const host = new EngineHost(core);
+    const transport = connect(host);
+    const events = collect(transport);
+    init(transport, 't-old');
+    await flush();
+    events.length = 0;
+
+    transport.send({
+      type: 'thread.subscribe',
+      submissionId: 'missing-subscription',
+      threadId: 't-missing',
+    });
+    await flush();
+    host.broadcast({
+      type: 'turn.start',
+      threadId: 't-missing',
+      turnId: 'discarded-turn',
+      turnKind: 'user',
+      steerable: true,
+    });
+    resolveSnapshot(null);
+    await flush();
+
+    host.broadcast({
+      type: 'thread.updated',
+      threadId: 't-old',
+      revision: 1,
+      patch: { title: 'Still subscribed' },
+    });
+    await flush();
+
+    expect(events.map((event) => event.type)).toEqual(['error', 'thread.updated']);
+    expect(events[0]).toMatchObject({
+      submissionId: 'missing-subscription',
+      code: 'thread_not_found',
+    });
+  });
+
+  it.each(['initialize', 'subscribe'] as const)(
+    'replays thread.deleted when the thread vanishes during %s snapshot admission',
+    async (mode) => {
+      let resolveSnapshot!: (snapshot: ThreadSnapshot | null) => void;
+      const snapshotReady = new Promise<ThreadSnapshot | null>((resolve) => {
+        resolveSnapshot = resolve;
+      });
+      const core: EngineCore = {
+        handleOp: vi.fn(async () => {}),
+        getSnapshot: () => snapshotReady,
+        threadIdOf: () => null,
+      };
+      const host = new EngineHost(core, Promise.resolve(), { streamEpoch: 23 });
+      const transport = connect(host);
+      const events = collect(transport);
+
+      if (mode === 'initialize') {
+        init(transport, 'deleted-during-snapshot');
+      } else {
+        init(transport);
+        await flush();
+        events.length = 0;
+        transport.send({
+          type: 'thread.subscribe',
+          submissionId: 'subscribe-deleted',
+          threadId: 'deleted-during-snapshot',
+        });
+      }
+      await flush();
+
+      host.broadcast({ type: 'thread.deleted', threadId: 'deleted-during-snapshot' });
+      resolveSnapshot(null);
+      await flush();
+
+      expect(events[0]).toMatchObject({
+        type: 'thread.deleted',
+        threadId: 'deleted-during-snapshot',
+        stream: { threadId: 'deleted-during-snapshot', epoch: 23, sequence: 2 },
+      });
+      expect(events.map((event) => event.type)).toEqual(
+        mode === 'initialize' ? ['thread.deleted', 'initialized'] : ['thread.deleted', 'error'],
+      );
+    },
+  );
+
   it('answers ping with pong without requiring initialize', async () => {
     const host = new EngineHost(new StubEngineCore());
     const t = connect(host);
@@ -609,6 +822,29 @@ describe('EngineHost event routing', () => {
     const relevant = events.filter((e) => e.type === 'item.delta' || e.type === 'item.complete');
     expect(relevant.map((e) => e.type)).toEqual(['item.delta', 'item.complete']);
     expect(relevant[0]).toMatchObject({ delta: { text: 'partial' } });
+  });
+
+  it('flushes interleaved item deltas in cursor order', async () => {
+    const host = subscribedHost('tC');
+    const transport = connect(host);
+    const events = collect(transport);
+    init(transport, 'tC');
+    await flush();
+
+    host.broadcast({ type: 'item.delta', threadId: 'tC', itemId: 'i1', delta: { text: 'a' } });
+    host.broadcast({ type: 'item.delta', threadId: 'tC', itemId: 'i2', delta: { text: 'b' } });
+    host.broadcast({ type: 'item.delta', threadId: 'tC', itemId: 'i1', delta: { text: 'c' } });
+    host.broadcast({ type: 'item.complete', threadId: 'tC', itemId: 'i1' });
+    await flush();
+
+    const relevant = events.filter(
+      (event) => event.type === 'item.delta' || event.type === 'item.complete',
+    );
+    expect(
+      relevant.map((event) => (event.type === 'item.delta' ? event.itemId : event.type)),
+    ).toEqual(['i2', 'i1', 'item.complete']);
+    expect(relevant.map((event) => event.stream?.sequence)).toEqual([3, 4, 5]);
+    expect(relevant[1]).toMatchObject({ delta: { text: 'ac' } });
   });
 });
 

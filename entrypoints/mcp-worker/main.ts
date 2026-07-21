@@ -10,8 +10,9 @@ import {
 import { PanelotDB } from '../../src/db/schema';
 import { AttachmentRepository } from '../../src/data/attachments';
 import { evictAttachmentsIfNeeded } from '../../src/data/quota';
+import { McpWorkerSessions } from '../../src/mcp/workerSessions';
 
-const clients = new Map<string, McpClient>();
+const sessions = new McpWorkerSessions<McpClient>();
 const db = new PanelotDB();
 
 function catalog(client: McpClient) {
@@ -26,6 +27,8 @@ async function handle(message: unknown): Promise<unknown> {
   const request = message as {
     type?: string;
     serverId?: string;
+    connectionId?: string;
+    operationId?: string;
     url?: string;
     authorization?: string | null;
     name?: string;
@@ -33,12 +36,19 @@ async function handle(message: unknown): Promise<unknown> {
     uri?: string;
     context?: { threadId: string; itemId: string };
   };
-  if (!request.type?.startsWith('panelot.mcpWorker.') || !request.serverId) return undefined;
+  if (
+    !request.type?.startsWith('panelot.mcpWorker.') ||
+    !request.serverId ||
+    !request.connectionId
+  ) {
+    return undefined;
+  }
 
   try {
     if (request.type === 'panelot.mcpWorker.connect') {
       if (!request.url) throw new Error('MCP worker URL is missing');
-      await clients.get(request.serverId)?.close();
+      const { lease, previous } = sessions.claimConnection(request.serverId, request.connectionId);
+      if (previous) await previous.client.close();
       let authorization = request.authorization ?? null;
       const client = new McpClient({
         url: request.url,
@@ -65,6 +75,7 @@ async function handle(message: unknown): Promise<unknown> {
             .sendMessage({
               type: 'panelot.mcpWorker.changed',
               serverId: request.serverId,
+              connectionId: request.connectionId,
               catalog: catalog(client),
             })
             .catch(() => {});
@@ -87,23 +98,54 @@ async function handle(message: unknown): Promise<unknown> {
         },
       });
       await client.connect();
-      clients.set(request.serverId, client);
+      if (!sessions.commitConnection(lease, client)) {
+        await client.close().catch(() => undefined);
+        throw new Error('MCP worker connection was superseded');
+      }
       return { ok: true, catalog: catalog(client) };
     }
 
-    const client = clients.get(request.serverId);
-    if (!client) throw new Error(`MCP server is not connected: ${request.serverId}`);
     if (request.type === 'panelot.mcpWorker.close') {
-      clients.delete(request.serverId);
-      await client.close();
+      const closing = sessions.closeConnection(request.serverId, request.connectionId);
+      if (!closing.owned) return { ok: true };
+      await closing.client?.close();
       return { ok: true };
+    }
+    if (request.type === 'panelot.mcpWorker.cancel') {
+      if (!request.operationId) throw new Error('MCP operation id is missing');
+      sessions.cancelToolCall(request.serverId, request.connectionId, request.operationId);
+      return { ok: true };
+    }
+    const client = sessions.getClient(request.serverId, request.connectionId);
+    if (!client) {
+      throw new Error(`MCP server session is not connected: ${request.serverId}`);
     }
     if (request.type === 'panelot.mcpWorker.callTool') {
       if (!request.name) throw new Error('MCP tool name is missing');
-      return {
-        ok: true,
-        result: await client.callTool(request.name, request.args, request.context),
-      };
+      if (!request.operationId) throw new Error('MCP operation id is missing');
+      const controller = sessions.claimToolCall(
+        request.serverId,
+        request.connectionId,
+        request.operationId,
+      );
+      try {
+        return {
+          ok: true,
+          result: await client.callTool(
+            request.name,
+            request.args,
+            request.context,
+            controller.signal,
+          ),
+        };
+      } finally {
+        sessions.finishToolCall(
+          request.serverId,
+          request.connectionId,
+          request.operationId,
+          controller,
+        );
+      }
     }
     if (request.type === 'panelot.mcpWorker.getPrompt') {
       if (!request.name) throw new Error('MCP prompt name is missing');

@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_PERMISSION_POLICIES } from '../../src/ui/settings/PermissionsPage';
 import {
   normalizePermissionPolicy,
   resolvePermissionPolicy,
@@ -7,10 +6,6 @@ import {
 import { normalizeGlobalSettings } from '../../src/settings/store';
 
 describe('browser default permission policy', () => {
-  it('offers the three supported permission policies', () => {
-    expect(DEFAULT_PERMISSION_POLICIES).toEqual(['always', 'untrusted', 'auto']);
-  });
-
   it.each(['always', 'untrusted', 'auto'] as const)('keeps %s as the runtime policy', (policy) => {
     expect(normalizePermissionPolicy(policy)).toBe(policy);
   });

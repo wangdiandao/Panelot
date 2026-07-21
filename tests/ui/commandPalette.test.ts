@@ -89,7 +89,7 @@ async function setQuery(query: string): Promise<void> {
   await act(async () => vi.advanceTimersByTimeAsync(query ? 300 : 0));
 }
 
-describe('CommandPalette search races', () => {
+describe('CommandPalette concurrent search', () => {
   it('ignores an older query that resolves after the current query', async () => {
     const alpha = deferred<ThreadSearchHit[]>();
     const beta = deferred<ThreadSearchHit[]>();

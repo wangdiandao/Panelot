@@ -1,6 +1,6 @@
 import type { PanelotDB } from '../db/schema';
 import type { InteractionRecord, PendingToolExecution, RunRecord } from '../db/types';
-import { ThreadTree } from '../db/tree';
+import { ThreadTree, type AppendNodeInput } from '../db/tree';
 import type {
   InteractionRequestPayload,
   InteractionResponse,
@@ -8,6 +8,15 @@ import type {
 } from '../messaging/protocol';
 import { interactionResultContent, interactionResultProvenance } from '../agent/interaction';
 import { assertRunTransition } from './runState';
+import {
+  assertPreparedToolCall,
+  persistStableToolCallNode,
+  stablePersistenceKey,
+} from './toolCallPersistence';
+import {
+  completeCommandReceiptInTransaction,
+  type CommandTransactionContext,
+} from './commandReceipts';
 
 interface InteractionRepositoryOptions {
   now?: () => number;
@@ -31,48 +40,90 @@ export class InteractionRepository {
     itemId: string;
     request: InteractionRequestPayload;
     pendingTool: PendingToolExecution;
+    toolCallNode: AppendNodeInput;
   }): Promise<{ interaction: InteractionRecord; run: RunRecord }> {
-    return this.db.transaction('rw', [this.db.interactions, this.db.runs], async () => {
-      const run = await this.db.runs.get(input.runId);
-      if (!run || run.threadId !== input.threadId || run.turnId !== input.turnId) {
-        throw new Error(`Run not found for interaction: ${input.id}`);
-      }
-      assertRunTransition(run.state, 'waiting_interaction');
-      const requestedAt = this.now();
-      const interaction: InteractionRecord = {
-        id: input.id,
-        threadId: input.threadId,
-        runId: input.runId,
-        turnId: input.turnId,
-        itemId: input.itemId,
-        request: structuredClone(input.request),
-        status: 'pending',
-        requestedAt,
-      };
-      const updatedRun: RunRecord = {
-        ...run,
-        state: 'waiting_interaction',
-        pendingTool: structuredClone(input.pendingTool),
-        revision: run.revision + 1,
-        updatedAt: requestedAt,
-      };
-      await this.db.interactions.add(interaction);
-      await this.db.runs.put(updatedRun);
-      return { interaction, run: updatedRun };
-    });
-  }
-
-  async resolve(id: string, response: InteractionResponse): Promise<InteractionRecord> {
+    const toolCallNode = input.toolCallNode;
+    assertPreparedToolCall(toolCallNode, input.pendingTool);
     return this.db.transaction(
       'rw',
       [this.db.interactions, this.db.runs, this.db.threads, this.db.nodes],
       async () => {
+        const run = await this.db.runs.get(input.runId);
+        if (!run || run.threadId !== input.threadId || run.turnId !== input.turnId) {
+          throw new Error(`Run not found for interaction: ${input.id}`);
+        }
+        assertRunTransition(run.state, 'waiting_interaction');
+        await persistStableToolCallNode(this.db, input.threadId, toolCallNode);
+        const requestedAt = this.now();
+        const interaction: InteractionRecord = {
+          id: input.id,
+          threadId: input.threadId,
+          runId: input.runId,
+          turnId: input.turnId,
+          itemId: input.itemId,
+          request: structuredClone(input.request),
+          status: 'pending',
+          requestedAt,
+        };
+        const updatedRun: RunRecord = {
+          ...run,
+          state: 'waiting_interaction',
+          pendingTool: structuredClone(input.pendingTool),
+          revision: run.revision + 1,
+          updatedAt: requestedAt,
+        };
+        await this.db.interactions.add(interaction);
+        await this.db.runs.put(updatedRun);
+        return { interaction, run: updatedRun };
+      },
+    );
+  }
+
+  async resolve(
+    id: string,
+    response: InteractionResponse,
+    command?: CommandTransactionContext,
+  ): Promise<InteractionRecord> {
+    if (command && command.commandType !== 'interaction.response') {
+      throw new Error(
+        `Invalid command transaction for interaction response: ${command.commandType}`,
+      );
+    }
+    return this.db.transaction(
+      'rw',
+      [this.db.interactions, this.db.runs, this.db.threads, this.db.nodes, this.db.commandReceipts],
+      async () => {
         const current = await this.db.interactions.get(id);
         if (!current) throw new Error(`Interaction not found: ${id}`);
-        if (current.status === 'resolved') return current;
         const run = await this.db.runs.get(current.runId);
         if (!run || run.threadId !== current.threadId) {
           throw new Error(`Run not found for interaction: ${id}`);
+        }
+        if (current.status === 'resolved') {
+          if (command) {
+            const receiptResponse =
+              stablePersistenceKey(current.response) === stablePersistenceKey(response)
+                ? {
+                    type: 'command.ack' as const,
+                    threadId: current.threadId,
+                    runId: run.id,
+                    revision: run.revision,
+                  }
+                : {
+                    type: 'command.rejected' as const,
+                    code: 'invalid_command',
+                    message: `Interaction ${id} was already resolved with a different response.`,
+                    threadId: current.threadId,
+                    revision: run.revision,
+                  };
+            await completeCommandReceiptInTransaction(
+              this.db,
+              command,
+              receiptResponse,
+              this.now(),
+            );
+          }
+          return current;
         }
         const respondedAt = this.now();
         const updated: InteractionRecord = {
@@ -92,10 +143,25 @@ export class InteractionRepository {
           },
         });
         await this.db.interactions.put(updated);
-        await this.db.runs.update(run.id, {
+        const updatedRun: RunRecord = {
+          ...run,
           revision: run.revision + 1,
           updatedAt: respondedAt,
-        });
+        };
+        await this.db.runs.put(updatedRun);
+        if (command) {
+          await completeCommandReceiptInTransaction(
+            this.db,
+            command,
+            {
+              type: 'command.ack',
+              threadId: current.threadId,
+              runId: run.id,
+              revision: updatedRun.revision,
+            },
+            respondedAt,
+          );
+        }
         return updated;
       },
     );

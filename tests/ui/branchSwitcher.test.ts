@@ -46,7 +46,7 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
-describe('BranchSwitcher thread races', () => {
+describe('BranchSwitcher asynchronous navigation', () => {
   it('carries the originating thread id when an old sibling lookup resolves after navigation', async () => {
     const lookup = deferred<{ id: string }[]>();
     treeMocks.getLogicalSiblings.mockReturnValueOnce(lookup.promise);

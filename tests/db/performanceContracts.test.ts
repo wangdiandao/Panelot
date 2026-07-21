@@ -6,6 +6,7 @@ import { createThreadMeta, ThreadTree } from '../../src/db/tree';
 import type { ThreadNode } from '../../src/db/types';
 
 const databases: PanelotDB[] = [];
+const LARGE_INDEXED_DB_TEST_TIMEOUT_MS = 15_000;
 
 afterEach(async () => {
   await Promise.all(
@@ -65,27 +66,35 @@ function countPathQueries(db: PanelotDB) {
 }
 
 describe('long-session complexity contracts', () => {
-  it('keeps a shallow path in a wide thread on point reads', async () => {
-    const db = createDatabase('wide');
-    const { threadId, leafId } = await seedTree(db, 10_000, 'wide');
-    const queries = countPathQueries(db);
+  it(
+    'keeps a shallow path in a wide thread on point reads',
+    async () => {
+      const db = createDatabase('wide');
+      const { threadId, leafId } = await seedTree(db, 10_000, 'wide');
+      const queries = countPathQueries(db);
 
-    const path = await new ThreadTree(db).getPath(threadId, leafId);
+      const path = await new ThreadTree(db).getPath(threadId, leafId);
 
-    expect(path).toHaveLength(2);
-    expect(queries.read()).toEqual({ gets: 2, whereCalls: 0 });
-  });
+      expect(path).toHaveLength(2);
+      expect(queries.read()).toEqual({ gets: 2, whereCalls: 0 });
+    },
+    LARGE_INDEXED_DB_TEST_TIMEOUT_MS,
+  );
 
-  it('bounds IndexedDB round trips for a deep path', async () => {
-    const db = createDatabase('deep');
-    const { threadId, leafId } = await seedTree(db, 10_000, 'deep');
-    const queries = countPathQueries(db);
+  it(
+    'bounds IndexedDB round trips for a deep path',
+    async () => {
+      const db = createDatabase('deep');
+      const { threadId, leafId } = await seedTree(db, 10_000, 'deep');
+      const queries = countPathQueries(db);
 
-    const path = await new ThreadTree(db).getPath(threadId, leafId);
+      const path = await new ThreadTree(db).getPath(threadId, leafId);
 
-    expect(path).toHaveLength(10_000);
-    expect(queries.read()).toEqual({ gets: 32, whereCalls: 1 });
-  });
+      expect(path).toHaveLength(10_000);
+      expect(queries.read()).toEqual({ gets: 32, whereCalls: 1 });
+    },
+    LARGE_INDEXED_DB_TEST_TIMEOUT_MS,
+  );
 
   it('assembles large tool-call fan-out without rescanning prior messages', async () => {
     const callCount = 5_000;

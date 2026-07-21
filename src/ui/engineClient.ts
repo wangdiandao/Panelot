@@ -148,6 +148,10 @@ export class EngineSession {
   private expectedSnapshot: { submissionId: string; threadId: string } | null = null;
   /** Last admitted event per thread across transport reconnects. */
   private streamCursors = new Map<string, ThreadStreamCursor>();
+  private commandWaiters = new Map<
+    string,
+    { resolve: () => void; reject: (error: Error) => void }
+  >();
 
   readonly store = create<ThreadUiState>(() => ({ ...initialState }));
 
@@ -218,6 +222,14 @@ export class EngineSession {
     this.persistOutbox();
   }
 
+  private settleCommand(submissionId: string, error?: Error): void {
+    const waiter = this.commandWaiters.get(submissionId);
+    if (!waiter) return;
+    this.commandWaiters.delete(submissionId);
+    if (error) waiter.reject(error);
+    else waiter.resolve();
+  }
+
   private replayOutbox(): void {
     const transport = this.transport;
     if (!transport) return;
@@ -263,7 +275,14 @@ export class EngineSession {
   }
 
   stop(): void {
-    if (!this.started && !this.transport && !this.reconnectTimer && !this.pingTimer) return;
+    if (
+      !this.started &&
+      !this.transport &&
+      !this.reconnectTimer &&
+      !this.pingTimer &&
+      this.commandWaiters.size === 0
+    )
+      return;
     this.started = false;
     this.lifecycleGeneration += 1;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
@@ -273,6 +292,10 @@ export class EngineSession {
     const transport = this.transport;
     this.transport = null;
     transport?.close();
+    const stopped = new Error('Engine session stopped before the command completed.');
+    for (const submissionId of this.commandWaiters.keys()) {
+      this.settleCommand(submissionId, stopped);
+    }
     this.store.setState({ connected: false });
   }
 
@@ -331,8 +354,7 @@ export class EngineSession {
 
   // ---- ops ------------------------------------------------------------------
 
-  send(op: OpInput): string {
-    const submissionId = crypto.randomUUID();
+  send(op: OpInput, submissionId = crypto.randomUUID()): string {
     const command = { ...op, submissionId } as Op;
     const subscribedThreadId =
       command.type === 'thread.subscribe'
@@ -353,12 +375,30 @@ export class EngineSession {
     this.send({ type: 'thread.create', preset });
   }
 
+  deleteThread(threadId: string): Promise<void> {
+    const submissionId = crypto.randomUUID();
+    const completion = new Promise<void>((resolve, reject) => {
+      this.commandWaiters.set(submissionId, { resolve, reject });
+    });
+    try {
+      this.send({ type: 'thread.delete', threadId }, submissionId);
+    } catch (error) {
+      this.acknowledge(submissionId);
+      this.settleCommand(
+        submissionId,
+        error instanceof Error ? error : new Error('Failed to send the deletion command.'),
+      );
+    }
+    return completion;
+  }
+
   /**
    * Draft mode (ChatGPT semantics): "new chat" shows an empty conversation
    * WITHOUT persisting anything — the thread row is only created when the
    * first message is submitted, so the list never fills with empty chats.
    */
   startDraft(): void {
+    if (this.reloadBlocked) return;
     const { connected, pendingOverrides } = this.store.getState();
     const { permissionPolicy: discardedPermissionPolicy, ...draftOverrides } = pendingOverrides;
     void discardedPermissionPolicy;
@@ -371,6 +411,7 @@ export class EngineSession {
   }
 
   openThread(threadId: string): void {
+    if (this.reloadBlocked) return;
     this.pendingMetaPatch = null;
     this.echoOps.clear();
     this.store.setState({
@@ -635,6 +676,8 @@ export class EngineSession {
         'threadId' in ev &&
         ev.type !== 'thread.created' &&
         ev.type !== 'thread.forked' &&
+        ev.type !== 'command.ack' &&
+        ev.type !== 'command.rejected' &&
         typeof ev.threadId === 'string'
           ? ev.threadId
           : ev.type === 'activity.updated'
@@ -659,17 +702,20 @@ export class EngineSession {
         s.setState({
           connected: false,
           reloadRequired: true,
-          lastError: { message: ev.message, retryable: false, kind: 'protocol' },
+          loading: false,
+          lastError: { message: ev.message, retryable: false, kind: 'engine_protocol' },
         });
         break;
       }
       case 'command.ack': {
+        this.settleCommand(ev.submissionId);
         this.acknowledge(ev.submissionId);
         break;
       }
       case 'command.rejected': {
         const echoId = this.echoOps.get(ev.submissionId);
         if (echoId) this.retractEcho(echoId);
+        this.settleCommand(ev.submissionId, new Error(ev.message));
         this.acknowledge(ev.submissionId);
         s.setState({
           lastError: { message: ev.message, retryable: ev.code === 'overloaded' },
@@ -695,6 +741,13 @@ export class EngineSession {
         // Internal re-submit: the draft's echo bubble already exists —
         // echoing again here rendered the message twice.
         if (draft) this.submit(draft, { isRetry: true });
+        break;
+      }
+      case 'thread.deleted': {
+        const next = new Map(this.activityStore.getState().activity);
+        next.delete(ev.threadId);
+        this.activityStore.setState({ activity: next });
+        if (s.getState().threadId === ev.threadId) this.startDraft();
         break;
       }
       case 'turn.start':

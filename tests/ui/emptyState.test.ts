@@ -1,8 +1,4 @@
-/**
- * EmptyState pure helpers: greeting buckets and page-type URL heuristics.
- * (Draft-filtering was removed by owner decision 2026-07-05 — the list is a
- * short static menu, max 4 entries, no scrollbar.)
- */
+/** EmptyState greeting buckets and page-type URL heuristics. */
 import { describe, expect, it } from 'vitest';
 import { greetingKey, pageSuggestion } from '../../src/ui/components/EmptyState';
 

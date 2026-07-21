@@ -87,7 +87,9 @@ interface PermissionRule {
 
 规则 `tool` 字段写 `category:eval` 即匹配整个类别，例如 `{ tool: 'category:fill', origin: '*', verdict: 'ask' }` = 所有表单填写动作强制确认。
 
-敏感站点由代码中的 `DEFAULT_SENSITIVE_PATTERNS` 与 storage 的 `sensitive_origins` 合并。设置页可查看内置数量并添加/删除用户模式，不能删除内置项。
+首次初始化会写入一条 `run_javascript × * × deny` 规则，并以独立的本地标记记录默认规则已经初始化。该规则仍可由用户删除；后续 Service Worker 启动只读取初始化标记，不会因规则已不存在而将其重新创建。
+
+敏感站点由代码中的 `DEFAULT_SENSITIVE_PATTERNS` 与 storage 的 `sensitive_origins` 合并。普通 `http(s)` origin 按协议、主机与有效端口精确匹配，`*.example.com` 才匹配子域；只有 `chrome://*`、`about:*` 这类显式 scheme wildcard 使用前缀语义，避免把 `https://bank.example.evil` 误判为 `https://bank.example`。设置页可查看内置数量并添加/删除用户模式，不能删除内置项。
 
 ## 4. 审批 RPC
 
@@ -116,7 +118,7 @@ type ApprovalDecision =
 行为规范：
 
 - 挂起的审批有超时（默认 5 分钟）→ 超时解析为带说明的 decline，随后作为工具拒绝结果回给模型；当前不会另写一条 `system_notice`；
-- 审批期间 loop 会挂起，tool_call、prepared target 和审批请求都写入 IndexedDB；SW 重启后恢复同一审批。用户接受恢复审批后，引擎还会用 Run 中的 prepared target 复验 tab/origin，并重新检查 deny 规则和 host permission。权限被撤销、目标漂移或同一受控 tab 出现人工操作时，旧审批会结案且不派发工具；
+- 审批期间 loop 会挂起；tool_call、prepared target、审批请求与 Run 的 `waiting_approval` 状态在同一 Dexie 事务写入，不能留下只有等待状态却没有审批记录的中间态。SW 重启后恢复同一审批。用户接受恢复审批后，引擎还会用 Run 中的 prepared target 复验 tab/origin，并重新检查 deny 规则和 host permission。权限被撤销、目标漂移或同一受控 tab 出现人工操作时，旧审批会结案且不派发工具；
 - 审批 UI 只显示在侧边栏和全屏页。网页中仿造的审批框对引擎无效；引擎只接受 Port 上的 `approval.response`；
 - ask 请求写入 `approvals` 表并随 ThreadSnapshot 恢复；无 UI 时不会丢失。后台会为待审批和暂停任务创建浏览器通知，点击通知会打开对应 Thread；通知只带状态摘要，不带工具参数或网页内容。
 
@@ -133,7 +135,7 @@ type ApprovalDecision =
 | 层         | 机制                                                                                          | 兜底性质                                                         |
 | ---------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
 | 1 提示词   | 网页内容定界块（每次调用随机 nonce，内容中仿冒的 fence 标记被去牙化）+ "数据非指令"声明       | 软防御 + 结构防伪（nonce 借鉴 agent-browser content boundaries） |
-| 2 敏感站点 | 敏感站点列表与目的地归因                                                                    | 三种权限模式都不能在这些站点执行写操作                           |
+| 2 敏感站点 | 敏感站点列表与目的地归因                                                                      | 三种权限模式都不能在这些站点执行写操作                           |
 | 3 规则 ask | `ask` 裁决规则（含 category:）——用户圈定的高危面（eval/download/…）必过人眼，会话授权不能消音 | 注入诱导的高危动作必过人眼                                       |
 | 4 出域告警 | 敏感 payload 模式匹配 → 强制 ask                                                              | 高亮告警                                                         |
 | 5 审批展示 | 显示完整参数                                                                                  | 用户可以在执行前核对目标与内容                                   |

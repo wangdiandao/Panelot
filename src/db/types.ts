@@ -361,6 +361,8 @@ export interface CommandReceipt {
   clientId: string;
   submissionId: string;
   commandType: string;
+  /** SHA-256 of the command payload, excluding transport identity fields. */
+  requestFingerprint?: string;
   status: 'processing' | 'acknowledged' | 'rejected';
   response?: CommandReceiptResponse;
   createdAt: number;

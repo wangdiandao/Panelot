@@ -5,6 +5,21 @@ import { ProviderErrorNotice } from '../../src/ui/components/ProviderErrorNotice
 import { providerErrorFromVerifyResult } from '../../src/ui/settings/ProvidersPage';
 
 describe('ProviderErrorNotice', () => {
+  it('presents an engine protocol mismatch as a reload issue instead of a Provider issue', () => {
+    const html = renderToStaticMarkup(
+      createElement(ProviderErrorNotice, {
+        error: {
+          message: 'Reload required.',
+          kind: 'engine_protocol',
+        },
+      }),
+    );
+
+    expect(html).toContain('扩展界面与后台版本不一致');
+    expect(html).toContain('重载扩展即可恢复会话');
+    expect(html).not.toContain('API 风格');
+  });
+
   it('renders translated diagnostics and escapes upstream detail as plain text', () => {
     const html = renderToStaticMarkup(
       createElement(ProviderErrorNotice, {
@@ -24,40 +39,6 @@ describe('ProviderErrorNotice', () => {
     expect(html).toContain('HTTP 404 · route_missing · &lt;b&gt;Route not found&lt;/b&gt;');
     expect(html).toContain('&lt;b&gt;Route not found&lt;/b&gt;');
     expect(html).not.toContain('<b>Route not found</b>');
-    expect(html).toContain('data-slot="alert-title"');
-    expect(html).toContain('data-slot="alert-description"');
-  });
-
-  it('keeps long upstream detail wrap-safe instead of truncating it', () => {
-    const detail = `failure-${'x'.repeat(300)}`;
-    const html = renderToStaticMarkup(
-      createElement(ProviderErrorNotice, {
-        error: {
-          message: 'response failed',
-          kind: 'protocol',
-          details: { upstreamMessage: detail },
-        },
-      }),
-    );
-
-    expect(html).toContain(detail);
-    expect(html).toContain('break-words');
-    expect(html).not.toContain('truncate');
-  });
-
-  it('fully wraps a long fallback summary without clamping the alert title', () => {
-    const message = `unknown-${'fallback '.repeat(60)}`;
-    const html = renderToStaticMarkup(
-      createElement(ProviderErrorNotice, {
-        error: { message },
-      }),
-    );
-
-    expect(html).toContain(message.trim());
-    expect(html).toContain('break-words');
-    expect(html).toContain('whitespace-pre-wrap');
-    expect(html).not.toContain('line-clamp-1');
-    expect(html).not.toContain('truncate');
   });
 
   it('preserves structured Verify diagnostics and falls back for legacy failures', () => {

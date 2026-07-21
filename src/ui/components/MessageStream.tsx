@@ -421,7 +421,7 @@ export function MessageStream({
         itemContent={(_, row) => (
           <div
             className={cn(
-              'mx-auto w-full px-4',
+              'mx-auto w-full min-w-0 px-3 sm:px-4',
               row.kind === 'user' && 'pb-2 pt-5',
               row.kind === 'assistant' && 'pb-5 pt-2',
               row.kind === 'notice' && 'py-2',

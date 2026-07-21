@@ -20,6 +20,13 @@ export interface AppendNodeInput {
   ts?: number;
 }
 
+export interface DeleteThreadCommandIdentity {
+  clientId: string;
+  submissionId: string;
+  commandType: 'thread.delete';
+  requestFingerprint?: string;
+}
+
 export function createThreadMeta(partial: Partial<ThreadMeta> = {}, now = Date.now()): ThreadMeta {
   return {
     id: partial.id ?? crypto.randomUUID(),
@@ -84,15 +91,48 @@ export class ThreadTree {
     });
   }
 
-  async deleteThread(threadId: string): Promise<void> {
-    await this.updateThread(threadId, { deleting: true });
+  async deleteThread(threadId: string, command?: DeleteThreadCommandIdentity): Promise<void> {
     await this.db.transaction(
       'rw',
-      [this.db.nodes, this.db.attachments, this.db.threads],
+      [
+        this.db.nodes,
+        this.db.attachments,
+        this.db.runs,
+        this.db.approvals,
+        this.db.interactions,
+        this.db.threads,
+        this.db.commandReceipts,
+      ],
       async () => {
+        const thread = await this.db.threads.get(threadId);
+        if (!thread) throw new Error(`thread ${threadId} not found`);
         await this.db.nodes.where('threadId').equals(threadId).delete();
         await this.db.attachments.where('threadId').equals(threadId).delete();
+        await this.db.runs.where('threadId').equals(threadId).delete();
+        await this.db.approvals.where('threadId').equals(threadId).delete();
+        await this.db.interactions.where('threadId').equals(threadId).delete();
         await this.db.threads.delete(threadId);
+        if (command) {
+          const receiptId = `${command.clientId}\u0000${command.submissionId}`;
+          const receipt = await this.db.commandReceipts.get(receiptId);
+          if (!receipt || receipt.status !== 'processing') {
+            throw new Error(`processing command receipt not found: ${receiptId}`);
+          }
+          if (receipt.commandType !== command.commandType) {
+            throw new Error(
+              `Command receipt type mismatch: expected ${receipt.commandType}, received ${command.commandType}`,
+            );
+          }
+          if (receipt.requestFingerprint !== command.requestFingerprint) {
+            throw new Error('Command receipt payload fingerprint mismatch');
+          }
+          await this.db.commandReceipts.put({
+            ...receipt,
+            status: 'acknowledged',
+            response: { type: 'command.ack', threadId },
+            updatedAt: Date.now(),
+          });
+        }
       },
     );
   }

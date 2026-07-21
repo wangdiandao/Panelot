@@ -205,6 +205,11 @@ export const SettingsStore = {
     get: () => storageGet<{ connectionId: string; modelId: string } | null>('last_model', null),
     set: (v: { connectionId: string; modelId: string } | null) => storageSet('last_model', v),
   },
+  /** Last real thread selected in the side panel, retained across browser restarts. */
+  lastSidePanelThread: {
+    get: () => storageGet<string | null>('last_side_panel_thread', null),
+    set: (threadId: string) => storageSet('last_side_panel_thread', threadId),
+  },
   /** Per-thread param overrides layer onto preset params (docs/03 §1.4). */
   threadParams: {
     get: (threadId: string) => storageGet<GenParams>(`thread_params:${threadId}`, {}),

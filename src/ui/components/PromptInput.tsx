@@ -16,7 +16,7 @@
  * [+ attach] | divider | pill strip … [send/stop circle].
  */
 
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { ArrowUp, FileText, Paperclip, Plus, Sparkles, Square, Upload, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from './ui/badge';
@@ -101,6 +101,34 @@ interface Props {
   onSelectPolicy?: (tier: PermissionTier) => void;
   /** Extra slash commands supplied by the host page (e.g. /clear). */
   builtinCommands?: BuiltinCommand[];
+  /** Controls density and the maximum draft height for each conversation surface. */
+  surface?: 'page' | 'panel';
+}
+
+export function composerMaxHeight(surface: 'page' | 'panel', viewportHeight: number): number {
+  return Math.min(
+    surface === 'panel' ? 256 : 320,
+    viewportHeight * (surface === 'panel' ? 0.42 : 0.45),
+  );
+}
+
+export function resizeTextareaToContent(
+  textarea: HTMLTextAreaElement,
+  maxHeightOverride?: number,
+): void {
+  const styles = getComputedStyle(textarea);
+  const parsedMinHeight = Number.parseFloat(styles.minHeight);
+  const parsedMaxHeight = Number.parseFloat(styles.maxHeight);
+  const minHeight = Number.isFinite(parsedMinHeight) ? parsedMinHeight : 0;
+  const maxHeight =
+    maxHeightOverride ??
+    (Number.isFinite(parsedMaxHeight) ? parsedMaxHeight : Number.POSITIVE_INFINITY);
+
+  textarea.style.height = '0px';
+  const contentHeight = textarea.scrollHeight;
+  const nextHeight = Math.max(minHeight, Math.min(contentHeight, maxHeight));
+  textarea.style.height = `${nextHeight}px`;
+  textarea.style.overflowY = contentHeight > nextHeight ? 'auto' : 'hidden';
 }
 
 export function PromptInput({
@@ -127,6 +155,7 @@ export function PromptInput({
   permissionPolicy,
   onSelectPolicy,
   builtinCommands = [],
+  surface = 'page',
 }: Props) {
   const [innerText, setInnerText] = useState('');
   const controlled = draft !== undefined;
@@ -139,7 +168,6 @@ export function PromptInput({
   const [trigger, setTrigger] = useState<TriggerState | null>(null);
   const [variableForm, setVariableForm] = useState<SkillCommand | null>(null);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
-  const [focused, setFocused] = useState(false);
   const innerRef = useRef<HTMLTextAreaElement>(null);
   const taRef = textareaRef ?? innerRef;
   const menuRef = useRef<TriggerMenuHandle>(null);
@@ -163,6 +191,37 @@ export function PromptInput({
       blurTimer.current = null;
     };
   }, []);
+
+  useLayoutEffect(() => {
+    const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+    if (taRef.current) {
+      resizeTextareaToContent(taRef.current, composerMaxHeight(surface, viewportHeight));
+    }
+  }, [surface, taRef, text]);
+
+  useEffect(() => {
+    const textarea = taRef.current;
+    if (!textarea || typeof ResizeObserver === 'undefined') return;
+    const resize = () => {
+      const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+      resizeTextareaToContent(textarea, composerMaxHeight(surface, viewportHeight));
+    };
+    let previousWidth = textarea.getBoundingClientRect().width;
+    const observer = new ResizeObserver(([entry]) => {
+      const width = entry?.contentRect.width ?? textarea.getBoundingClientRect().width;
+      if (width === previousWidth) return;
+      previousWidth = width;
+      resize();
+    });
+    observer.observe(textarea);
+    window.addEventListener('resize', resize);
+    window.visualViewport?.addEventListener('resize', resize);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', resize);
+      window.visualViewport?.removeEventListener('resize', resize);
+    };
+  }, [surface, taRef]);
 
   const showSteerHint = (message: string) => {
     if (!mounted.current) return;
@@ -353,19 +412,17 @@ export function PromptInput({
     });
   };
 
-  const rows = text.split('\n').length;
-  // LibreChat collapse-mask: long unfocused drafts shrink under a gradient
-  // fade instead of eating the viewport; focus restores full height.
-  const collapsed = !focused && rows > 3;
-
   return (
-    <div className="px-4 pb-4 pt-1">
+    <div
+      data-surface={surface}
+      className={cn('min-w-0 pb-3 pt-2 sm:px-4 sm:pb-4', surface === 'panel' ? 'px-3' : 'px-4')}
+    >
       {steerHint && <div className="mb-1.5 px-1 text-[11px] text-info">{steerHint}</div>}
 
       <InputGroup
         data-disabled={disabled || undefined}
         className={cn(
-          'h-auto flex-col rounded-3xl bg-muted px-2 py-1.5 shadow-soft',
+          'h-auto min-w-0 flex-col rounded-3xl bg-muted px-2 py-1.5 shadow-soft',
           disabled && 'opacity-70',
           // Steerable running turn: dashed indigo border — a shape-channel
           // mode signal (Enter now steers instead of sending).
@@ -382,9 +439,9 @@ export function PromptInput({
           onClose={() => setTrigger(null)}
         />
         {contextChips.length > 0 && (
-          <div className="flex flex-wrap gap-1 px-2 pb-1.5 pt-1">
+          <div className="flex min-w-0 flex-wrap gap-1 px-2 pb-1.5 pt-1">
             {contextChips.map((chip, i) => (
-              <Badge key={i} variant="secondary" className="max-w-full pr-0.5">
+              <Badge key={i} variant="secondary" className="min-w-0 max-w-full pr-0.5">
                 <Paperclip />
                 <span className="truncate">{chip.label}</span>
                 {chip.approxTokens !== undefined && (
@@ -422,10 +479,8 @@ export function PromptInput({
           onFocus={() => {
             if (blurTimer.current) clearTimeout(blurTimer.current);
             blurTimer.current = null;
-            setFocused(true);
           }}
           onBlur={() => {
-            setFocused(false);
             if (blurTimer.current) clearTimeout(blurTimer.current);
             blurTimer.current = setTimeout(() => {
               blurTimer.current = null;
@@ -440,16 +495,14 @@ export function PromptInput({
                 ? t('input.running')
                 : t('input.placeholder')
           }
-          rows={collapsed ? 3 : Math.min(8, Math.max(1, rows))}
-          style={
-            collapsed
-              ? { maskImage: 'linear-gradient(to bottom, black 55%, transparent 95%)' }
-              : undefined
-          }
-          className="max-h-[45vh] min-h-9 py-2"
+          rows={1}
+          className={cn(
+            'min-h-11 overflow-y-hidden py-2 [overflow-wrap:anywhere]',
+            surface === 'panel' ? 'max-h-[min(42dvh,16rem)]' : 'max-h-[min(45dvh,20rem)]',
+          )}
         />
         {/* Toolbar: [+ attach] | divider | pill strip … [primary circle] */}
-        <InputGroupAddon align="block-end" className="gap-1 px-1 pb-0 pt-0.5">
+        <InputGroupAddon align="block-end" className="min-w-0 gap-1 px-1 pb-0 pt-0.5">
           {onAttachContext && (
             <>
               <DropdownMenu
@@ -490,7 +543,7 @@ export function PromptInput({
                         <DropdownMenuSubTrigger>
                           <FileText data-icon="inline-start" /> {t('input.attachPage')}
                         </DropdownMenuSubTrigger>
-                        <DropdownMenuSubContent className="max-h-64 w-64 overflow-y-auto">
+                        <DropdownMenuSubContent className="max-h-64 w-[min(16rem,calc(100vw-1rem))] overflow-y-auto">
                           <DropdownMenuGroup>
                             {menuTabs === null ? (
                               <DropdownMenuLabel className="text-[12px] font-normal text-faint-foreground">
@@ -525,7 +578,7 @@ export function PromptInput({
                         <DropdownMenuSubTrigger>
                           <Sparkles /> {t('input.skills')}
                         </DropdownMenuSubTrigger>
-                        <DropdownMenuSubContent className="max-h-64 w-56 overflow-y-auto">
+                        <DropdownMenuSubContent className="max-h-64 w-[min(14rem,calc(100vw-1rem))] overflow-y-auto">
                           <DropdownMenuGroup>
                             {menuSkills === null ? (
                               <DropdownMenuLabel className="text-[12px] font-normal text-faint-foreground">
@@ -579,7 +632,7 @@ export function PromptInput({
               <Separator orientation="vertical" className="mx-0.5 h-4" />
             </>
           )}
-          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none]">
+          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto overscroll-x-contain [scrollbar-width:none]">
             {onSelectPolicy && (
               <PermissionSwitch value={permissionPolicy} onSelect={onSelectPolicy} />
             )}

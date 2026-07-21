@@ -39,6 +39,8 @@ import type { ThreadMeta } from '../../src/db/types';
 import { cn } from '../../src/ui/lib/utils';
 import { handoffMenuCloseToApproval } from '../../src/ui/focusHandoff';
 import { openFullPageChat } from '../../src/ui/openFullPageChat';
+import { SettingsStore } from '../../src/settings/store';
+import { selectInitialSidePanelThread } from '../../src/ui/sidePanelSession';
 
 const db = new PanelotDB();
 const SettingsModal = lazy(() =>
@@ -104,19 +106,30 @@ export function App() {
       });
 
   useEffect(() => {
-    void refreshThreads().then(() => {
-      const live = session.store.getState().threadId;
-      void db.threads
+    let cancelled = false;
+    void Promise.all([
+      refreshThreads(),
+      SettingsStore.lastSidePanelThread.get(),
+      db.threads
         .orderBy('updatedAt')
         .reverse()
         .filter((t) => !t.deleting && !t.archived && t.leafId !== null)
-        .first()
-        .then((recent) => {
-          if (recent && !live) session.openThread(recent.id);
-          else if (!recent && !live) session.startDraft();
-        });
+        .first(),
+    ]).then(async ([, lastThreadId, recent]) => {
+      const lastSelected = lastThreadId ? await db.threads.get(lastThreadId) : undefined;
+      if (cancelled || session.store.getState().threadId) return;
+      const initialThread = selectInitialSidePanelThread(lastSelected, recent);
+      if (initialThread) session.openThread(initialThread.id);
+      else session.startDraft();
     });
+    return () => {
+      cancelled = true;
+    };
   }, [session]);
+
+  useEffect(() => {
+    if (state.threadId) void SettingsStore.lastSidePanelThread.set(state.threadId);
+  }, [state.threadId]);
 
   // Keep the dropdown list in sync with title generation / new turns.
   useEffect(
@@ -156,8 +169,8 @@ export function App() {
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="flex h-screen flex-col bg-background text-foreground">
-        <header className="flex items-center gap-1 border-b border-border-soft bg-card px-2 py-1.5">
+      <div className="flex h-dvh min-h-0 min-w-0 flex-col overflow-hidden bg-background text-foreground">
+        <header className="flex h-12 shrink-0 items-center gap-1 border-b border-border-soft bg-card px-3">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="sm" className="min-w-0 flex-1 justify-start">
@@ -197,9 +210,9 @@ export function App() {
         </header>
 
         {currentPage && !staged.some((c) => c.kind === 'page') && (
-          <Alert role="status">
+          <Alert role="status" className="mx-3 mt-3 w-auto min-w-0 shrink-0">
             <Paperclip />
-            <AlertDescription className="truncate">{currentPage.title}</AlertDescription>
+            <AlertDescription className="min-w-0 truncate">{currentPage.title}</AlertDescription>
             <AlertAction>
               <Button variant="outline" size="xs" onClick={() => void attachPage()}>
                 {t('app.attachPage')}
@@ -208,7 +221,7 @@ export function App() {
           </Alert>
         )}
 
-        <div className="min-h-0 flex-1">
+        <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
           <ThreadView
             session={session}
             providerConfigured={providerConfigured}
@@ -227,7 +240,7 @@ export function App() {
               })
             }
           />
-        </div>
+        </main>
 
         {settingsOpen && (
           <Suspense fallback={null}>

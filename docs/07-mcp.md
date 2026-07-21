@@ -44,9 +44,9 @@ interface McpServerConfig {
 
 设置页支持粘贴 JSON 导入（兼容 Claude Code `mcpServers` 与 Cursor 配置片段）、连接/断开、逐工具启停、OAuth 授权和删除。Provider/MCP/page origin 统一经 `HostPermissionBroker`；缺少 host permission 时先形成审批，浏览器权限请求由用户点击触发。
 
-后台启动只连接 `enabled && connectOnStartup` 的服务器；其它 enabled 服务器在首次列能力或调用时懒连接。storage 变化会 reconcile 已连接会话。
+后台启动只连接 `enabled && connectOnStartup` 的服务器；其它 enabled 服务器在首次列能力或调用时懒连接。storage 变化会 reconcile 已连接会话；URL 全路径或认证绑定变化时会先通过 disconnect barrier 关闭旧 client，再按 `connectOnStartup` 恢复连接或懒连接语义。候选 client 在握手后还会复验当前配置，不会把漂移的会话提交为 ready。
 
-同一 server 的并发连接请求共享一个进行中的 attempt；connect、disconnect、reconnect 按 server 串行，disconnect 形成屏障，后续 connect 不会错误复用屏障前的 attempt。候选 client 只有在完整握手后才进入 ready map，失败或断开会关闭候选并移除 runtime listener。offscreen worker 返回的 envelope、catalog、tool result、prompt 和 resource 均在写入目录或返回调用方前做运行时校验，畸形 changed event 不污染已有目录。OAuth DCR 返回的 `client_id` 在持久化和授权前必须通过对象、非空字符串与长度校验。
+同一 server 的并发连接请求共享一个进行中的 attempt；connect、disconnect、reconnect 按 server 串行，disconnect 形成屏障，后续 connect 不会错误复用屏障前的 attempt。候选 client 只有在完整握手后才进入 ready map，失败或断开会关闭候选并移除 runtime listener。background 与 offscreen 之间除 `serverId` 外还有每个 client 实例唯一的 `connectionId`；热重连或两个 background 实例交叠时，旧实例的 changed/call/close 不能读取、调用或关闭新会话，握手较晚完成的过期候选也不能覆盖当前 owner。offscreen worker 返回的 envelope、catalog、tool result、prompt 和 resource 均在写入目录或返回调用方前做运行时校验，畸形 changed event 不污染已有目录。OAuth DCR 返回的 `client_id` 在持久化和授权前必须通过对象、非空字符串与长度校验。
 
 ## 3. OAuth 2.1 时序
 
@@ -94,9 +94,9 @@ sequenceDiagram
 | Tools                            | 已接入 `AgentTool`，name = `mcp__{serverId}__{tool}` | 当前没有服务器可信配置，所有远程工具均以 effects:'write' / never-retry 注册并进入写工具审批策略；`annotations.readOnlyHint` 等服务器自报 annotation 只作展示，不能降低审批或重试风险。原始 inputSchema 通过 `AgentTool.jsonSchema` 原样送达 Provider，运行时保留宽松解析并由 server 最终校验 |
 | Prompts                          | 已接入 `/server:prompt` 与参数表单                   | manager 调用 `prompts/get`，返回内容作为不可信 ContextBlock 附加到用户消息                                                                                                                                                                                                                   |
 | Resources                        | 已接入 `@` 搜索与读取                                | `resources/list` 形成候选；选择后 `readResource`，内容随机定界且标记 MCP provenance                                                                                                                                                                                                          |
-| notifications/tools/list_changed | 已监听                                               | offscreen Client 刷新 catalog 并通知 background 重建工具注册表                                                                                                                                                                                                                               |
+| notifications/tools/list_changed | 已监听                                               | offscreen Client 用刷新代次提交 catalog 并通知 background 重建工具注册表；并发刷新只有最新一代可提交，某一类别临时失败时保留该类别最后一次有效目录，不把网络抖动解释为服务器删除全部能力                                                                                                     |
 
-工具调用超时 60s；结果按 05 §7 同样的体积规范截断。
+工具调用默认超时 60s；Run interrupt/abort 会沿 AgentTool → background worker client → offscreen SDK 的同一 `operationId` 取消请求。offscreen worker 会用短期、有界且按连接定界的取消记录覆盖 cancel 先于 call admission 到达的并发窗口；排队等待 Elicitation 上下文的调用若先被取消，也不会在前序调用结束后重新派发。结果按 05 §7 同样的体积规范截断。
 
 ## 5. 健康与调试
 

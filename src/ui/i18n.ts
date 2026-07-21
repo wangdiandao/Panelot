@@ -225,6 +225,10 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
     'zh-CN': '端点返回了不兼容的响应',
     en: 'The endpoint returned an incompatible response',
   },
+  'error.engineProtocol': {
+    'zh-CN': '扩展界面与后台版本不一致',
+    en: 'The extension UI and background are out of sync',
+  },
   'error.reason.invalid_key': {
     'zh-CN': 'API Key 无效或已过期',
     en: 'API key is invalid or expired',
@@ -301,6 +305,15 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   'error.guidance.protocol': {
     'zh-CN': '检查连接的 API 风格和兼容性设置。',
     en: 'Check the connection API style and compatibility settings.',
+  },
+  'error.guidance.engineProtocol': {
+    'zh-CN': '重载扩展即可恢复会话；现有对话数据不会被修改。',
+    en: 'Reload the extension to restore the chat; existing chat data will not be changed.',
+  },
+  'error.reloadExtension': { 'zh-CN': '重载扩展', en: 'Reload extension' },
+  'input.reloadRequired': {
+    'zh-CN': '请重载扩展后继续',
+    en: 'Reload the extension to continue',
   },
 
   // Shortcut labels (registry-driven help sheet)

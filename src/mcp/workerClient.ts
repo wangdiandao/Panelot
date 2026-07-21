@@ -1,4 +1,5 @@
 import type { McpPrompt, McpResource, McpTool } from './client';
+import { validateCrossContextValueSize } from '../messaging/resourceLimits';
 import { ensureMcpWorkerDocument } from './offscreenWorker';
 
 interface McpCatalog {
@@ -8,6 +9,14 @@ interface McpCatalog {
 }
 
 const MAX_CATALOG_ENTRIES = 10_000;
+const MCP_WORKER_VALUE_LIMITS = {
+  maxDepth: 64,
+  maxNodes: 100_000,
+  maxArrayLength: MAX_CATALOG_ENTRIES,
+  maxObjectKeys: 10_000,
+  maxStringCodeUnits: 64 * 1_024 * 1_024,
+  maxBinaryBytes: 64 * 1_024 * 1_024,
+} as const;
 
 interface WorkerSuccessResponse {
   ok: true;
@@ -19,10 +28,15 @@ export class McpWorkerClient {
   tools: McpTool[] = [];
   prompts: McpPrompt[] = [];
   resources: McpResource[] = [];
+  private readonly connectionId = crypto.randomUUID();
 
   private readonly listener = (message: unknown) => {
     if (!isRecord(message)) return;
-    if (message.type !== 'panelot.mcpWorker.changed' || message.serverId !== this.serverId) {
+    if (
+      message.type !== 'panelot.mcpWorker.changed' ||
+      message.serverId !== this.serverId ||
+      message.connectionId !== this.connectionId
+    ) {
       return;
     }
     let catalog: McpCatalog;
@@ -64,14 +78,31 @@ export class McpWorkerClient {
     name: string,
     args: unknown,
     context?: { threadId: string; itemId: string },
+    signal?: AbortSignal,
   ): Promise<{ content: { type: string; text?: string }[]; isError?: boolean }> {
-    const response = await this.request({
-      type: 'panelot.mcpWorker.callTool',
-      serverId: this.serverId,
-      name,
-      args,
-      context,
-    });
+    if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+    const operationId = crypto.randomUUID();
+    const response = await abortableRequest(
+      this.request({
+        type: 'panelot.mcpWorker.callTool',
+        serverId: this.serverId,
+        operationId,
+        name,
+        args,
+        context,
+      }),
+      signal,
+      () => {
+        void chrome.runtime
+          .sendMessage({
+            type: 'panelot.mcpWorker.cancel',
+            serverId: this.serverId,
+            connectionId: this.connectionId,
+            operationId,
+          })
+          .catch(() => undefined);
+      },
+    );
     return parseCallToolResult(response.result);
   }
 
@@ -106,11 +137,55 @@ export class McpWorkerClient {
   }
 
   private async request(message: Record<string, unknown>): Promise<WorkerSuccessResponse> {
-    return parseWorkerResponse(await chrome.runtime.sendMessage(message));
+    return parseWorkerResponse(
+      await chrome.runtime.sendMessage({
+        ...message,
+        serverId: this.serverId,
+        connectionId: this.connectionId,
+      }),
+    );
   }
 }
 
+function abortableRequest<T>(
+  request: Promise<T>,
+  signal: AbortSignal | undefined,
+  onAbort: () => void,
+): Promise<T> {
+  if (!signal) return request;
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      cleanup();
+      onAbort();
+      reject(new DOMException('aborted', 'AbortError'));
+    };
+    const cleanup = () => signal.removeEventListener('abort', abort);
+    signal.addEventListener('abort', abort, { once: true });
+    if (signal.aborted) {
+      abort();
+      return;
+    }
+    void request.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error: unknown) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
 function parseWorkerResponse(value: unknown): WorkerSuccessResponse {
+  const budgetIssue = validateCrossContextValueSize(
+    value,
+    'MCP worker response',
+    MCP_WORKER_VALUE_LIMITS,
+    { rejectCycles: true },
+  );
+  if (budgetIssue) throw new Error(budgetIssue);
   if (!isRecord(value) || typeof value.ok !== 'boolean') {
     throw new Error('MCP worker returned an invalid response envelope');
   }
@@ -121,6 +196,13 @@ function parseWorkerResponse(value: unknown): WorkerSuccessResponse {
 }
 
 function parseCatalog(value: unknown): McpCatalog {
+  const budgetIssue = validateCrossContextValueSize(
+    value,
+    'MCP worker catalog',
+    MCP_WORKER_VALUE_LIMITS,
+    { rejectCycles: true },
+  );
+  if (budgetIssue) throw new Error(budgetIssue);
   const catalog = requireRecord(value, 'catalog');
   return {
     tools: requireArray(catalog.tools, 'catalog.tools').map(parseTool),

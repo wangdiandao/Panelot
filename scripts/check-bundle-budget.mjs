@@ -6,8 +6,11 @@ const root = resolve(process.argv[2] ?? 'dist/chrome-mv3');
 const limits = {
   totalJs: 4 * 1024 * 1024,
   eagerJs: 500 * 1024,
-  backgroundEntry: 208 * 1024,
-  backgroundStatic: 384 * 1024,
+  // MV3 service workers forbid dynamic import(), so their runtime-only modules stay in the entry.
+  // The caps include durable recovery, command transactions, bounded protocol admission,
+  // deletion, snapshot admission, and immutable tool/MCP identity checks.
+  backgroundEntry: 230 * 1024,
+  backgroundStatic: 406 * 1024,
 };
 
 async function filesBelow(directory) {
@@ -39,6 +42,25 @@ function staticImportSpecifiers(source) {
       specifiers.push(moduleSpecifier.text);
     }
   }
+  return specifiers;
+}
+
+function dynamicImportSpecifiers(source) {
+  const specifiers = [];
+  const sourceFile = ts.createSourceFile(
+    'bundle.js',
+    source,
+    ts.ScriptTarget.Latest,
+    false,
+    ts.ScriptKind.JS,
+  );
+  const visit = (node) => {
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      specifiers.push(node.arguments[0]?.getText(sourceFile) ?? '(unknown)');
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
   return specifiers;
 }
 
@@ -86,6 +108,18 @@ const backgroundStaticEntries = await Promise.all(
   [...backgroundStaticFiles].map(async (file) => ({ file, bytes: (await stat(file)).size })),
 );
 const backgroundStatic = backgroundStaticEntries.reduce((total, entry) => total + entry.bytes, 0);
+const backgroundStaticSources = await Promise.all(
+  [...backgroundStaticFiles].map(async (file) => ({
+    file,
+    source: await readFile(file, 'utf8'),
+  })),
+);
+const backgroundWindowOnlyPreloadFiles = backgroundStaticSources.filter(
+  ({ source }) => source.includes('vite:preloadError') && source.includes('window.dispatchEvent'),
+);
+const backgroundDynamicImportFiles = backgroundStaticSources
+  .map(({ file, source }) => ({ file, specifiers: dynamicImportSpecifiers(source) }))
+  .filter(({ specifiers }) => specifiers.length > 0);
 
 const eagerByPage = [];
 for (const htmlPath of files.filter(
@@ -122,6 +156,26 @@ for (const [label, actual, limit] of results) {
   console.log(
     `${ok ? 'PASS' : 'FAIL'} ${label}: ${(actual / 1024).toFixed(1)} KiB / ${(limit / 1024).toFixed(1)} KiB`,
   );
+}
+const backgroundModulePreloadSafe = backgroundWindowOnlyPreloadFiles.length === 0;
+failed ||= !backgroundModulePreloadSafe;
+console.log(
+  `${backgroundModulePreloadSafe ? 'PASS' : 'FAIL'} background worker excludes window-only preload runtime`,
+);
+if (!backgroundModulePreloadSafe) {
+  for (const entry of backgroundWindowOnlyPreloadFiles) {
+    console.log(`  ${relative(root, entry.file)}`);
+  }
+}
+const backgroundDynamicImportsSafe = backgroundDynamicImportFiles.length === 0;
+failed ||= !backgroundDynamicImportsSafe;
+console.log(
+  `${backgroundDynamicImportsSafe ? 'PASS' : 'FAIL'} background worker excludes dynamic import()`,
+);
+if (!backgroundDynamicImportsSafe) {
+  for (const entry of backgroundDynamicImportFiles) {
+    console.log(`  ${relative(root, entry.file)}: ${entry.specifiers.join(', ')}`);
+  }
 }
 if (backgroundStatic > limits.backgroundStatic) {
   console.log('INFO largest background static modules:');

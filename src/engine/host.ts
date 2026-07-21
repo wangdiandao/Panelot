@@ -14,7 +14,7 @@
 import { ENGINE_PROTOCOL, ENGINE_SCHEMA_HASH } from '../messaging/protocol';
 import type { AgentEvent, Op, ThreadSnapshot, ThreadStreamCursor } from '../messaging/protocol';
 import type { ConnectionHandler, EngineConnection } from '../messaging/transport';
-import { parseOp } from '../messaging/validation';
+import { compareStreamCursor, parseOp } from '../messaging/validation';
 
 /** Engine business logic consumed by the host. */
 export interface EngineCore {
@@ -69,6 +69,12 @@ class StartupRecoveryError extends Error {
   }
 }
 
+interface SnapshotAdmission {
+  threadId: string;
+  stream: ThreadStreamCursor;
+  bufferedEvents: { event: AgentEvent; stream: ThreadStreamCursor }[];
+}
+
 interface Client {
   conn: EngineConnection;
   subscribedThreadId: string | null;
@@ -82,6 +88,7 @@ interface Client {
     { threadId: string; text: string; reasoning: string; stream: ThreadStreamCursor }
   >;
   flushTimer: ReturnType<typeof setTimeout> | null;
+  snapshotAdmission: SnapshotAdmission | null;
 }
 
 interface QueuedOp {
@@ -182,6 +189,7 @@ export class EngineHost {
       inputTail: Promise.resolve(),
       pendingDeltas: new Map(),
       flushTimer: null,
+      snapshotAdmission: null,
     };
     this.#clients.add(client);
     void this.#ready.catch((error: unknown) => this.#failStartup(client, error));
@@ -233,6 +241,11 @@ export class EngineHost {
     for (const client of this.#clients) {
       if (!client.initialized) continue;
       if (threadId && client.subscribedThreadId !== threadId) continue;
+      const admission = client.snapshotAdmission;
+      if (admission && stamped.stream?.threadId === admission.threadId) {
+        admission.bufferedEvents.push({ event: stamped, stream: stamped.stream });
+        continue;
+      }
       this.#postToClient(client, stamped);
     }
   }
@@ -323,42 +336,42 @@ export class EngineHost {
     client.initialized = true;
     client.clientId = op.clientId;
     let snapshot: ThreadSnapshot | undefined;
+    let admission: Client['snapshotAdmission'] = null;
     if (op.subscribe) {
-      // Subscribe BEFORE the async snapshot build: events broadcast while
-      // getSnapshot awaits IndexedDB (turn.start, live items, thread.updated)
-      // must reach this client, not be dropped as "not subscribed".
+      const previous = client.subscribedThreadId;
       client.subscribedThreadId = op.subscribe.threadId;
+      admission = this.#beginSnapshotAdmission(client, op.subscribe.threadId);
       const snap = await this.#core.getSnapshot(op.subscribe.threadId).catch(() => null);
       if (snap) snapshot = snap;
-      else client.subscribedThreadId = null;
+      else {
+        client.subscribedThreadId = previous;
+        this.#cancelSnapshotAdmission(client, admission);
+      }
     }
-    let stream: ThreadStreamCursor | undefined;
-    if (snapshot && op.subscribe) {
-      stream = this.#nextCursor(op.subscribe.threadId);
-      snapshot = { ...snapshot, stream };
-    }
-    client.conn.post({
+    const stream = snapshot ? admission?.stream : undefined;
+    const initialized: AgentEvent = {
       type: 'initialized',
       submissionId: op.submissionId,
       protocol: ENGINE_PROTOCOL,
       schemaHash: ENGINE_SCHEMA_HASH,
-      snapshot,
+      snapshot: snapshot && stream ? { ...snapshot, stream } : snapshot,
       stream,
-    });
+    };
+    if (admission && snapshot) this.#commitSnapshotAdmission(client, admission, initialized);
+    else client.conn.post(initialized);
   }
 
   async #handleSubscribe(
     client: Client,
     op: Extract<Op, { type: 'thread.subscribe' }>,
   ): Promise<void> {
-    // Same ordering rule as handleInitialize: register the subscription
-    // first so mid-snapshot broadcasts are delivered, then roll back if the
-    // thread turns out not to exist (or the snapshot build fails).
     const previous = client.subscribedThreadId;
     client.subscribedThreadId = op.threadId;
+    const admission = this.#beginSnapshotAdmission(client, op.threadId);
     const snap = await this.#core.getSnapshot(op.threadId).catch(() => null);
     if (!snap) {
       client.subscribedThreadId = previous;
+      this.#cancelSnapshotAdmission(client, admission);
       client.conn.post({
         type: 'error',
         submissionId: op.submissionId,
@@ -368,15 +381,55 @@ export class EngineHost {
       });
       return;
     }
-    const stream = this.#nextCursor(op.threadId);
-    client.conn.post({
+    this.#commitSnapshotAdmission(client, admission, {
       type: 'initialized',
       submissionId: op.submissionId,
       protocol: ENGINE_PROTOCOL,
       schemaHash: ENGINE_SCHEMA_HASH,
-      snapshot: { ...snap, stream },
-      stream,
+      snapshot: { ...snap, stream: admission.stream },
+      stream: admission.stream,
     });
+  }
+
+  #beginSnapshotAdmission(client: Client, threadId: string): SnapshotAdmission {
+    // Finish the previous subscription's coalescing window before changing
+    // streams. New-thread deltas remain raw until the snapshot is admitted.
+    this.#flushDeltas(client);
+    const admission = {
+      threadId,
+      stream: this.#nextCursor(threadId),
+      bufferedEvents: [],
+    };
+    client.snapshotAdmission = admission;
+    return admission;
+  }
+
+  #commitSnapshotAdmission(
+    client: Client,
+    admission: SnapshotAdmission,
+    initialized: Extract<AgentEvent, { type: 'initialized' }>,
+  ): void {
+    client.conn.post(initialized);
+    if (client.snapshotAdmission !== admission) return;
+    client.snapshotAdmission = null;
+    admission.bufferedEvents.sort((left, right) => compareStreamCursor(left.stream, right.stream));
+    for (const buffered of admission.bufferedEvents) {
+      this.#postToClient(client, buffered.event);
+    }
+  }
+
+  #cancelSnapshotAdmission(client: Client, admission: SnapshotAdmission): void {
+    let deleted: SnapshotAdmission['bufferedEvents'][number] | undefined;
+    for (let index = admission.bufferedEvents.length - 1; index >= 0; index--) {
+      const buffered = admission.bufferedEvents[index];
+      if (buffered?.event.type === 'thread.deleted') {
+        deleted = buffered;
+        break;
+      }
+    }
+    if (client.snapshotAdmission === admission) client.snapshotAdmission = null;
+    admission.bufferedEvents.length = 0;
+    if (deleted) this.#postToClient(client, deleted.event);
   }
 
   #enqueue(client: Client, op: Op): void {
@@ -478,7 +531,10 @@ export class EngineHost {
       clearTimeout(client.flushTimer);
       client.flushTimer = null;
     }
-    for (const [itemId, buf] of client.pendingDeltas) {
+    const deltas = [...client.pendingDeltas].sort((left, right) =>
+      compareStreamCursor(left[1].stream, right[1].stream),
+    );
+    for (const [itemId, buf] of deltas) {
       const delta: { text?: string; reasoning?: string } = {};
       if (buf.text) delta.text = buf.text;
       if (buf.reasoning) delta.reasoning = buf.reasoning;
@@ -518,7 +574,7 @@ export class StubEngineCore implements EngineCore {
       type: 'error',
       submissionId: op.submissionId,
       code: 'not_configured',
-      message: 'engine core not implemented yet',
+      message: 'engine core is not configured',
       retryable: false,
     });
   }

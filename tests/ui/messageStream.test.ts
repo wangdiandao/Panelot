@@ -1,8 +1,4 @@
-/**
- * buildRows live-overlay contract: user echo items render immediately, and
- * completed live assistant items stay visible until the snapshot refresh
- * (they used to vanish on item.complete for the rest of a multi-step turn).
- */
+/** Live rows remain visible until the persisted snapshot supersedes them. */
 import { describe, expect, it } from 'vitest';
 import {
   buildRows,

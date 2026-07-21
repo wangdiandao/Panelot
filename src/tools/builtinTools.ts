@@ -5,6 +5,7 @@
 import { schema } from '../agent/schema';
 import type { AnyAgentTool } from '../agent/tool';
 import type { PanelotDB } from '../db/schema';
+import { createArtifact } from './builtinCapabilityRuntime';
 
 // ---------------------------------------------------------------------------
 
@@ -189,9 +190,7 @@ export function createArtifactTool(db: PanelotDB, getThreadId: () => string): An
     resultTrust: 'trusted',
     resultProvenance: 'tool',
     execute: async (_id, params: { filename: string; mime?: string; content: string }) =>
-      import('./builtinCapabilityRuntime').then(({ createArtifact }) =>
-        createArtifact(db, getThreadId(), params),
-      ),
+      createArtifact(db, getThreadId(), params),
   };
 }
 

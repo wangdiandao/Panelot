@@ -1,5 +1,6 @@
 import { allocateEngineStreamEpoch, EngineHost } from '../src/engine/host';
 import { RealEngineCore } from '../src/engine/core';
+import { InteractionAutomation } from '../src/engine/interactionAutomation';
 import { SettingsProviderResolver } from '../src/engine/providerResolver';
 import { PanelotDB } from '../src/db/schema';
 import { ToolRegistry } from '../src/agent/tool';
@@ -432,14 +433,11 @@ function startBackground(
       },
     };
   });
-  const interactionAutomation = import('../src/engine/interactionAutomation').then(
-    ({ InteractionAutomation }) =>
-      new InteractionAutomation(gateway, (interactionId, response) =>
-        core.resolveInteraction(interactionId, response),
-      ),
+  const interactionAutomation = new InteractionAutomation(gateway, (interactionId, response) =>
+    core.resolveInteraction(interactionId, response),
   );
   core.onInteractionResolved = (interactionId) => {
-    void interactionAutomation.then((automation) => automation.clear(interactionId));
+    interactionAutomation.clear(interactionId);
   };
 
   // Rebuild the tool registry when MCP servers connect/disconnect (list_changed).
@@ -498,22 +496,15 @@ function startBackground(
     };
   };
 
-  // run_javascript ships denied by default (docs/05 §3) — seed once.
-  void GatekeeperService.listRules().then((rules) => {
-    if (!rules.some((r) => r.tool === 'run_javascript')) {
-      void GatekeeperService.addRule({
-        tool: 'run_javascript',
-        origin: '*',
-        verdict: 'deny',
-        source: 'user_setting',
-      });
-    }
-  });
+  // Persisted initialization distinguishes an intentional deletion from a
+  // profile that has never received the shipped run_javascript default.
+  const gatekeeperDefaultsReady = GatekeeperService.seedDefaultRules();
 
   const recoveryReady = Promise.all([
     reconciliationReady,
     attachmentCleanupReady,
     mcpStartupReady,
+    gatekeeperDefaultsReady,
     gatekeeperService.ready(),
     gateway.ready(),
   ])
@@ -541,9 +532,7 @@ function startBackground(
     if (ev.type === 'approval.request') {
       notifyThread(ev.threadId, 'approval', ev.approvalId);
     } else if (ev.type === 'interaction.request') {
-      void interactionAutomation.then((automation) =>
-        automation.handle(ev.threadId, ev.interactionId, ev.request),
-      );
+      interactionAutomation.handle(ev.threadId, ev.interactionId, ev.request);
       if (
         ev.request.kind === 'ask_user' ||
         ev.request.kind === 'user_action' ||
@@ -724,7 +713,7 @@ function startBackground(
   chrome.alarms.create('panelot-quota', { periodInMinutes: 15 });
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name.startsWith('panelot-interaction:')) {
-      void interactionAutomation.then((automation) => automation.handleAlarm(alarm.name));
+      interactionAutomation.handleAlarm(alarm.name);
       return;
     }
     if (alarm.name === 'panelot-quota') {

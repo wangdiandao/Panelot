@@ -79,6 +79,7 @@ export class McpManager {
   private clients = new Map<string, McpWorkerClient>();
   private connectAttempts = new Map<string, Promise<void>>();
   private connectionTails = new Map<string, Promise<void>>();
+  private connectionFingerprints = new Map<string, string>();
   private configs = new Map<string, McpServerConfig>();
   private states = new Map<string, McpConnectionState>();
   private pendingPermissionPlans = new Map<string, McpOAuthPermissionRequired>();
@@ -147,6 +148,9 @@ export class McpManager {
     if (!config || !config.enabled) return;
     if (this.clients.has(id)) return;
 
+    const connectionFingerprint = await mcpConnectionFingerprint(config);
+    this.connectionFingerprints.set(id, connectionFingerprint);
+
     this.setState(id, { status: 'connecting' });
     let candidate: McpWorkerClient | undefined;
     try {
@@ -171,11 +175,21 @@ export class McpManager {
         url,
         authorization: await this.authHeaderFor(config.id),
       });
+      const currentConfig = (await this.listServers()).find((server) => server.id === id);
+      if (
+        !currentConfig?.enabled ||
+        (await mcpConnectionFingerprint(currentConfig)) !== connectionFingerprint
+      ) {
+        throw new Error('MCP server configuration changed while connecting');
+      }
       this.clients.set(id, client);
       this.setState(id, { status: 'ready', toolCount: client.tools.length });
       this.onToolsChanged();
     } catch (e) {
       if (candidate) await candidate.close().catch(() => undefined);
+      if (!this.clients.has(id) && this.connectionFingerprints.get(id) === connectionFingerprint) {
+        this.connectionFingerprints.delete(id);
+      }
       const permissionRequired = permissionRequiredFromError(e);
       this.setState(id, {
         status: 'error',
@@ -195,6 +209,7 @@ export class McpManager {
       async () => {
         const client = this.clients.get(id);
         this.clients.delete(id);
+        this.connectionFingerprints.delete(id);
         try {
           await client?.close();
         } finally {
@@ -227,11 +242,18 @@ export class McpManager {
 
   private async reconcileStorage(): Promise<void> {
     const servers = await this.listServers();
-    const activeIds = new Set(
-      servers.filter((server) => server.enabled).map((server) => server.id),
+    const activeServers = new Map(
+      servers.filter((server) => server.enabled).map((server) => [server.id, server]),
     );
+    const staleIds = new Set<string>();
+    for (const [id, fingerprint] of this.connectionFingerprints) {
+      const server = activeServers.get(id);
+      if (!server || (await mcpConnectionFingerprint(server)) !== fingerprint) staleIds.add(id);
+    }
     await Promise.all(
-      [...this.clients.keys()].filter((id) => !activeIds.has(id)).map((id) => this.disconnect(id)),
+      [...new Set([...this.clients.keys(), ...staleIds])]
+        .filter((id) => !activeServers.has(id) || staleIds.has(id))
+        .map((id) => this.disconnect(id)),
     );
     await this.ensureConnected('startup');
     this.onToolsChanged();
@@ -673,11 +695,12 @@ export class McpManager {
             origin: new URL(await this.serverUrl(serverId)).origin,
             serverId,
           }),
-          execute: async (itemId, params) => {
+          execute: async (itemId, params, signal) => {
             const result = await client.callTool(
               tool.name,
               params,
               getThreadId ? { threadId: getThreadId(), itemId } : undefined,
+              signal,
             );
             const text = result.content.map((c) => c.text ?? '').join('\n');
             if (result.isError) throw new Error(text || 'MCP tool error');
@@ -858,6 +881,24 @@ async function permissionPlanDigest(value: unknown): Promise<string> {
     await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(value))),
   );
   return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function mcpConnectionFingerprint(config: McpServerConfig): Promise<string> {
+  const auth =
+    config.auth.kind === 'none'
+      ? { kind: 'none' }
+      : config.auth.kind === 'bearer'
+        ? { kind: 'bearer', credential: config.auth.token }
+        : {
+            kind: 'oauth',
+            clientId: config.auth.clientId,
+            scopes: config.auth.scopes ? [...config.auth.scopes].sort() : undefined,
+            binding: config.auth.binding,
+          };
+  return permissionPlanDigest({
+    url: normalizeEndpointUrl(config.url, { label: `MCP 服务器 ${config.name} 的 URL` }),
+    auth,
+  });
 }
 
 function discoveryPermissionFingerprint(

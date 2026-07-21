@@ -7,12 +7,12 @@ import { toast } from 'sonner';
 
 vi.mock('../../src/ui/pageContext', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/ui/pageContext')>()),
-  listAttachableTabs: vi.fn(async () => []),
+  listAttachableTabs: vi.fn(() => new Promise<never>(() => {})),
 }));
 
 vi.mock('../../src/ui/components/composerTriggers', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/ui/components/composerTriggers')>()),
-  listSkillCommands: vi.fn(async () => []),
+  listSkillCommands: vi.fn(() => new Promise<never>(() => {})),
 }));
 
 import { AttachmentRepository } from '../../src/data/attachments';
@@ -50,8 +50,10 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  session.stop();
-  await act(async () => root.unmount());
+  await act(async () => {
+    session.stop();
+    root.unmount();
+  });
   container.remove();
   setLang('en');
   vi.restoreAllMocks();

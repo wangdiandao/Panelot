@@ -35,9 +35,10 @@ async function runTurn(thread: Thread, input: UserInput, overrides?: TurnOverrid
     if (toolCalls.length === 0 && !hasPendingSteerOverlay()) break;
 
     for (const call of toolCalls) {
-      appendNode(tool_call);                          // 校验/审批失败也留下审计卡片
+      prepareStableNode(tool_call);                   // 先构造稳定身份，尚不暴露半完成状态
       const verdict = await gatekeeper.check(call, thread);      // 06 章
       if (verdict === 'ask') {
+        transaction(tool_call + ApprovalRecord + Run.pendingTool);
         const decision = await requestApproval(call); // 双向 RPC，挂起等待
         transaction(approval_decision + ApprovalRecord + Run.revision);
       }
@@ -65,11 +66,11 @@ async function runTurn(thread: Thread, input: UserInput, overrides?: TurnOverrid
 
 ## 3. Steering / Queueing / Interrupt 三通路
 
-| 通路               | Op                           | 语义                                                                                                                                                  | 约束                                                                                                                                           |
-| ------------------ | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| 通路               | Op                           | 语义                                                                                                                                                                                 | 约束                                                                                                                                           |
+| ------------------ | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | **插话 steer**     | `turn.steer{expectedTurnId}` | 注入**当前轮**：先把 stable-ID steer 写入 Run 的 durable pending 集合（附件 refs 同事务），持久化成功后 ACK；下一次 provider 请求的 cutoff 再将其物化为 `user_message{steered:true}` | `expectedTurnId` 不匹配或已 interrupt/逻辑结束时报错；持久化失败只 reject、不 ACK；协议保留 non-steerable turnKind，但当前标题生成不走 runTurn |
-| **排队 enqueue**   | `turn.enqueue`               | 当前轮跑完后作为**下一轮**执行                                                                                                                        | 队列有界（8 条），UI 显示 `queue.updated`                                                                                                      |
-| **打断 interrupt** | `turn.interrupt`             | 立即停止当前轮                                                                                                                                        | 总是允许                                                                                                                                       |
+| **排队 enqueue**   | `turn.enqueue`               | 当前轮跑完后作为**下一轮**执行                                                                                                                                                       | 队列有界（8 条），UI 显示 `queue.updated`                                                                                                      |
+| **打断 interrupt** | `turn.interrupt`             | 立即停止当前轮                                                                                                                                                                       | 总是允许                                                                                                                                       |
 
 UI 交互映射（见 09）：Agent 运行中输入框可继续打字，`Enter` = steer（不可插话时自动降级为 enqueue 并提示），`Shift+Alt+Enter` = 显式排队，`Esc` = interrupt。
 
@@ -89,7 +90,7 @@ interface AgentTool<P = unknown, D = unknown> {
   name: string; // 'browser_click'
   label: string; // UI 显示："点击元素"
   description: string; // 给 LLM（文案见 10 §3）
-  parameters: z.ZodType<P>; // zod schema → 同时生成 JSON Schema 发给 LLM
+  parameters: RuntimeSchema<P>; // 运行时校验；注册时生成同源 JSON Schema 发给 LLM
   inputSchema?: object; // MCP 等远端工具的原始 JSON Schema，优先原样发给 Provider
   level: 'L0' | 'L1' | 'L2' | 'mcp' | 'builtin';
   effects: 'read' | 'write'; // Gatekeeper 默认裁决的依据（06）
@@ -113,6 +114,10 @@ interface ToolResult<D> {
 - 参数校验：LLM 给的原始参数先过 zod；失败不 throw 给用户，而是把校验错误作为 tool_result 回给模型自纠。
 - `onUpdate`：长工具（等待页面加载、滚动抓取）推进度 → `item.delta{toolProgress}`。
 
+`ToolRegistry.register()` 是工具能力元数据的统一边界。注册时会校验名称、展示文案、交互准备器与 execution binding，并把 runtime schema、Provider JSON Schema、`level/effects/recovery`、结果信任来源和执行绑定规范化为同一个只读 capability descriptor。`mcp` level 必须使用带 server、endpoint 和 auth 身份的 MCP binding，其余 level 只能使用 local binding，避免远端实现继承 builtin 的可信默认值。未显式声明时，read/write 分别默认 `retry-safe`/`never-retry`；builtin 默认可信且来源为 `tool`，MCP 默认不可信且来源为 `mcp`，L0/L1/L2 默认不可信且来源为 `page`。需要不同语义的工具必须显式覆盖，不能在调用方另写一套默认值。
+
+Provider tool schema 与 `RunEnvironmentSnapshot.toolCatalog` 都从该 descriptor 生成。descriptor、JSON Schema 与 execution binding 会深冻结；工具实例本身不冻结，`execute/resolveTarget/prepareInteraction` 保留原始 `this`。每个快照工具条目的 SHA-256 digest 因而同时覆盖 schema、安全元数据和 execution binding；同名注册会报告现有与新 descriptor 的 level/effect/recovery/binding 摘要。恢复绑定从 Registry 一次取得“冻结实现 + descriptor”的原子代次快照，异步计算 digest 后不会再按名称读取可能已被 MCP 重连替换的实现。历史 v1 快照若只缺少当时由调用方隐式应用的 trust/provenance 默认值，会在原摘要验证通过后补齐相同默认值再比较；其它元数据漂移仍拒绝恢复。
+
 ## 5. 恢复语义
 
 每个 Thread 由 `ThreadActor` 串行调度。Run 使用固定状态机，并持久化运行环境、步骤游标与 `PreparedToolCall`。
@@ -122,10 +127,21 @@ SW 重启后的处理分为四类：
 - 尚未开始且仍为 queued 的 Run 可以首次解析环境；
 - 已开始的 Run 必须通过 `RunEnvironmentSnapshot` 的版本与摘要校验；
 - `waiting_approval` 从 approvals 表恢复；`waiting_interaction` 从 interactions 表恢复并重新展示或重挂 alarm/listener；
+- 恢复后的审批或交互仍独占它的 Thread：在 continuation 被唯一 claim 并完成前，新 turn 只能排队，分支切换、fork 和其它 Run 的 resume 会被拒绝；
 - 已收到响应的普通交互只会 claim 一次并追加可信 `tool_result`。MCP Elicitation 若跨 Worker 中断，远端原调用无法续接，恢复结果会明确要求模型仅在安全时重发；
 - 结果不明的写操作进入 `paused_uncertain`，由用户选择 retry、mark_done 或 fail。模型流中断则进入 `interrupted`。
 
-恢复使用快照中的完整 prompt、Skill 内容、模型参数和 tool catalog。Provider transport、credential reference 形状、MCP endpoint/auth binding，或本地工具 schema 与安全元数据发生漂移时，恢复会被拒绝。同一 credential reference 指向的密文值可以轮换。快照在 clone、摘要和落库前还受总字节数、目录项数、单项体积和嵌套深度限制。
+恢复使用快照中的完整 prompt、Skill 内容、模型参数和 tool catalog。Provider transport、credential reference 形状、MCP endpoint/auth binding，或本地工具 schema 与规范化后的安全元数据发生漂移时，恢复会被拒绝。同一 credential reference 指向的密文值可以轮换。快照在 clone、摘要和落库前还受总字节数、目录项数、单项体积和嵌套深度限制。
+
+### 5.1 命令事务单元
+
+`CommandTransactionContext` 是 engine/db 层的内部事务身份，不进入消息协议，也不携带可变运行时对象。领域仓储用它校验当前 receipt 的 `clientId + submissionId + commandType + requestFingerprint`，并在自己的 Dexie 事务内完成 receipt。Fingerprint 是排除 transport identity 后的 payload 规范编码 SHA-256；receipt 不保存输入正文。重复 submission 直接回放持久终态，payload 漂移则拒绝。
+
+当前原子提交范围包括：Thread 创建、删除、空 fork 和分支选择；Run 入队、队列输入更新与移除；审批决定与交互响应。对应领域记录、Thread/Run revision、审计节点和 ACK 位于同一 Dexie 事务，receipt 写入故障会回滚整个工作单元。对已经终结的审批或交互，相同 payload 可幂等 ACK，不同 payload 则原子提交 `invalid_command` rejection；两者都不会覆盖首次领域结果或追加第二个审计节点。该约束同时适用于 live waiter 正在结算、Worker 重建后的 recovered wait，以及已无内存 waiter 的普通重复响应。
+
+ACK 代表领域决定已持久化，不代表其后所有 continuation 已完成。站点规则应用、恢复 claim、工具派发或模型续跑发生在提交之后；这些步骤失败时保留可恢复的领域状态，不能再为同一 submission 产生冲突的 rejection。Core 统一以 receipt 中实际生效的响应生成终态事件。
+
+idle `turn.submit`/`turn.fork`、`turn.steer` 尚跨越多阶段 admission；`turn.interrupt`、`run.resume` 和 `run.resolveUncertain` 还涉及内存 abort、执行所有权或恢复 continuation。它们暂不伪装成单事务完成：持久化 checkpoint、stable identity 与恢复状态机仍是事实源，后续若继续收束必须先定义“ACK 表示 admission 还是完整 continuation”的协议语义。
 
 ## 6. 时序图
 
@@ -146,16 +162,18 @@ sequenceDiagram
   LLM-->>EN: text delta… + tool_call(browser_click)
   EN-->>UI: item.delta… item.complete(assistant)
   EN-->>UI: item.start(tool_call)
-  EN->>EN: 落库 tool_call（先形成审计卡片）
   EN->>GK: check(browser_click, thread)
   GK-->>EN: 'ask'
+  EN->>EN: 同一事务落库 tool_call + ApprovalRecord + Run.pendingTool
   EN-->>UI: approval.request{完整参数}
   UI->>EN: approval.response{acceptForSite}
-  EN->>EN: 落库 approval_decision + 更新站点规则
+  EN->>EN: 同一事务落库 approval_decision + Run revision + command receipt ACK
+  EN->>EN: 应用站点规则并继续 Run
+  EN-->>UI: 回放 receipt 中已提交的 command.ack
   EN->>GK: dispatch 前复验目标、规则版本与 host permission
   EN->>CS: execute click(ref)
   CS-->>EN: ToolResult{content, details:高亮坐标}
-  EN->>EN: 落库 tool_call + tool_result
+  EN->>EN: 同一事务落库 tool_result + Run 状态
   EN-->>UI: item.complete{details}
   EN->>LLM: 下一轮调用（含 tool_result）
   LLM-->>EN: 纯文本（无工具调用）

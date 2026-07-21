@@ -1,8 +1,12 @@
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PanelotDB } from '../../src/db/schema';
 import { ThreadTree } from '../../src/db/tree';
 import { RunRepository } from '../../src/engine/runRepository';
+import {
+  CommandReceiptRepository,
+  createCommandTransactionContext,
+} from '../../src/engine/commandReceipts';
 
 let db: PanelotDB;
 let runs: RunRepository;
@@ -45,6 +49,89 @@ describe('RunRepository', () => {
     });
   });
 
+  it('commits enqueue with its receipt and rolls the run back if receipt completion fails', async () => {
+    const threadId = await createThread();
+    const command = createCommandTransactionContext({
+      clientId: 'client-a',
+      submissionId: 'atomic-enqueue',
+      commandType: 'turn.enqueue',
+    });
+    const receipts = new CommandReceiptRepository(db, { now: () => now });
+    await receipts.begin(command);
+    vi.spyOn(db.commandReceipts, 'put').mockRejectedValueOnce(
+      new Error('injected receipt write failure'),
+    );
+    const input = {
+      threadId,
+      clientId: command.clientId,
+      submissionId: command.submissionId,
+      input: { text: 'queued atomically' },
+    };
+
+    await expect(runs.enqueue(input, command)).rejects.toThrow(/injected receipt write failure/);
+    expect(await db.runs.count()).toBe(0);
+    expect(await db.commandReceipts.get('client-a\u0000atomic-enqueue')).toMatchObject({
+      status: 'processing',
+    });
+
+    const run = await runs.enqueue(input, command);
+    await expect(receipts.begin(command)).resolves.toMatchObject({
+      kind: 'duplicate',
+      response: { type: 'command.ack', threadId, runId: run.id, revision: 0 },
+    });
+  });
+
+  it('commits queued updates and removals with their receipts', async () => {
+    const threadId = await createThread();
+    const run = await runs.enqueue({
+      threadId,
+      clientId: 'client-a',
+      submissionId: 'queued-run',
+      input: { text: 'original' },
+    });
+    const receipts = new CommandReceiptRepository(db, { now: () => now });
+    const updateCommand = createCommandTransactionContext({
+      clientId: 'client-a',
+      submissionId: 'update-queued-run',
+      commandType: 'queue.update',
+    });
+    await receipts.begin(updateCommand);
+    vi.spyOn(db.commandReceipts, 'put').mockRejectedValueOnce(
+      new Error('injected receipt write failure'),
+    );
+
+    await expect(
+      runs.updateQueued(run.id, { input: { text: 'updated' } }, updateCommand),
+    ).rejects.toThrow(/injected receipt write failure/);
+    expect(await runs.get(run.id)).toMatchObject({
+      input: { text: 'original' },
+      state: 'queued',
+      revision: 0,
+    });
+    expect(await db.commandReceipts.get('client-a\u0000update-queued-run')).toMatchObject({
+      status: 'processing',
+    });
+
+    const updated = await runs.updateQueued(run.id, { input: { text: 'updated' } }, updateCommand);
+    await expect(receipts.begin(updateCommand)).resolves.toMatchObject({
+      kind: 'duplicate',
+      response: { type: 'command.ack', threadId, runId: run.id, revision: updated.revision },
+    });
+
+    const removeCommand = createCommandTransactionContext({
+      clientId: 'client-a',
+      submissionId: 'remove-queued-run',
+      commandType: 'queue.remove',
+    });
+    await receipts.begin(removeCommand);
+    const removed = await runs.removeQueued(run.id, removeCommand);
+    expect(removed).toMatchObject({ state: 'interrupted', revision: updated.revision + 1 });
+    await expect(receipts.begin(removeCommand)).resolves.toMatchObject({
+      kind: 'duplicate',
+      response: { type: 'command.ack', threadId, runId: run.id, revision: removed.revision },
+    });
+  });
+
   it('increments revision on every durable state transition', async () => {
     const threadId = await createThread();
     const run = await runs.enqueue({
@@ -60,6 +147,123 @@ describe('RunRepository', () => {
     expect(preparing.revision).toBe(1);
     expect(streaming.revision).toBe(2);
     await expect(runs.transition(run.id, 'queued')).rejects.toThrow(/streaming_model.*queued/);
+  });
+
+  it('atomically prepares one stable tool call and treats a repeated commit as idempotent', async () => {
+    const threadId = await createThread();
+    const run = await runs.enqueue({
+      threadId,
+      clientId: 'client-a',
+      submissionId: 'prepare-tool-call',
+      input: { text: 'inspect' },
+    });
+    await runs.transition(run.id, 'preparing');
+    await runs.transition(run.id, 'streaming_model');
+    const node = {
+      id: 'tool-call:turn-a:call-a',
+      type: 'tool_call' as const,
+      payload: {
+        itemId: 'call-a',
+        toolName: 'read_page',
+        params: { tabId: 7 },
+        level: 'L1' as const,
+      },
+    };
+    const pendingTool = {
+      itemId: 'call-a',
+      toolName: 'read_page',
+      params: { tabId: 7 },
+      target: { tabId: 7, origin: 'https://example.com' },
+      effect: 'read' as const,
+      recovery: 'retry-safe' as const,
+    };
+
+    const prepared = await runs.prepareToolCall(run.id, node, 'executing_tool', pendingTool);
+    const repeated = await runs.prepareToolCall(run.id, node, 'executing_tool', pendingTool);
+
+    expect(await db.nodes.where('threadId').equals(threadId).toArray()).toHaveLength(1);
+    expect(await db.nodes.get(node.id)).toMatchObject(node);
+    expect(prepared).toMatchObject({ state: 'executing_tool', pendingTool });
+    expect(repeated.revision).toBe(prepared.revision);
+  });
+
+  it('rejects a repeated stable tool call when the complete pendingTool differs', async () => {
+    const threadId = await createThread();
+    const run = await runs.enqueue({
+      threadId,
+      clientId: 'client-a',
+      submissionId: 'prepare-tool-call-collision',
+      input: { text: 'inspect' },
+    });
+    await runs.transition(run.id, 'preparing');
+    await runs.transition(run.id, 'streaming_model');
+    const node = {
+      id: 'tool-call:turn-collision:1:0',
+      type: 'tool_call' as const,
+      payload: {
+        itemId: 'call-collision',
+        toolName: 'read_page',
+        params: { tabId: 7 },
+        level: 'L1' as const,
+      },
+    };
+    const pendingTool = {
+      itemId: 'call-collision',
+      toolName: 'read_page',
+      params: { tabId: 7 },
+      target: { tabId: 7, origin: 'https://example.com' },
+      effect: 'read' as const,
+      recovery: 'retry-safe' as const,
+    };
+    const prepared = await runs.prepareToolCall(run.id, node, 'executing_tool', pendingTool);
+
+    await expect(
+      runs.prepareToolCall(run.id, node, 'executing_tool', {
+        ...pendingTool,
+        target: { tabId: 8, origin: 'https://example.com' },
+      }),
+    ).rejects.toThrow(/pendingTool collision/);
+
+    expect(await db.nodes.where('threadId').equals(threadId).count()).toBe(1);
+    expect(await runs.get(run.id)).toEqual(prepared);
+  });
+
+  it('rolls back the tool_call node when its run transition cannot commit', async () => {
+    const threadId = await createThread();
+    const run = await runs.enqueue({
+      threadId,
+      clientId: 'client-a',
+      submissionId: 'prepare-tool-call-rollback',
+      input: { text: 'inspect' },
+    });
+
+    await expect(
+      runs.prepareToolCall(
+        run.id,
+        {
+          id: 'tool-call:turn-b:call-b',
+          type: 'tool_call',
+          payload: {
+            itemId: 'call-b',
+            toolName: 'read_page',
+            params: {},
+            level: 'L1',
+          },
+        },
+        'executing_tool',
+        {
+          itemId: 'call-b',
+          toolName: 'read_page',
+          params: {},
+          effect: 'read',
+          recovery: 'retry-safe',
+        },
+      ),
+    ).rejects.toThrow(/queued.*executing_tool/);
+
+    expect(await db.nodes.where('threadId').equals(threadId).count()).toBe(0);
+    expect(await runs.get(run.id)).toMatchObject({ state: 'queued' });
+    expect((await runs.get(run.id))?.pendingTool).toBeUndefined();
   });
 
   it('recovers retry-safe work while pausing an uncertain write', async () => {

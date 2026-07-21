@@ -20,6 +20,19 @@ function compactJavaScript(): Plugin {
   };
 }
 
+function workerSafeModulePreload(): Plugin {
+  return {
+    name: 'panelot-worker-safe-module-preload',
+    apply: 'build',
+    enforce: 'post',
+    transform(code, id) {
+      if (!id.endsWith('vite/preload-helper.js')) return null;
+      const workerSafeCode = code.replaceAll('window.dispatchEvent(', 'globalThis.dispatchEvent(');
+      return workerSafeCode === code ? null : { code: workerSafeCode, map: null };
+    },
+  };
+}
+
 // See docs/06-permissions.md for the permission rationale. All host permissions are
 // requested dynamically at runtime (chrome.permissions.request).
 export default defineConfig({
@@ -27,11 +40,12 @@ export default defineConfig({
   srcDir: '.',
   outDir: 'dist',
   vite: () => ({
-    plugins: [tailwindcss(), compactJavaScript()],
-    // Chrome 116+ supports modulepreload natively. Vite's HTML polyfill touches
-    // `document` at module scope and can be pulled into shared MV3 worker chunks.
+    plugins: [tailwindcss(), workerSafeModulePreload(), compactJavaScript()],
+    // Chrome 116+ supports modulepreload natively, so dependency preloading can stay disabled.
+    // Vite still wraps dynamic imports when this is false; the plugin above makes its rejected-
+    // import event work in both Window and ServiceWorkerGlobalScope.
     build: {
-      modulePreload: { polyfill: false },
+      modulePreload: false,
       target: 'chrome116',
     },
     resolve: {

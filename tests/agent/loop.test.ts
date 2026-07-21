@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { PanelotDB } from '../../src/db/schema';
-import { ThreadTree } from '../../src/db/tree';
+import { ThreadTree, type AppendNodeInput } from '../../src/db/tree';
 import { buildSessionContext } from '../../src/db/sessionContext';
 import { runTurn, type GatekeeperCheck, type TurnEnv } from '../../src/agent/loop';
 import { ToolRegistry, type AgentTool } from '../../src/agent/tool';
@@ -173,6 +173,11 @@ describe('agent loop (docs/04 §2)', () => {
         questions: [{ id: 'answer', question: 'Which layout?' }],
       },
       expect.objectContaining({ toolName: 'ask_user' }),
+      expect.objectContaining({
+        id: expect.stringMatching(/^tool-call:.+:1:0$/),
+        type: 'tool_call',
+        payload: expect.objectContaining({ itemId: 'c1', toolName: 'ask_user' }),
+      }),
       expect.any(AbortSignal),
     );
     expect(JSON.stringify(provider.requests[1]?.messages)).toContain('Use the compact layout');
@@ -359,6 +364,87 @@ describe('agent loop (docs/04 §2)', () => {
     expect((resultMsg!.content[0] as { text: string }).text).toBe('echo: one');
   });
 
+  it('persists the tool_call and executing pendingTool through one atomic callback', async () => {
+    const execute = vi.fn(async () => ({ content: [{ type: 'text' as const, text: 'done' }] }));
+    tools.register(makeEchoTool({ execute }));
+    const thread = await tree.createThread({});
+    const appendNodesAndSetRunState = vi.fn<NonNullable<TurnEnv['appendNodesAndSetRunState']>>(
+      async (nodes: readonly AppendNodeInput[]) => {
+        for (const node of nodes) await tree.appendNode(thread.id, node);
+      },
+    );
+    provider.queue(
+      { toolCalls: [{ id: 'call-atomic', name: 'echo', params: { text: 'one' } }] },
+      { streamText: ['finished'] },
+    );
+
+    await runTurn(makeEnv({ turnId: 'turn-atomic', appendNodesAndSetRunState }), thread.id, {
+      text: 'go',
+    }).done;
+
+    const preparedCommit = appendNodesAndSetRunState.mock.calls.find(
+      ([, state]) => state === 'executing_tool',
+    );
+    expect(preparedCommit).toEqual([
+      [
+        {
+          id: 'tool-call:turn-atomic:1:0',
+          type: 'tool_call',
+          payload: {
+            itemId: 'call-atomic',
+            toolName: 'echo',
+            params: { text: 'one' },
+            level: 'builtin',
+          },
+        },
+      ],
+      'executing_tool',
+      {
+        pendingTool: expect.objectContaining({
+          itemId: 'call-atomic',
+          toolName: 'echo',
+          startedAt: expect.any(Number),
+        }),
+      },
+    ]);
+    expect(execute).toHaveBeenCalledOnce();
+    expect(
+      await db.nodes
+        .where('threadId')
+        .equals(thread.id)
+        .filter((node) => node.type === 'tool_call')
+        .count(),
+    ).toBe(1);
+  });
+
+  it('uses the persisted step and batch ordinal when provider call ids repeat', async () => {
+    const execute = vi.fn(async () => ({ content: [{ type: 'text' as const, text: 'done' }] }));
+    tools.register(makeEchoTool({ execute }));
+    const thread = await tree.createThread({});
+    provider.queue(
+      {
+        toolCalls: [
+          { id: 'repeated-call', name: 'echo', params: { text: 'one' } },
+          { id: 'repeated-call', name: 'echo', params: { text: 'two' } },
+        ],
+      },
+      { streamText: ['finished'] },
+    );
+
+    await runTurn(makeEnv({ turnId: 'turn-repeated-id' }), thread.id, { text: 'go' }).done;
+
+    const toolCalls = await db.nodes
+      .where('threadId')
+      .equals(thread.id)
+      .filter((node) => node.type === 'tool_call')
+      .toArray();
+    expect(toolCalls.map((node) => node.id)).toEqual([
+      'tool-call:turn-repeated-id:1:0',
+      'tool-call:turn-repeated-id:1:1',
+    ]);
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
   it('feeds tool errors back to the model for self-correction instead of crashing', async () => {
     tools.register(
       makeEchoTool({
@@ -523,6 +609,92 @@ describe('agent loop (docs/04 §2)', () => {
 });
 
 describe('gatekeeper integration', () => {
+  it('atomically persists an allowed escalation before executing it', async () => {
+    let escalationNodeVisibleAtExecution = false;
+    tools.register({
+      name: 'type_allow',
+      label: 'Type',
+      description: 'type',
+      parameters: z.object({ element: z.string(), ref: z.string(), text: z.string() }),
+      level: 'L1',
+      effects: 'write',
+      execute: async () => {
+        throw actionError('l1_not_effective', 'ignored', 'verify', true, {
+          escalationTool: 'type_allow_trusted',
+        });
+      },
+    });
+    tools.register({
+      name: 'type_allow_trusted',
+      label: 'Trusted type',
+      description: 'trusted type',
+      parameters: z.object({ element: z.string(), ref: z.string(), text: z.string() }),
+      level: 'L2',
+      effects: 'write',
+      execute: async () => {
+        escalationNodeVisibleAtExecution = Boolean(
+          await db.nodes.get('tool-call:turn-escalation-allow:1:0:escalation:type_allow_trusted'),
+        );
+        return { content: [{ type: 'text' as const, text: 'trusted' }] };
+      },
+    });
+    const thread = await tree.createThread({});
+    const appendNodesAndSetRunState = vi.fn<NonNullable<TurnEnv['appendNodesAndSetRunState']>>(
+      async (nodes: readonly AppendNodeInput[]) => {
+        for (const node of nodes) await tree.appendNode(thread.id, node);
+      },
+    );
+    provider.queue(
+      {
+        toolCalls: [
+          {
+            id: 'allow-escalation-call',
+            name: 'type_allow',
+            params: { element: 'Name', ref: 's1_1', text: 'Ada' },
+          },
+        ],
+      },
+      { streamText: ['done'] },
+    );
+
+    await runTurn(
+      makeEnv({
+        turnId: 'turn-escalation-allow',
+        appendNodesAndSetRunState,
+      }),
+      thread.id,
+      { text: 'fill the form' },
+    ).done;
+
+    const escalationCommit = appendNodesAndSetRunState.mock.calls.find(
+      ([nodes, state]) =>
+        state === 'executing_tool' &&
+        nodes[0]?.id === 'tool-call:turn-escalation-allow:1:0:escalation:type_allow_trusted',
+    );
+    expect(escalationCommit).toEqual([
+      [
+        expect.objectContaining({
+          id: 'tool-call:turn-escalation-allow:1:0:escalation:type_allow_trusted',
+          type: 'tool_call',
+          payload: expect.objectContaining({
+            itemId: 'allow-escalation-call',
+            toolName: 'type_allow_trusted',
+            level: 'L2',
+          }),
+        }),
+      ],
+      'executing_tool',
+      {
+        pendingTool: expect.objectContaining({
+          itemId: 'allow-escalation-call',
+          toolName: 'type_allow_trusted',
+          startedAt: expect.any(Number),
+        }),
+      },
+    ]);
+    expect(escalationNodeVisibleAtExecution).toBe(true);
+  });
+
   it('rechecks Gatekeeper before an automatic trusted-input escalation', async () => {
     const trusted = vi.fn(async () => ({ content: [{ type: 'text' as const, text: 'trusted' }] }));
     tools.register({

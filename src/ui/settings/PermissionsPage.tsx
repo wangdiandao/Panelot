@@ -14,7 +14,6 @@ import { Input } from '../components/ui/input';
 import {
   Field,
   FieldContent,
-  FieldDescription,
   FieldError,
   FieldGroup,
   FieldLabel,
@@ -62,10 +61,6 @@ export type DefaultPermissionPolicy = PermissionPolicy;
 
 export function permissionPolicyLabel(policy: string): string {
   return t(`settings.permissions.policy.${policy}.label`);
-}
-
-export function permissionPolicyDescription(policy: string): string {
-  return t(`settings.permissions.policy.${policy}.desc`);
 }
 
 export function permissionRuleSourceLabel(source: PermissionRule['source']): string {
@@ -153,7 +148,6 @@ export function PermissionsPage() {
                   <RadioGroupItem id={id} value={policy} />
                   <FieldContent>
                     <FieldTitle>{permissionPolicyLabel(policy)}</FieldTitle>
-                    <FieldDescription>{permissionPolicyDescription(policy)}</FieldDescription>
                   </FieldContent>
                 </Field>
               </FieldLabel>

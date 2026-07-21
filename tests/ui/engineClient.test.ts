@@ -201,6 +201,134 @@ describe('EngineSession lifecycle', () => {
     }
   });
 
+  it('resolves deletion after the deleted-thread broadcast resets the active view', async () => {
+    const transport = new FakeTransport();
+    const session = new EngineSession(() => transport);
+    session.start();
+    try {
+      session.openThread('thread-a');
+      const subscribe = transport.sent.find(
+        (op) => op.type === 'thread.subscribe' && op.threadId === 'thread-a',
+      )!;
+      const initial = snapshot('thread-a', 15, 1);
+      transport.emit({
+        type: 'initialized',
+        submissionId: subscribe.submissionId,
+        protocol: ENGINE_PROTOCOL,
+        schemaHash: ENGINE_SCHEMA_HASH,
+        snapshot: initial,
+        stream: initial.stream,
+      });
+
+      const deletion = session.deleteThread('thread-a');
+      const command = transport.sent.find(
+        (op) => op.type === 'thread.delete' && op.threadId === 'thread-a',
+      )!;
+
+      transport.emit({
+        type: 'thread.deleted',
+        threadId: 'thread-a',
+        stream: { threadId: 'thread-a', epoch: 15, sequence: 2 },
+      });
+      expect(session.store.getState().threadId).toBeNull();
+
+      transport.emit({
+        type: 'command.ack',
+        submissionId: command.submissionId,
+        threadId: 'thread-a',
+      });
+      await expect(deletion).resolves.toBeUndefined();
+    } finally {
+      session.stop();
+    }
+  });
+
+  it('stays in draft when deletion wins a pending snapshot admission', () => {
+    const transport = new FakeTransport();
+    const session = new EngineSession(() => transport);
+    session.start();
+    try {
+      session.openThread('thread-admission');
+      const subscribe = transport.sent.find(
+        (op) => op.type === 'thread.subscribe' && op.threadId === 'thread-admission',
+      )!;
+
+      transport.emit({
+        type: 'thread.deleted',
+        threadId: 'thread-admission',
+        stream: { threadId: 'thread-admission', epoch: 16, sequence: 2 },
+      });
+      expect(session.store.getState().threadId).toBeNull();
+
+      const stale = snapshot('thread-admission', 16, 1);
+      transport.emit({
+        type: 'initialized',
+        submissionId: subscribe.submissionId,
+        protocol: ENGINE_PROTOCOL,
+        schemaHash: ENGINE_SCHEMA_HASH,
+        snapshot: stale,
+        stream: stale.stream,
+      });
+      expect(session.store.getState().threadId).toBeNull();
+      expect(session.store.getState().meta).toBeNull();
+    } finally {
+      session.stop();
+    }
+  });
+
+  it('registers the deletion waiter before a transport can acknowledge synchronously', async () => {
+    class SynchronousAckTransport extends FakeTransport {
+      override send(op: Op): void {
+        super.send(op);
+        if (op.type === 'thread.delete') {
+          this.emit({
+            type: 'command.ack',
+            submissionId: op.submissionId,
+            threadId: op.threadId,
+          });
+        }
+      }
+    }
+
+    const transport = new SynchronousAckTransport();
+    const session = new EngineSession(() => transport);
+    session.start();
+    try {
+      await expect(session.deleteThread('thread-sync')).resolves.toBeUndefined();
+    } finally {
+      session.stop();
+    }
+  });
+
+  it('returns a rejected Promise and clears the waiter when transport.send throws', async () => {
+    class ThrowingDeleteTransport extends FakeTransport {
+      override send(op: Op): void {
+        if (op.type === 'thread.delete') throw new Error('transport unavailable');
+        super.send(op);
+      }
+    }
+
+    const transport = new ThrowingDeleteTransport();
+    const session = new EngineSession(() => transport);
+    session.start();
+    try {
+      await expect(session.deleteThread('thread-throw')).rejects.toThrow('transport unavailable');
+    } finally {
+      session.stop();
+    }
+  });
+
+  it('rejects and clears an unsettled deletion waiter when the session stops', async () => {
+    const transport = new FakeTransport();
+    const session = new EngineSession(() => transport);
+    session.start();
+    const deletion = session.deleteThread('thread-pending');
+
+    session.stop();
+
+    await expect(deletion).rejects.toThrow(/session stopped/);
+  });
+
   it('retains provider stop semantics from the event and the persisted assistant snapshot', () => {
     const transport = new FakeTransport();
     const session = new EngineSession(() => transport);
@@ -403,6 +531,7 @@ describe('EngineSession lifecycle', () => {
     session.start();
     try {
       const transport = transports[0]!;
+      session.store.setState({ loading: true, threadId: 'thread-a' });
       transport.emit({
         type: 'fatal.reload_required',
         submissionId: transport.sent[0]!.submissionId,
@@ -416,10 +545,19 @@ describe('EngineSession lifecycle', () => {
       expect(session.store.getState()).toMatchObject({
         connected: false,
         reloadRequired: true,
-        lastError: { message: 'Reload required.', retryable: false, kind: 'protocol' },
+        loading: false,
+        lastError: { message: 'Reload required.', retryable: false, kind: 'engine_protocol' },
       });
       expect(transport.close).toHaveBeenCalledOnce();
       expect(factory).toHaveBeenCalledOnce();
+
+      session.startDraft();
+      session.openThread('thread-b');
+      expect(session.store.getState()).toMatchObject({
+        threadId: 'thread-a',
+        reloadRequired: true,
+        loading: false,
+      });
     } finally {
       session.dispose();
       vi.useRealTimers();

@@ -120,7 +120,7 @@ export function ThreadView({
   // noise. Only a sustained outage (>1.5s) surfaces.
   const [showDisconnected, setShowDisconnected] = useState(false);
   useEffect(() => {
-    if (state.connected) {
+    if (state.connected || state.reloadRequired) {
       // This is the reset branch of a debounced external connection-state machine.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setShowDisconnected(false);
@@ -128,7 +128,7 @@ export function ThreadView({
     }
     const timer = setTimeout(() => setShowDisconnected(true), 1500);
     return () => clearTimeout(timer);
-  }, [state.connected]);
+  }, [state.connected, state.reloadRequired]);
   // Draft lives here (not in PromptInput) so the empty state can filter its
   // suggestions live and drafts persist per thread across panel closes.
   const [draft, setDraft, draftStatus] = useThreadDraft(state.threadId);
@@ -296,6 +296,7 @@ export function ThreadView({
   const errorView = state.lastError ? buildProviderErrorPresentation(state.lastError) : undefined;
   const canOpenErrorSettings = Boolean(errorView?.opensSettings && onOpenSettings);
   const canRetryError = Boolean(state.lastError?.retryable && state.lastInput);
+  const reconnecting = !state.reloadRequired && !state.connected;
   const askUserInteraction = state.pendingInteractions.find(
     (interaction) => interaction.request.kind === 'ask_user',
   );
@@ -304,8 +305,8 @@ export function ThreadView({
   );
 
   return (
-    <div className="flex h-full flex-col bg-background text-foreground">
-      {!state.connected && showDisconnected && (
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background text-foreground">
+      {reconnecting && showDisconnected && (
         <Marker variant="border" role="status" className="justify-center px-3 py-1">
           <MarkerContent>{t('reconnecting')}</MarkerContent>
         </Marker>
@@ -314,7 +315,11 @@ export function ThreadView({
         <ProviderErrorNotice
           error={state.lastError}
           actions={
-            canOpenErrorSettings || canRetryError ? (
+            state.reloadRequired ? (
+              <Button variant="outline" size="xs" onClick={() => chrome.runtime.reload()}>
+                {t('error.reloadExtension')}
+              </Button>
+            ) : canOpenErrorSettings || canRetryError ? (
               <>
                 {canOpenErrorSettings && (
                   <Button variant="outline" size="xs" onClick={onOpenSettings}>
@@ -332,9 +337,11 @@ export function ThreadView({
         />
       )}
       <ProviderStopNotice stopReason={state.lastStopReason} />
-      {((!state.connected && showDisconnected) || state.loading) && state.items.length === 0 ? (
+      {state.reloadRequired ? (
+        <div className="min-h-0 flex-1" />
+      ) : ((reconnecting && showDisconnected) || state.loading) && state.items.length === 0 ? (
         /* Thread switch / reconnect: 3-message skeleton (docs/09 §7). */
-        <div className="flex flex-1 flex-col gap-6 px-4 py-6">
+        <div className="flex min-w-0 flex-1 flex-col gap-6 px-3 py-6 sm:px-4">
           <div className="flex justify-end">
             <Skeleton className="h-10 w-3/5 rounded-2xl" />
           </div>
@@ -388,7 +395,7 @@ export function ThreadView({
         style={contentMaxWidth ? { maxWidth: contentMaxWidth } : undefined}
       >
         {state.pendingApprovals.length > 0 && (
-          <div className="flex flex-col gap-2 px-4 pb-2">
+          <div className="flex min-w-0 flex-col gap-2 px-3 pb-2 sm:px-4">
             {state.pendingApprovals.slice(0, 1).map((a, _, arr) => (
               <ApprovalCard
                 key={a.approvalId}
@@ -400,7 +407,7 @@ export function ThreadView({
           </div>
         )}
         {cardInteractions.length > 0 && (
-          <div className="flex flex-col gap-2 px-4 pb-2">
+          <div className="flex min-w-0 flex-col gap-2 px-3 pb-2 sm:px-4">
             {cardInteractions.slice(0, 1).map((interaction) => (
               <InteractionCard
                 key={interaction.interactionId}
@@ -445,7 +452,10 @@ export function ThreadView({
           <PromptInput
             running={state.activeTurn !== null}
             steerable={state.activeTurn?.steerable ?? false}
-            disabled={!providerConfigured || state.pendingInteractions.length > 0}
+            disabled={
+              state.reloadRequired || !providerConfigured || state.pendingInteractions.length > 0
+            }
+            disabledHint={state.reloadRequired ? t('input.reloadRequired') : undefined}
             contextChips={stagedContext}
             submissionThreadId={state.threadId}
             onRemoveChip={(i) => onRemoveStagedContext?.(i)}
@@ -475,6 +485,7 @@ export function ThreadView({
             }
             permissionPolicy={permissionPolicy}
             onSelectPolicy={(tier) => session.setOverrides({ permissionPolicy: tier })}
+            surface={surface}
           />
         )}
       </div>

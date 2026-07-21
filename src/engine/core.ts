@@ -22,7 +22,7 @@ import type {
   SubmissionBrowserContext,
 } from '../messaging/protocol';
 import type { PanelotDB } from '../db/schema';
-import { ThreadTree } from '../db/tree';
+import { ThreadTree, type AppendNodeInput } from '../db/tree';
 import { buildSessionContext } from '../db/sessionContext';
 import { runTurn, type GatekeeperCheck, type TurnEnv, type TurnHandle } from '../agent/loop';
 import { ToolRegistry, validateParams } from '../agent/tool';
@@ -30,16 +30,23 @@ import { assembleSystemPrompt, type AssembleOptions } from '../prompts/assemble'
 import type { ProviderAdapter, GenParams } from '../providers/types';
 import type {
   ApprovalRecord,
+  CommandReceiptResponse,
   PendingToolExecution,
   ProviderEnvironmentBinding,
   ResolvedRunEnvironment,
   RunEnvironmentSnapshot,
   RunRecord,
+  ToolCallPayload,
 } from '../db/types';
 import { RunRepository } from './runRepository';
 import { ApprovalRepository } from './approvalRepository';
 import { InteractionRepository } from './interactionRepository';
-import { CommandReceiptRepository } from './commandReceipts';
+import {
+  CommandReceiptRepository,
+  createCommandTransactionContext,
+  fingerprintCommandPayload,
+  type CommandTransactionContext,
+} from './commandReceipts';
 import { ThreadActorRegistry } from './threadActor';
 import {
   bindToolRegistry,
@@ -93,6 +100,8 @@ interface ActiveTurn {
 interface RecoveryExecution {
   abort: AbortController;
   interrupted: boolean;
+  done: Promise<void>;
+  resolveDone: () => void;
 }
 
 interface RecoveredApprovalWait {
@@ -120,7 +129,10 @@ interface PendingApprovalWaiter {
   targetTabId?: number;
   request: ApprovalRequestPayload;
   requestedAt: number;
-  settle: (decision: ApprovalDecision) => Promise<ApprovalDecision>;
+  settle: (
+    decision: ApprovalDecision,
+    command?: CommandTransactionContext,
+  ) => Promise<ApprovalDecision>;
   cleanup: () => void;
 }
 
@@ -128,8 +140,28 @@ interface PendingInteractionWaiter {
   threadId: string;
   turnId: string;
   request: InteractionRequestPayload;
-  settle: (response: InteractionResponse) => Promise<InteractionResponse>;
+  settle: (
+    response: InteractionResponse,
+    command?: CommandTransactionContext,
+  ) => Promise<InteractionResponse>;
   cleanup: () => void;
+}
+
+function emitCommandResponse(
+  submissionId: string,
+  response: CommandReceiptResponse,
+  emit: (event: AgentEvent) => void,
+): void {
+  if (response.type === 'command.ack') {
+    emit({ ...response, submissionId });
+    return;
+  }
+  emit({
+    ...response,
+    type: 'command.rejected',
+    submissionId,
+    code: response.code as Extract<AgentEvent, { type: 'command.rejected' }>['code'],
+  });
 }
 
 export class RealEngineCore {
@@ -147,6 +179,7 @@ export class RealEngineCore {
   private recoveredApprovalTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private recoveredApprovalsByThread = new Map<string, RecoveredApprovalWait>();
   private recoveryExecutions = new Map<string, RecoveryExecution>();
+  private deletingThreads = new Set<string>();
   private recoveryIdleWaiters = new Set<() => void>();
   private activityEpoch = new Map<string, number>();
   private readonly approvalTimeoutMs: number;
@@ -212,6 +245,24 @@ export class RealEngineCore {
     return typeof this.tools === 'function' ? this.tools(threadId, snapshot) : this.tools;
   }
 
+  private hasRunningExecution(threadId: string): boolean {
+    return this.activeTurns.has(threadId) || this.recoveryExecutions.has(threadId);
+  }
+
+  /**
+   * A recovered approval/interaction still owns the thread even though there is
+   * no in-memory TurnHandle. Starting another run or moving the branch cursor
+   * would let two durable runs append to the same conversation path.
+   */
+  private isThreadBusy(threadId: string): boolean {
+    return (
+      this.deletingThreads.has(threadId) ||
+      this.hasRunningExecution(threadId) ||
+      this.recoveredApprovalsByThread.has(threadId) ||
+      this.recoveredInteractionsByThread.has(threadId)
+    );
+  }
+
   threadIdOf(op: Op): string | null {
     return 'threadId' in op ? (op as { threadId: string }).threadId : null;
   }
@@ -265,22 +316,20 @@ export class RealEngineCore {
 
   async handleOp(op: Op, emit: (ev: AgentEvent) => void): Promise<void> {
     const clientId = (op as { clientId?: string }).clientId ?? 'unidentified-client';
-    const receipt = await this.receipts.begin({
+    const requestPayload = Object.fromEntries(
+      Object.entries(op).filter(
+        ([key]) => key !== 'type' && key !== 'submissionId' && key !== 'clientId',
+      ),
+    );
+    const command = createCommandTransactionContext({
       clientId,
       submissionId: op.submissionId,
       commandType: op.type,
+      requestFingerprint: await fingerprintCommandPayload(requestPayload),
     });
+    const receipt = await this.receipts.begin(command);
     if (receipt.kind === 'duplicate') {
-      if (receipt.response?.type === 'command.rejected') {
-        emit({
-          type: 'command.rejected',
-          submissionId: op.submissionId,
-          code: receipt.response.code as Extract<AgentEvent, { type: 'command.rejected' }>['code'],
-          message: receipt.response.message,
-          threadId: receipt.response.threadId,
-          revision: receipt.response.revision,
-        });
-      } else if (receipt.response) {
+      if (receipt.response) {
         if (op.type === 'thread.create' && receipt.response.threadId) {
           emit({
             type: 'thread.created',
@@ -288,11 +337,15 @@ export class RealEngineCore {
             threadId: receipt.response.threadId,
           });
         }
-        emit({
-          ...receipt.response,
-          type: 'command.ack',
-          submissionId: op.submissionId,
-        });
+        if (op.type === 'thread.fork' && receipt.response.threadId) {
+          emit({
+            type: 'thread.forked',
+            submissionId: op.submissionId,
+            threadId: op.threadId,
+            newThreadId: receipt.response.threadId,
+          });
+        }
+        emitCommandResponse(op.submissionId, receipt.response, emit);
       } else {
         emit({
           type: 'command.rejected',
@@ -303,6 +356,8 @@ export class RealEngineCore {
       }
       return;
     }
+
+    if (op.type === 'thread.delete') this.beginThreadDeletion(op.threadId);
 
     let rejection:
       | { code: Extract<AgentEvent, { type: 'error' }>['code']; message: string; threadId?: string }
@@ -334,22 +389,24 @@ export class RealEngineCore {
         actorThreadId = (await this.interactions.get(op.interactionId))?.threadId ?? null;
       }
       await this.actors.run(actorThreadId ?? `client:${clientId}`, () =>
-        this.dispatchOp(op, capture, clientId),
+        this.dispatchOp(op, capture, clientId, command),
       );
     } catch (error) {
-      await this.receipts.reject(clientId, op.submissionId, {
+      const committed = await this.receipts.reject(clientId, op.submissionId, {
         type: 'command.rejected',
         code: 'internal',
         message: error instanceof Error ? error.message : String(error),
         threadId: 'threadId' in op ? op.threadId : undefined,
       });
-      throw error;
+      void this.receipts.prune();
+      emitCommandResponse(op.submissionId, committed, emit);
+      return;
     }
 
+    let committed: CommandReceiptResponse;
     if (rejection) {
       const response = { type: 'command.rejected' as const, ...rejection };
-      await this.receipts.reject(clientId, op.submissionId, response);
-      emit({ type: 'command.rejected', submissionId: op.submissionId, ...rejection });
+      committed = await this.receipts.reject(clientId, op.submissionId, response);
     } else {
       const run = await this.db.runs
         .where('submissionId')
@@ -362,11 +419,9 @@ export class RealEngineCore {
         runId: run?.id,
         revision: run?.revision,
       };
-      if (op.type !== 'thread.create') {
-        await this.receipts.ack(clientId, op.submissionId, response);
-      }
-      emit({ ...response, submissionId: op.submissionId });
+      committed = await this.receipts.ack(clientId, op.submissionId, response);
     }
+    emitCommandResponse(op.submissionId, committed, emit);
     void this.receipts.prune();
   }
 
@@ -374,24 +429,34 @@ export class RealEngineCore {
     op: Op,
     emit: (ev: AgentEvent) => void,
     clientId: string,
+    command: CommandTransactionContext,
   ): Promise<void> {
     switch (op.type) {
       case 'thread.create': {
-        const thread = await this.receipts.createThreadAndAck(clientId, op.submissionId, {
-          preset: op.preset,
-          folderId: op.folderId,
-        });
+        const thread = await this.receipts.createThreadAndAck(
+          clientId,
+          op.submissionId,
+          {
+            preset: op.preset,
+            folderId: op.folderId,
+          },
+          command,
+        );
         emit({ type: 'thread.created', submissionId: op.submissionId, threadId: thread.id });
         return;
       }
+      case 'thread.delete': {
+        await this.deleteThread(op.threadId, command);
+        return;
+      }
       case 'turn.submit':
-        return this.handleSubmit(op, emit, clientId);
+        return this.handleSubmit(op, emit, clientId, command);
       case 'turn.fork': {
         // Branch-and-run (docs/02 §3.2): reposition leafId to the anchor's
         // parent so the turn's user message appends as a SIBLING branch.
         // Busy threads reject rather than enqueue — a queued fork would
         // reposition the cursor under a moving tree.
-        if (this.activeTurns.has(op.threadId)) {
+        if (this.isThreadBusy(op.threadId)) {
           emit({
             type: 'error',
             submissionId: op.submissionId,
@@ -471,6 +536,17 @@ export class RealEngineCore {
         return;
       }
       case 'turn.enqueue': {
+        const thread = await this.tree.getThread(op.threadId);
+        if (!thread || this.deletingThreads.has(op.threadId)) {
+          emit({
+            type: 'error',
+            submissionId: op.submissionId,
+            code: 'thread_not_found',
+            message: `thread ${op.threadId} not found`,
+            retryable: false,
+          });
+          return;
+        }
         const queue = this.queues.get(op.threadId) ?? [];
         if ((await this.runs.countQueued(op.threadId)) >= ENQUEUE_CAPACITY) {
           emit({
@@ -483,13 +559,16 @@ export class RealEngineCore {
           return;
         }
         const clientId = (op as { clientId?: string }).clientId ?? 'unidentified-client';
-        const run = await this.runs.enqueue({
-          threadId: op.threadId,
-          clientId,
-          submissionId: op.submissionId,
-          input: op.input,
-          overrides: op.overrides,
-        });
+        const run = await this.runs.enqueue(
+          {
+            threadId: op.threadId,
+            clientId,
+            submissionId: op.submissionId,
+            input: op.input,
+            overrides: op.overrides,
+          },
+          command,
+        );
         queue.push({
           input: op.input,
           overrides: op.overrides,
@@ -500,7 +579,7 @@ export class RealEngineCore {
         this.queues.set(op.threadId, queue);
         await this.broadcastQueue(op.threadId);
         // If idle, start immediately.
-        if (!this.activeTurns.has(op.threadId)) void this.drainQueue(op.threadId);
+        if (!this.isThreadBusy(op.threadId)) void this.drainQueue(op.threadId);
         return;
       }
       case 'turn.interrupt': {
@@ -519,7 +598,11 @@ export class RealEngineCore {
           });
           return;
         }
-        await this.runs.updateQueued(op.runId, { input: op.input, overrides: op.overrides });
+        await this.runs.updateQueued(
+          op.runId,
+          { input: op.input, overrides: op.overrides },
+          command,
+        );
         const memory = this.queues.get(op.threadId)?.find((item) => item.runId === op.runId);
         if (memory) {
           memory.input = op.input;
@@ -540,7 +623,7 @@ export class RealEngineCore {
           });
           return;
         }
-        await this.runs.removeQueued(op.runId);
+        await this.runs.removeQueued(op.runId, command);
         const memory = this.queues.get(op.threadId);
         if (memory)
           this.queues.set(
@@ -566,7 +649,7 @@ export class RealEngineCore {
           });
           return;
         }
-        if (this.activeTurns.has(op.threadId)) {
+        if (this.isThreadBusy(op.threadId)) {
           emit({
             type: 'error',
             submissionId: op.submissionId,
@@ -598,7 +681,7 @@ export class RealEngineCore {
           });
           return;
         }
-        if (this.activeTurns.has(op.threadId)) {
+        if (this.isThreadBusy(op.threadId)) {
           emit({
             type: 'error',
             submissionId: op.submissionId,
@@ -658,20 +741,33 @@ export class RealEngineCore {
         }
         const pending = this.pendingApprovals.get(op.approvalId);
         if (pending) {
-          await pending.settle(op.decision);
+          await pending.settle(op.decision, command);
         } else {
-          await this.approvals.decide(op.approvalId, op.decision);
-          try {
-            await this.continueDecidedApproval(op.approvalId);
-            this.broadcastActivity(record.threadId);
-          } finally {
-            this.finishRecoveredApproval(record.threadId, op.approvalId);
+          await this.approvals.decide(op.approvalId, op.decision, command);
+          this.clearRecoveredApprovalTimer(op.approvalId);
+          const recovered = this.recoveredApprovalsByThread.get(record.threadId);
+          if (recovered?.approvalId === op.approvalId) {
+            await this.continueRecoveredWait(record.threadId);
+          } else {
+            const continued = await this.continueDecidedApproval(op.approvalId);
+            if (!continued) {
+              const run = await this.runs.get(record.runId);
+              if (run?.state === 'waiting_approval') {
+                this.recoveredApprovalsByThread.set(record.threadId, {
+                  approvalId: op.approvalId,
+                  targetTabId: run.pendingTool?.target?.tabId,
+                  cancelRequested: false,
+                });
+              }
+            }
           }
+          if (!this.isThreadBusy(record.threadId)) await this.drainQueueNow(record.threadId);
+          this.broadcastActivity(record.threadId);
         }
         return;
       }
       case 'interaction.response': {
-        await this.resolveInteraction(op.interactionId, op.response);
+        await this.resolveInteraction(op.interactionId, op.response, command);
         return;
       }
       case 'thread.fork': {
@@ -686,7 +782,7 @@ export class RealEngineCore {
           });
           return;
         }
-        const forked = await this.tree.createThread({
+        const forked = await this.receipts.forkThreadAndAck(command, source.id, {
           title: `${source.title} (fork)`,
           parentThreadId: source.id,
           preset: source.preset,
@@ -700,10 +796,19 @@ export class RealEngineCore {
         return;
       }
       case 'thread.selectBranch': {
+        if (this.isThreadBusy(op.threadId)) {
+          emit({
+            type: 'error',
+            submissionId: op.submissionId,
+            code: 'turn_mismatch',
+            message: 'cannot switch branches while a run owns this thread',
+            retryable: true,
+          });
+          return;
+        }
         let revision = 0;
         try {
-          await this.tree.switchToSibling(op.threadId, op.nodeId);
-          revision = (await this.tree.getThread(op.threadId))?.revision ?? 0;
+          ({ revision } = await this.receipts.selectBranchAndAck(command, op.threadId, op.nodeId));
         } catch (e) {
           emit({
             type: 'error',
@@ -730,10 +835,11 @@ export class RealEngineCore {
     op: Extract<Op, { type: 'turn.submit' }>,
     emit: (ev: AgentEvent) => void,
     clientId: string,
+    command: CommandTransactionContext,
   ): Promise<void> {
-    if (this.activeTurns.has(op.threadId)) {
+    if (this.isThreadBusy(op.threadId)) {
       // Busy → auto-enqueue (UI may also enqueue explicitly).
-      await this.dispatchOp({ ...op, type: 'turn.enqueue' }, emit, clientId);
+      await this.dispatchOp({ ...op, type: 'turn.enqueue' }, emit, clientId, command);
       return;
     }
     const thread = await this.tree.getThread(op.threadId);
@@ -751,6 +857,75 @@ export class RealEngineCore {
       clientId: (op as { clientId?: string }).clientId ?? 'unidentified-client',
       submissionId: op.submissionId,
     });
+  }
+
+  private beginThreadDeletion(threadId: string): void {
+    this.deletingThreads.add(threadId);
+    this.activeTurns.get(threadId)?.handle.interrupt();
+    const recovery = this.recoveryExecutions.get(threadId);
+    if (recovery) {
+      recovery.interrupted = true;
+      recovery.abort.abort(new DOMException('Thread deletion interrupted recovery.', 'AbortError'));
+    }
+  }
+
+  private async deleteThread(threadId: string, command: CommandTransactionContext): Promise<void> {
+    try {
+      const active = this.activeTurns.get(threadId);
+      if (active) await active.handle.done;
+      const recovery = this.recoveryExecutions.get(threadId);
+      if (recovery) await recovery.done;
+
+      const interactionIds = await this.db.interactions
+        .where('threadId')
+        .equals(threadId)
+        .primaryKeys();
+      if (command.commandType !== 'thread.delete') {
+        throw new Error(`Invalid command transaction for thread deletion: ${command.commandType}`);
+      }
+      await this.tree.deleteThread(threadId, {
+        clientId: command.clientId,
+        submissionId: command.submissionId,
+        commandType: command.commandType,
+        requestFingerprint: command.requestFingerprint,
+      });
+
+      this.queues.delete(threadId);
+      for (const interactionId of interactionIds) {
+        try {
+          this.onInteractionResolved?.(interactionId as string);
+        } catch {
+          // The durable interaction is already deleted; local cleanup remains best-effort.
+        }
+        try {
+          this.pendingInteractions.get(interactionId as string)?.cleanup();
+        } catch {
+          // The durable interaction is already deleted; local cleanup remains best-effort.
+        }
+        this.pendingInteractions.delete(interactionId as string);
+      }
+
+      for (const [approvalId, pending] of this.pendingApprovals) {
+        if (pending.threadId !== threadId) continue;
+        try {
+          pending.cleanup();
+        } catch {
+          // The durable approval is already deleted; local cleanup remains best-effort.
+        }
+        this.pendingApprovals.delete(approvalId);
+      }
+
+      const recoveredApproval = this.recoveredApprovalsByThread.get(threadId);
+      if (recoveredApproval) this.clearRecoveredApprovalTimer(recoveredApproval.approvalId);
+      this.recoveredApprovalsByThread.delete(threadId);
+      this.recoveredInteractionsByThread.delete(threadId);
+      this.notifyRecoveryIdle();
+
+      this.activityEpoch.delete(threadId);
+      this.onBroadcast({ type: 'thread.deleted', threadId });
+    } finally {
+      this.deletingThreads.delete(threadId);
+    }
   }
 
   private async startTurn(
@@ -931,10 +1106,19 @@ export class RealEngineCore {
       tree: this.tree,
       tools: turnTools,
       gatekeeper: this.gatekeeper,
-      requestApproval: (turnId, request, pendingTool, signal) =>
-        this.requestApproval(threadId, run.id, turnId, request, pendingTool, signal),
-      requestInteraction: (turnId, itemId, request, pendingTool, signal) =>
-        this.requestInteraction(threadId, run.id, turnId, itemId, request, pendingTool, signal),
+      requestApproval: (turnId, request, pendingTool, toolCallNode, signal) =>
+        this.requestApproval(threadId, run.id, turnId, request, pendingTool, toolCallNode, signal),
+      requestInteraction: (turnId, itemId, request, pendingTool, toolCallNode, signal) =>
+        this.requestInteraction(
+          threadId,
+          run.id,
+          turnId,
+          itemId,
+          request,
+          pendingTool,
+          toolCallNode,
+          signal,
+        ),
       emit: (ev) => {
         if (ev.type === 'token.usage') {
           // Cost from pricing ($/Mtok), if the resolver supplied it (docs/03 §1.2).
@@ -1025,7 +1209,20 @@ export class RealEngineCore {
         }
       }
       this.broadcastActivity(threadId);
-      void this.drainQueue(threadId);
+      void this.actors
+        .run(threadId, async () => {
+          await this.continueRecoveredWait(threadId);
+          if (!this.isThreadBusy(threadId)) await this.drainQueueNow(threadId);
+        })
+        .catch((error: unknown) => {
+          this.onBroadcast({
+            type: 'error',
+            threadId,
+            code: 'internal',
+            message: error instanceof Error ? error.message : String(error),
+            retryable: true,
+          });
+        });
     });
   }
 
@@ -1034,7 +1231,7 @@ export class RealEngineCore {
   }
 
   private async drainQueueNow(threadId: string): Promise<void> {
-    if (this.activeTurns.has(threadId)) return;
+    if (this.isThreadBusy(threadId)) return;
     const queue = this.queues.get(threadId);
     const memoryQueued = queue?.shift();
     const durableQueued = memoryQueued ? undefined : await this.runs.nextQueued(threadId);
@@ -1148,7 +1345,7 @@ export class RealEngineCore {
 
   private async continueDecidedApproval(approvalId: string): Promise<boolean> {
     const currentApproval = await this.approvals.get(approvalId);
-    if (!currentApproval || this.activeTurns.has(currentApproval.threadId)) return false;
+    if (!currentApproval || this.hasRunningExecution(currentApproval.threadId)) return false;
     const claimed = await this.approvals.claimDecidedContinuation(approvalId);
     if (!claimed) return false;
     const { run, approval } = claimed;
@@ -1252,32 +1449,43 @@ export class RealEngineCore {
     }
 
     const abort = new AbortController();
-    const recoveryExecution: RecoveryExecution = { abort, interrupted: false };
+    let resolveRecoveryDone!: () => void;
+    const done = new Promise<void>((resolve) => (resolveRecoveryDone = resolve));
+    const recoveryExecution: RecoveryExecution = {
+      abort,
+      interrupted: false,
+      done,
+      resolveDone: resolveRecoveryDone,
+    };
     this.recoveryExecutions.set(run.threadId, recoveryExecution);
     const finishRecoveryExecution = () => {
       if (this.recoveryExecutions.get(run.threadId) === recoveryExecution) {
         this.recoveryExecutions.delete(run.threadId);
       }
+      recoveryExecution.resolveDone();
       this.notifyRecoveryIdle();
     };
     const interruptBeforeDispatch = async () => {
-      finishRecoveryExecution();
-      await this.recordRecoveredToolResult(
-        run,
-        {
-          ok: false,
-          content: [
-            {
-              type: 'text',
-              text: 'The recovered browser action was cancelled after manual input before dispatch.',
-            },
-          ],
-          trust: 'trusted',
-          provenance: 'user',
-        },
-        'interrupted',
-        { pendingTool: undefined, stopReason: 'manual_operation' },
-      );
+      try {
+        await this.recordRecoveredToolResult(
+          run,
+          {
+            ok: false,
+            content: [
+              {
+                type: 'text',
+                text: 'The recovered browser action was cancelled after manual input before dispatch.',
+              },
+            ],
+            trust: 'trusted',
+            provenance: 'user',
+          },
+          'interrupted',
+          { pendingTool: undefined, stopReason: 'manual_operation' },
+        );
+      } finally {
+        finishRecoveryExecution();
+      }
     };
     const recoveredApproval = this.recoveredApprovalsByThread.get(run.threadId);
     if (recoveredApproval?.cancelRequested) {
@@ -1292,24 +1500,27 @@ export class RealEngineCore {
         await interruptBeforeDispatch();
         return;
       }
-      finishRecoveryExecution();
-      await this.recordRecoveredToolResult(
-        run,
-        {
-          ok: false,
-          content: [
-            {
-              type: 'text',
-              text: 'The recovered tool target or authorization is no longer valid.',
-            },
-          ],
-          trust: 'trusted',
-          provenance: 'tool',
-        },
-        'streaming_model',
-        { pendingTool: undefined },
-      );
-      await this.resumePersistedRun(run.id);
+      try {
+        await this.recordRecoveredToolResult(
+          run,
+          {
+            ok: false,
+            content: [
+              {
+                type: 'text',
+                text: 'The recovered tool target or authorization is no longer valid.',
+              },
+            ],
+            trust: 'trusted',
+            provenance: 'tool',
+          },
+          'streaming_model',
+          { pendingTool: undefined },
+        );
+        await this.resumePersistedRun(run.id);
+      } finally {
+        finishRecoveryExecution();
+      }
       return;
     }
 
@@ -1361,22 +1572,102 @@ export class RealEngineCore {
 
     if (recoveryExecution.interrupted) {
       if (outcome.kind === 'timeout') await execution;
-      finishRecoveryExecution();
-      if (pending.effect === 'write' && dispatched) {
-        const updated = await this.runs.transition(run.id, 'paused_uncertain', {
-          pendingTool: pending,
-          stopReason: 'manual_operation',
+      try {
+        if (pending.effect === 'write' && dispatched) {
+          const updated = await this.runs.transition(run.id, 'paused_uncertain', {
+            pendingTool: pending,
+            stopReason: 'manual_operation',
+            error: {
+              code: 'manual_operation',
+              message: 'The recovered browser action was interrupted by manual input.',
+            },
+          });
+          this.onBroadcast({
+            type: 'run.recovery_required',
+            threadId: run.threadId,
+            run: this.recoveryState(updated),
+          });
+        } else {
+          await this.recordRecoveredToolResult(
+            run,
+            {
+              ok: false,
+              content: [
+                {
+                  type: 'text',
+                  text:
+                    pending.effect === 'write'
+                      ? 'The recovered browser action was cancelled after manual input before dispatch.'
+                      : 'The recovered read was interrupted by manual input.',
+                },
+              ],
+              trust: 'trusted',
+              provenance: 'user',
+            },
+            'interrupted',
+            { pendingTool: undefined, stopReason: 'manual_operation' },
+          );
+        }
+      } finally {
+        finishRecoveryExecution();
+      }
+      return;
+    }
+
+    if (timedOut || outcome.kind === 'timeout') {
+      try {
+        const state = pending.effect === 'write' ? 'paused_uncertain' : 'failed';
+        const updated = await this.runs.transition(run.id, state, {
+          pendingTool: state === 'paused_uncertain' ? pending : undefined,
+          stopReason: 'recovery_tool_timeout',
           error: {
-            code: 'manual_operation',
-            message: 'The recovered browser action was interrupted by manual input.',
+            code: 'recovery_tool_timeout',
+            message: 'Recovered tool execution exceeded its deadline.',
           },
         });
-        this.onBroadcast({
-          type: 'run.recovery_required',
-          threadId: run.threadId,
-          run: this.recoveryState(updated),
-        });
+        if (state === 'paused_uncertain') {
+          this.onBroadcast({
+            type: 'run.recovery_required',
+            threadId: run.threadId,
+            run: this.recoveryState(updated),
+          });
+        } else {
+          this.onBroadcast({
+            type: 'error',
+            threadId: run.threadId,
+            code: 'internal',
+            message: 'A recovered read tool exceeded its deadline and was failed.',
+            retryable: false,
+          });
+        }
+        // Keep the replay caller blocked until an abort-ignoring tool settles;
+        // its eventual result is quarantined from persistence.
+        await execution;
+      } finally {
+        finishRecoveryExecution();
+      }
+      return;
+    }
+
+    try {
+      if (outcome.kind === 'result') {
+        const result = outcome.result;
+        await this.recordRecoveredToolResult(
+          run,
+          {
+            ok: true,
+            content: result.content,
+            details: result.details,
+            trust: tool.resultTrust ?? (tool.level === 'builtin' ? 'trusted' : 'untrusted'),
+            provenance:
+              tool.resultProvenance ??
+              (tool.level === 'mcp' ? 'mcp' : tool.level === 'builtin' ? 'tool' : 'page'),
+          },
+          'streaming_model',
+          { pendingTool: undefined },
+        );
       } else {
+        const error = outcome.error;
         await this.recordRecoveredToolResult(
           run,
           {
@@ -1384,91 +1675,20 @@ export class RealEngineCore {
             content: [
               {
                 type: 'text',
-                text:
-                  pending.effect === 'write'
-                    ? 'The recovered browser action was cancelled after manual input before dispatch.'
-                    : 'The recovered read was interrupted by manual input.',
+                text: `Recovered tool failed: ${error instanceof Error ? error.message : String(error)}`,
               },
             ],
             trust: 'trusted',
-            provenance: 'user',
+            provenance: 'tool',
           },
-          'interrupted',
-          { pendingTool: undefined, stopReason: 'manual_operation' },
+          'streaming_model',
+          { pendingTool: undefined },
         );
       }
-      return;
-    }
-
-    if (timedOut || outcome.kind === 'timeout') {
-      const state = pending.effect === 'write' ? 'paused_uncertain' : 'failed';
-      const updated = await this.runs.transition(run.id, state, {
-        pendingTool: state === 'paused_uncertain' ? pending : undefined,
-        stopReason: 'recovery_tool_timeout',
-        error: {
-          code: 'recovery_tool_timeout',
-          message: 'Recovered tool execution exceeded its deadline.',
-        },
-      });
-      if (state === 'paused_uncertain') {
-        this.onBroadcast({
-          type: 'run.recovery_required',
-          threadId: run.threadId,
-          run: this.recoveryState(updated),
-        });
-      } else {
-        this.onBroadcast({
-          type: 'error',
-          threadId: run.threadId,
-          code: 'internal',
-          message: 'A recovered read tool exceeded its deadline and was failed.',
-          retryable: false,
-        });
-      }
-      // Keep the replay caller blocked until an abort-ignoring tool settles;
-      // its eventual result is quarantined from persistence.
-      await execution;
+      await this.resumePersistedRun(run.id);
+    } finally {
       finishRecoveryExecution();
-      return;
     }
-
-    finishRecoveryExecution();
-    if (outcome.kind === 'result') {
-      const result = outcome.result;
-      await this.recordRecoveredToolResult(
-        run,
-        {
-          ok: true,
-          content: result.content,
-          details: result.details,
-          trust: tool.resultTrust ?? (tool.level === 'builtin' ? 'trusted' : 'untrusted'),
-          provenance:
-            tool.resultProvenance ??
-            (tool.level === 'mcp' ? 'mcp' : tool.level === 'builtin' ? 'tool' : 'page'),
-        },
-        'streaming_model',
-        { pendingTool: undefined },
-      );
-    } else {
-      const error = outcome.error;
-      await this.recordRecoveredToolResult(
-        run,
-        {
-          ok: false,
-          content: [
-            {
-              type: 'text',
-              text: `Recovered tool failed: ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
-          trust: 'trusted',
-          provenance: 'tool',
-        },
-        'streaming_model',
-        { pendingTool: undefined },
-      );
-    }
-    await this.resumePersistedRun(run.id);
   }
 
   private scheduleRecoveredApprovalTimeout(run: RunRecord, approval: ApprovalRecord): void {
@@ -1502,7 +1722,8 @@ export class RealEngineCore {
               kind: 'decline',
               note: 'approval timed out after recovery',
             });
-            await this.continueDecidedApproval(approval.id);
+            await this.continueRecoveredWait(run.threadId);
+            if (!this.isThreadBusy(run.threadId)) await this.drainQueueNow(run.threadId);
             this.broadcastActivity(run.threadId);
           })
           .catch((error) => {
@@ -1514,9 +1735,7 @@ export class RealEngineCore {
               retryable: true,
             });
           })
-          .finally(() => {
-            this.finishRecoveredApproval(run.threadId, approval.id);
-          });
+          .finally(() => undefined);
       },
       Math.max(0, deadlineAt - Date.now()),
     );
@@ -1524,13 +1743,41 @@ export class RealEngineCore {
   }
 
   private finishRecoveredApproval(threadId: string, approvalId: string): void {
-    const timer = this.recoveredApprovalTimers.get(approvalId);
-    if (timer !== undefined) clearTimeout(timer);
-    this.recoveredApprovalTimers.delete(approvalId);
+    this.clearRecoveredApprovalTimer(approvalId);
     if (this.recoveredApprovalsByThread.get(threadId)?.approvalId === approvalId) {
       this.recoveredApprovalsByThread.delete(threadId);
     }
     this.notifyRecoveryIdle();
+  }
+
+  private clearRecoveredApprovalTimer(approvalId: string): void {
+    const timer = this.recoveredApprovalTimers.get(approvalId);
+    if (timer !== undefined) clearTimeout(timer);
+    this.recoveredApprovalTimers.delete(approvalId);
+  }
+
+  /**
+   * Continue a recovered wait only when no live execution owns the thread. A
+   * decided response remains represented by the recovered marker until the
+   * continuation is claimed, so an overlapping turn cannot orphan it.
+   */
+  private async continueRecoveredWait(threadId: string): Promise<boolean> {
+    if (this.hasRunningExecution(threadId)) return false;
+
+    const recoveredApproval = this.recoveredApprovalsByThread.get(threadId);
+    if (recoveredApproval) {
+      const approval = await this.approvals.get(recoveredApproval.approvalId);
+      if (approval?.status !== 'decided' || !approval.decision) return false;
+      const continued = await this.continueDecidedApproval(approval.id);
+      if (continued) this.finishRecoveredApproval(threadId, approval.id);
+      return continued;
+    }
+
+    const interactionId = this.recoveredInteractionsByThread.get(threadId);
+    if (!interactionId) return false;
+    const interaction = await this.interactions.get(interactionId);
+    if (interaction?.status !== 'resolved' || !interaction.response) return false;
+    return this.continueResolvedInteraction(interactionId);
   }
 
   private recoveryState(run: RunRecord): RunRecoveryState {
@@ -1724,16 +1971,14 @@ export class RealEngineCore {
     if (recoveredApproval) {
       await this.actors.run(threadId, async () => {
         if (this.recoveredApprovalsByThread.get(threadId) !== recoveredApproval) return;
-        try {
-          const approval = await this.approvals.get(recoveredApproval.approvalId);
-          const run = approval ? await this.runs.get(approval.runId) : undefined;
-          if (approval?.status === 'pending' && run?.state === 'waiting_approval') {
-            await this.approvals.decide(recoveredApproval.approvalId, { kind: 'cancel' });
-            await this.continueDecidedApproval(recoveredApproval.approvalId);
-            this.broadcastActivity(threadId);
-          }
-        } finally {
-          this.finishRecoveredApproval(threadId, recoveredApproval.approvalId);
+        const approval = await this.approvals.get(recoveredApproval.approvalId);
+        const run = approval ? await this.runs.get(approval.runId) : undefined;
+        if (approval?.status === 'pending' && run?.state === 'waiting_approval') {
+          await this.approvals.decide(recoveredApproval.approvalId, { kind: 'cancel' });
+          this.clearRecoveredApprovalTimer(recoveredApproval.approvalId);
+          await this.continueRecoveredWait(threadId);
+          if (!this.isThreadBusy(threadId)) await this.drainQueueNow(threadId);
+          this.broadcastActivity(threadId);
         }
       });
     }
@@ -1873,6 +2118,7 @@ export class RealEngineCore {
     turnId: string,
     request: ApprovalRequestPayload,
     pendingTool: PendingToolExecution,
+    toolCallNode: AppendNodeInput,
     signal: AbortSignal,
   ): Promise<ApprovalDecision> {
     const approvalId = crypto.randomUUID();
@@ -1884,6 +2130,7 @@ export class RealEngineCore {
       turnId,
       request,
       pendingTool,
+      toolCallNode,
       deadlineAt,
     });
     return new Promise<ApprovalDecision>((resolve, reject) => {
@@ -1902,11 +2149,21 @@ export class RealEngineCore {
         request,
         requestedAt: record.requestedAt,
         cleanup,
-        settle: (proposedDecision) => {
-          if (settlement) return settlement;
+        settle: (proposedDecision, command) => {
+          if (settlement) {
+            const existingSettlement = settlement;
+            if (!command) return existingSettlement;
+            return (async () => {
+              try {
+                return await existingSettlement;
+              } finally {
+                await this.approvals.decide(approvalId, proposedDecision, command);
+              }
+            })();
+          }
           cleanup();
           settlement = (async () => {
-            const decided = await this.approvals.decide(approvalId, proposedDecision);
+            const decided = await this.approvals.decide(approvalId, proposedDecision, command);
             const decision = decided.decision ?? proposedDecision;
             await this.onApprovalDecision?.(
               approvalId,
@@ -1957,6 +2214,7 @@ export class RealEngineCore {
     itemId: string,
     request: InteractionRequestPayload,
     pendingTool: PendingToolExecution,
+    toolCallNode: AppendNodeInput,
     signal: AbortSignal,
   ): Promise<InteractionResponse> {
     const interactionId = crypto.randomUUID();
@@ -1968,6 +2226,7 @@ export class RealEngineCore {
       itemId,
       request,
       pendingTool,
+      toolCallNode,
     });
     return new Promise<InteractionResponse>((resolve, reject) => {
       let settlement: Promise<InteractionResponse> | undefined;
@@ -1980,11 +2239,21 @@ export class RealEngineCore {
         turnId,
         request,
         cleanup,
-        settle: (proposedResponse) => {
-          if (settlement) return settlement;
+        settle: (proposedResponse, command) => {
+          if (settlement) {
+            const existingSettlement = settlement;
+            if (!command) return existingSettlement;
+            return (async () => {
+              try {
+                return await existingSettlement;
+              } finally {
+                await this.interactions.resolve(interactionId, proposedResponse, command);
+              }
+            })();
+          }
           cleanup();
           settlement = this.interactions
-            .resolve(interactionId, proposedResponse)
+            .resolve(interactionId, proposedResponse, command)
             .then((resolved) => {
               const response = resolved.response ?? proposedResponse;
               resolve(response);
@@ -2020,17 +2289,31 @@ export class RealEngineCore {
     });
   }
 
-  async resolveInteraction(interactionId: string, response: InteractionResponse): Promise<void> {
+  async resolveInteraction(
+    interactionId: string,
+    response: InteractionResponse,
+    command?: CommandTransactionContext,
+  ): Promise<void> {
     const record = await this.interactions.get(interactionId);
     if (!record) throw new Error(`interaction ${interactionId} not found`);
     const pending = this.pendingInteractions.get(interactionId);
     if (pending) {
-      await pending.settle(response);
+      await pending.settle(response, command);
       return;
     }
-    await this.interactions.resolve(interactionId, response);
+    await this.interactions.resolve(interactionId, response, command);
     this.onInteractionResolved?.(interactionId);
-    await this.continueResolvedInteraction(interactionId);
+    if (this.recoveredInteractionsByThread.get(record.threadId) === interactionId) {
+      await this.continueRecoveredWait(record.threadId);
+    } else {
+      const continued = await this.continueResolvedInteraction(interactionId);
+      if (!continued) {
+        const run = await this.runs.get(record.runId);
+        if (run?.state === 'waiting_interaction') {
+          this.recoveredInteractionsByThread.set(record.threadId, interactionId);
+        }
+      }
+    }
     this.broadcastActivity(record.threadId);
   }
 
@@ -2045,6 +2328,21 @@ export class RealEngineCore {
     if (!run?.pendingTool || run.pendingTool.itemId !== itemId) {
       throw new Error('MCP elicitation does not match the active tool call.');
     }
+    const nodes = await this.db.nodes.where('threadId').equals(threadId).sortBy('seq');
+    let toolCallNode: (typeof nodes)[number] | undefined;
+    for (let index = nodes.length - 1; index >= 0; index -= 1) {
+      const node = nodes[index];
+      const payload = node?.payload as ToolCallPayload | undefined;
+      if (
+        node?.type === 'tool_call' &&
+        payload?.itemId === itemId &&
+        payload.toolName === run.pendingTool.toolName
+      ) {
+        toolCallNode = node;
+        break;
+      }
+    }
+    if (!toolCallNode) throw new Error('Persisted MCP tool call not found for elicitation.');
     return this.requestInteraction(
       threadId,
       run.id,
@@ -2052,13 +2350,14 @@ export class RealEngineCore {
       itemId,
       request,
       run.pendingTool,
+      toolCallNode,
       active.handle.signal,
     );
   }
 
   private async continueResolvedInteraction(interactionId: string): Promise<boolean> {
     const current = await this.interactions.get(interactionId);
-    if (!current || this.activeTurns.has(current.threadId)) return false;
+    if (!current || this.hasRunningExecution(current.threadId)) return false;
     const claimed = await this.interactions.claimResolvedContinuation(interactionId);
     if (!claimed) return false;
     this.recoveredInteractionsByThread.delete(claimed.run.threadId);

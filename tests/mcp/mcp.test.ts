@@ -265,4 +265,109 @@ describe('McpClient', () => {
     const result = await client.callTool('echo', { text: 'hi' });
     expect(result.content[0]!.text).toBe('streamed');
   });
+
+  it('retains the last valid capability category when a refresh temporarily fails', async () => {
+    let failTools = false;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const body = JSON.parse((init as RequestInit).body as string);
+      if (body.method === 'initialize') return jsonResponse(initializeResult(body.id));
+      if (body.method === 'tools/list') {
+        return failTools
+          ? jsonResponse({
+              jsonrpc: '2.0',
+              id: body.id,
+              error: { code: -32603, message: 'temporary catalog failure' },
+            })
+          : jsonResponse({
+              jsonrpc: '2.0',
+              id: body.id,
+              result: { tools: [{ name: 'stable', inputSchema: { type: 'object' } }] },
+            });
+      }
+      return jsonResponse(emptyCapabilityResult(body.method, body.id));
+    });
+    const changed = vi.fn();
+    const client = new McpClient({
+      url: 'https://mcp.test/mcp',
+      authHeader: async () => null,
+      onCapabilitiesChanged: changed,
+    });
+    await client.connect();
+    failTools = true;
+
+    await client.refreshCapabilities();
+
+    expect(client.tools.map((tool) => tool.name)).toEqual(['stable']);
+    expect(changed).toHaveBeenCalled();
+  });
+
+  it('does not let an older concurrent capability refresh overwrite a newer catalog', async () => {
+    let toolListCalls = 0;
+    let resolveStale: ((response: Response) => void) | undefined;
+    let staleRequestId: number | string | undefined;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const body = JSON.parse((init as RequestInit).body as string);
+      if (body.method === 'initialize') return jsonResponse(initializeResult(body.id));
+      if (body.method === 'tools/list') {
+        toolListCalls += 1;
+        if (toolListCalls === 2) {
+          staleRequestId = body.id;
+          return new Promise<Response>((resolve) => {
+            resolveStale = resolve;
+          });
+        }
+        const name = toolListCalls === 1 ? 'initial' : 'newest';
+        return jsonResponse({
+          jsonrpc: '2.0',
+          id: body.id,
+          result: { tools: [{ name, inputSchema: { type: 'object' } }] },
+        });
+      }
+      return jsonResponse(emptyCapabilityResult(body.method, body.id));
+    });
+    const client = new McpClient({ url: 'https://mcp.test/mcp', authHeader: async () => null });
+    await client.connect();
+
+    const stale = client.refreshCapabilities();
+    await vi.waitFor(() => expect(toolListCalls).toBe(2));
+    await client.refreshCapabilities();
+    resolveStale?.(
+      jsonResponse({
+        jsonrpc: '2.0',
+        id: staleRequestId!,
+        result: { tools: [{ name: 'stale', inputSchema: { type: 'object' } }] },
+      }),
+    );
+    await stale;
+
+    expect(client.tools.map((tool) => tool.name)).toEqual(['newest']);
+  });
+
+  it('does not dispatch a serialized tool call that was cancelled while queued', async () => {
+    let releaseFirst: ((value: { content: never[] }) => void) | undefined;
+    const callTool = vi.fn(
+      () =>
+        new Promise<{ content: never[] }>((resolve) => {
+          releaseFirst = resolve;
+        }),
+    );
+    const client = new McpClient({ url: 'https://mcp.test/mcp', authHeader: async () => null });
+    (client as unknown as { sdk: { callTool: typeof callTool } }).sdk = { callTool };
+    const first = client.callTool('first', {}, { threadId: 'thread-1', itemId: 'item-1' });
+    await vi.waitFor(() => expect(callTool).toHaveBeenCalledTimes(1));
+    const controller = new AbortController();
+    const cancelled = client.callTool(
+      'cancelled',
+      {},
+      { threadId: 'thread-1', itemId: 'item-2' },
+      controller.signal,
+    );
+
+    controller.abort();
+    await expect(cancelled).rejects.toMatchObject({ name: 'AbortError' });
+    expect(callTool).toHaveBeenCalledTimes(1);
+    releaseFirst?.({ content: [] });
+    await first;
+    expect(callTool).toHaveBeenCalledTimes(1);
+  });
 });

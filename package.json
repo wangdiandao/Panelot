@@ -2,7 +2,7 @@
   "name": "panelot",
   "description": "Chrome and Edge AI agent extension with BYOK providers, browser tools, Skills, and MCP",
   "private": true,
-  "version": "0.4.3",
+  "version": "0.4.4",
   "packageManager": "pnpm@9.12.3",
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
@@ -15,7 +15,9 @@
     "build:edge": "wxt build -b edge",
     "zip": "wxt zip",
     "zip:edge": "wxt zip -b edge",
-    "compile": "tsc --noEmit && tsc --noEmit -p tsconfig.entrypoints.json && tsc --noEmit -p tsconfig.e2e.json && tsc --noEmit -p tsconfig.preview.json",
+    "compile": "node scripts/check-protocol-manifests.mjs && tsc --noEmit && tsc --noEmit -p tsconfig.entrypoints.json && tsc --noEmit -p tsconfig.e2e.json && tsc --noEmit -p tsconfig.preview.json",
+    "protocol:check": "node scripts/check-protocol-manifests.mjs",
+    "protocol:write": "node scripts/check-protocol-manifests.mjs --write",
     "lint": "eslint . --max-warnings 0",
     "format": "prettier --write \"{e2e,entrypoints,preview,src,tests,scripts}/**/*.{ts,tsx,js,mjs,json}\" \"*.{ts,js,mjs,json}\"",
     "format:check": "prettier --check \"{e2e,entrypoints,preview,src,tests,scripts}/**/*.{ts,tsx,js,mjs,json}\" \"*.{ts,js,mjs,json}\"",

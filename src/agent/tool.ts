@@ -8,7 +8,7 @@
  */
 
 import { schema, type RuntimeSchema } from './schema';
-import type { ToolExecutionBinding, ToolRecoveryPolicy } from '../db/types';
+import type { RunToolSnapshot, ToolExecutionBinding, ToolRecoveryPolicy } from '../db/types';
 import type { AskUserQuestion, ContentBlock, ToolLevel } from '../messaging/protocol';
 import type { InteractionRequestPayload } from '../messaging/protocol';
 import type { ToolSchema } from '../providers/types';
@@ -104,44 +104,204 @@ export interface AnyAgentTool {
   ): Promise<ToolResult<unknown>>;
 }
 
+export type ToolCapabilityDescriptor = Omit<
+  RunToolSnapshot,
+  'digest' | 'resultTrust' | 'resultProvenance'
+> &
+  Required<Pick<RunToolSnapshot, 'resultTrust' | 'resultProvenance'>>;
+
+export interface RegisteredAgentTool extends AnyAgentTool {
+  inputSchema: Record<string, unknown>;
+  recovery: ToolRecoveryPolicy;
+  resultTrust: 'trusted' | 'untrusted';
+  resultProvenance: 'user' | 'page' | 'mcp' | 'tool' | 'import' | 'plugin';
+  executionBinding: ToolExecutionBinding;
+}
+
+export interface ToolRegistrySnapshotEntry {
+  readonly tool: RegisteredAgentTool;
+  readonly capability: ToolCapabilityDescriptor;
+}
+
+export interface ToolRegistrySnapshot {
+  readonly generation: number;
+  readonly entries: readonly ToolRegistrySnapshotEntry[];
+}
+
+export function defaultToolResultTrust(level: ToolLevel): RegisteredAgentTool['resultTrust'] {
+  return level === 'builtin' ? 'trusted' : 'untrusted';
+}
+
+export function defaultToolResultProvenance(
+  level: ToolLevel,
+): RegisteredAgentTool['resultProvenance'] {
+  if (level === 'mcp') return 'mcp';
+  return level === 'builtin' ? 'tool' : 'page';
+}
+
+function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
+  if (typeof value !== 'object' || value === null || seen.has(value)) return value;
+  seen.add(value);
+  for (const nested of Object.values(value as Record<string, unknown>)) {
+    deepFreeze(nested, seen);
+  }
+  return Object.freeze(value);
+}
+
+function immutableClone<T>(value: T): T {
+  return deepFreeze(structuredClone(value));
+}
+
+function assertRegistrationText(value: string, field: 'name' | 'label' | 'description'): void {
+  if (!value.trim()) throw new Error(`Tool ${field} must not be empty`);
+  if (
+    field === 'name' &&
+    [...value].some((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return /\s/u.test(character) || codePoint < 32 || codePoint === 127;
+    })
+  ) {
+    throw new Error(`Tool name must not contain whitespace or control characters: ${value}`);
+  }
+}
+
+export function normalizeToolCapability(tool: AnyAgentTool): ToolCapabilityDescriptor {
+  assertRegistrationText(tool.name, 'name');
+  assertRegistrationText(tool.label, 'label');
+  assertRegistrationText(tool.description, 'description');
+  if (Boolean(tool.interaction) !== Boolean(tool.prepareInteraction)) {
+    throw new Error(
+      `Interactive tool ${tool.name} must declare both interaction and prepareInteraction`,
+    );
+  }
+  const execution = tool.executionBinding ?? { kind: 'local' as const, id: tool.name };
+  if (!execution.id.trim()) throw new Error(`Tool execution binding id must not be empty`);
+  if (tool.level === 'mcp') {
+    if (execution.kind !== 'mcp') {
+      throw new Error(`MCP tool ${tool.name} must use an MCP execution binding`);
+    }
+    if (!execution.serverId?.trim()) {
+      throw new Error(`MCP tool ${tool.name} must declare a server id`);
+    }
+    if (!execution.endpoint?.trim()) {
+      throw new Error(`MCP tool ${tool.name} must declare an endpoint`);
+    }
+    if (!execution.auth) {
+      throw new Error(`MCP tool ${tool.name} must declare its authentication binding`);
+    }
+  } else if (execution.kind !== 'local') {
+    throw new Error(`Local tool ${tool.name} must use a local execution binding`);
+  } else if (execution.serverId || execution.endpoint || execution.auth) {
+    throw new Error(`Local tool ${tool.name} must not declare MCP execution metadata`);
+  }
+
+  return immutableClone({
+    name: tool.name,
+    label: tool.label,
+    description: tool.description,
+    parameters:
+      tool.inputSchema ??
+      (schema.toJSONSchema(tool.parameters, { io: 'input' }) as Record<string, unknown>),
+    level: tool.level,
+    effects: tool.effects,
+    recovery: tool.recovery ?? (tool.effects === 'read' ? 'retry-safe' : 'never-retry'),
+    resultTrust: tool.resultTrust ?? defaultToolResultTrust(tool.level),
+    resultProvenance: tool.resultProvenance ?? defaultToolResultProvenance(tool.level),
+    execution,
+  });
+}
+
+function capabilitySummary(capability: ToolCapabilityDescriptor): string {
+  const binding =
+    capability.execution.kind === 'mcp'
+      ? `mcp:${capability.execution.serverId ?? 'unknown'}/${capability.execution.id}`
+      : `local:${capability.execution.id}`;
+  return `${capability.level}/${capability.effects}/${capability.recovery}/${binding}`;
+}
+
 // ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
 
 export class ToolRegistry {
-  private tools = new Map<string, AnyAgentTool>();
+  private tools = new Map<string, RegisteredAgentTool>();
+  private capabilitiesByName = new Map<string, ToolCapabilityDescriptor>();
+  private generation = 0;
 
   register<P, D>(tool: AgentTool<P, D>): void;
   register(tool: AnyAgentTool): void;
   register(tool: AnyAgentTool | AgentTool<unknown, unknown>): void {
-    if (this.tools.has(tool.name)) throw new Error(`tool ${tool.name} already registered`);
-    this.tools.set(tool.name, tool as unknown as AnyAgentTool);
+    const erased = tool as unknown as AnyAgentTool;
+    const capability = normalizeToolCapability(erased);
+    const existing = this.capabilitiesByName.get(capability.name);
+    if (existing) {
+      throw new Error(
+        `Tool registration conflict for ${capability.name}: existing ${capabilitySummary(existing)}; incoming ${capabilitySummary(capability)}`,
+      );
+    }
+    const registered = Object.freeze({
+      ...erased,
+      execute: erased.execute.bind(erased),
+      ...(erased.resolveTarget ? { resolveTarget: erased.resolveTarget.bind(erased) } : undefined),
+      ...(erased.prepareInteraction
+        ? { prepareInteraction: erased.prepareInteraction.bind(erased) }
+        : undefined),
+      inputSchema: capability.parameters,
+      recovery: capability.recovery,
+      resultTrust: capability.resultTrust,
+      resultProvenance: capability.resultProvenance,
+      executionBinding: capability.execution,
+    }) as RegisteredAgentTool;
+    this.tools.set(capability.name, registered);
+    this.capabilitiesByName.set(capability.name, capability);
+    this.generation += 1;
   }
 
   unregister(name: string): void {
-    this.tools.delete(name);
+    const removedTool = this.tools.delete(name);
+    const removedCapability = this.capabilitiesByName.delete(name);
+    if (removedTool !== removedCapability) {
+      throw new Error(`Tool registry invariant violated while unregistering ${name}`);
+    }
+    if (removedTool) this.generation += 1;
   }
 
-  get(name: string): AnyAgentTool | undefined {
+  get(name: string): RegisteredAgentTool | undefined {
     return this.tools.get(name);
   }
 
   /** Tools visible to the LLM, filtered by enabled levels (ModelPreset). */
-  list(enabledLevels?: readonly ToolLevel[]): AnyAgentTool[] {
+  list(enabledLevels?: readonly ToolLevel[]): RegisteredAgentTool[] {
     const all = [...this.tools.values()];
     if (!enabledLevels) return all;
     // builtin tools are always available.
     return all.filter((t) => t.level === 'builtin' || enabledLevels.includes(t.level));
   }
 
+  /** Canonical provider and recovery facts captured for resumable runs. */
+  capabilities(enabledLevels?: readonly ToolLevel[]): ToolCapabilityDescriptor[] {
+    return this.snapshot(enabledLevels).entries.map((entry) => entry.capability);
+  }
+
+  /** Atomically pair each immutable implementation with its capability facts. */
+  snapshot(enabledLevels?: readonly ToolLevel[]): ToolRegistrySnapshot {
+    const entries = this.list(enabledLevels).map((tool) => {
+      const capability = this.capabilitiesByName.get(tool.name);
+      if (!capability) throw new Error(`Tool capability is missing for ${tool.name}`);
+      return Object.freeze({ tool, capability });
+    });
+    return Object.freeze({
+      generation: this.generation,
+      entries: Object.freeze(entries),
+    });
+  }
+
   /** JSON Schemas for the provider request. */
   schemas(enabledLevels?: readonly ToolLevel[]): ToolSchema[] {
-    return this.list(enabledLevels).map((t) => ({
-      name: t.name,
-      description: t.description,
-      parameters:
-        t.inputSchema ??
-        (schema.toJSONSchema(t.parameters, { io: 'input' }) as Record<string, unknown>),
+    return this.capabilities(enabledLevels).map((capability) => ({
+      name: capability.name,
+      description: capability.description,
+      parameters: capability.parameters,
     }));
   }
 }

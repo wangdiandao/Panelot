@@ -56,7 +56,9 @@ Item 类型（`ItemKind`）：`user_message` / `assistant_message` / `reasoning`
 - 客户端 → 引擎：**Op**（操作，等价 Codex 的 Submission），每个 Op 带客户端生成的 `submissionId`（UUID）。
 - 引擎 → 客户端：**AgentEvent**（事件），凡由某个 Op 直接引发的事件回填 `submissionId`；广播类事件（其他 UI 引发的变更）不带。
 - 共享类型都定义在 `src/messaging/protocol.ts`，引擎和三个 UI 入口直接引用，不各自复制。
-- `AgentEvent` 是开放联合。UI 忽略未知 `type`，以便引擎与 UI 在扩展更新期间完成版本握手。
+- `AgentEvent` 在 TypeScript 内是穷尽联合，在跨上下文边界按开放事件集处理：`protocol.ts` 的运行时事件目录受联合类型完整性约束，已知 `type` 必须通过唯一的逐字段 validator，未知 `type` 由 UI transport 静默忽略。这允许扩展滚动更新时先增加非关键广播事件，但不会把畸形的已知事件伪装成向前兼容。
+- Engine `Op` 与 `AgentEvent` 在逐字段校验前还应用跨上下文资源预算，限制异常深度、集合扇出、对象字段数及累计文本/二进制体积；事件侧预算刻意高于命令侧，以容纳长 Thread snapshot 和合法工具结果。`interaction.response` 的提交值额外要求为有界、非循环的 JSON 值，与 MCP elicitation 的 JSON Schema 契约一致，并确保命令 payload 能稳定生成幂等指纹。
+- `ENGINE_SCHEMA_HASH` 与 `CONTENT_SCRIPT_SCHEMA_HASH` 由 `scripts/check-protocol-manifests.mjs` 的语义 manifest 推导。Engine manifest 覆盖 Op、AgentEvent、运行时目录、validator 与 transport 解码；content manifest 覆盖请求/结果类型、工具参数和结果 validator、后台 gateway 信封及页面执行器入口。manifest 使用去注释并规范化打印的 TypeScript AST，因此嵌套类型或边界 helper 的行为变化会改变 hash，单纯注释和排版变化不会。`pnpm compile` 会拒绝未同步 hash；审核 manifest 变化后使用 `pnpm protocol:write` 更新常量。
 
 ### 3.2 Op 联合类型
 
@@ -73,6 +75,7 @@ type Op =
     } // 可选：连接即订阅某 Thread
   | { type: 'thread.create'; submissionId: string; preset?: string; folderId?: string } // preset = ModelPreset id（见 03）
   | { type: 'thread.subscribe'; submissionId: string; threadId: string }
+  | { type: 'thread.delete'; submissionId: string; threadId: string }
   | { type: 'thread.fork'; submissionId: string; threadId: string; atNodeId: string }
   | { type: 'thread.selectBranch'; submissionId: string; threadId: string; nodeId: string }
   | {
@@ -228,6 +231,7 @@ type AgentEvent =
   // L1→L2 升级确认走同一事件，flags 带 'escalation_l2'（06 §5）
 
   // —— 广播类 ——
+  | { type: 'thread.deleted'; threadId: string }
   | { type: 'thread.updated'; threadId: string; revision: number; patch: Partial<ThreadMeta> }
   | {
       type: 'queue.updated';
@@ -261,6 +265,12 @@ sequenceDiagram
 
 `ThreadSnapshot` = 带 revision 的 Thread 元数据 + 当前路径消息 + 活跃 turn（若有）+ 持久 pending approvals/interactions + durable queued/recoverable Runs。EngineClient 把待确认命令保存在 `chrome.storage.session` outbox；断线后用相同 `clientId + submissionId` 重发，收到 ack/rejection 才清除。
 
+后台以 `clientId + submissionId + commandType` 形成命令事务身份，并只持久化命令 payload 规范编码的 SHA-256，不把输入正文复制到 receipt。相同 submission 改变 command type 或 payload 会得到 `invalid_command`，原 receipt 保持不变。`thread.create/delete/fork/selectBranch`、`turn.enqueue`（含 busy `turn.submit` 的自动入队）、`queue.update/remove`、`approval.response` 和 `interaction.response` 已把领域写入与 command receipt 终态放在同一个 Dexie 事务中，任一写入失败则整笔回滚。已经终结的审批或交互只对结构相同的新响应返回 ACK；不同 payload 会在同一 receipt 事务中持久化 rejection，原领域终态和审计节点保持不变。事务提交后的内存队列同步、规则更新、Run continuation 或广播即使失败，也不能把已经持久化的终态改写成另一种响应；Core 始终回放 receipt 中实际生效的终态。
+
+仍未完整 Unit-of-Work 化的命令分为两类：idle `turn.submit`/`turn.fork`、`turn.steer` 会跨 Run、节点、附件或环境快照的多阶段 admission，当前依靠稳定 Run/节点身份和恢复规则去重；`turn.interrupt`、`run.resume`、`run.resolveUncertain` 会触发 abort、执行所有权转移或后续工具恢复，ACK 仍表示命令已被调度而非整个 continuation 已提交。`initialize`、`thread.subscribe` 与 `ping` 是 Host 控制流，不创建领域 command receipt。
+
+`thread.delete` 由后台引擎统一调度：先停止接收该 Thread 的新 Run、打断并等待活跃/恢复执行退出，再清理内存中的队列、审批、交互和定时器。最后在一个 Dexie 事务中级联删除 Thread 的 nodes、attachments、runs、approvals、interactions 与 ThreadMeta，并提交对应 command receipt 的 ACK；receipt 本身保留，因此 Worker 或 UI 在 ACK 丢失后用相同 `clientId + submissionId` 重发仍会得到确定应答。提交后广播 `thread.deleted`，订阅该 Thread 的 UI 回到草稿态。
+
 ### 3.5 背压与有界队列
 
 - EngineHost 每 Thread 一个有界 Op 队列（容量 32）；满时立刻回 `command.rejected{code:'overloaded'}`，EngineClient 回滚乐观消息并给出可重试错误。
@@ -292,11 +302,11 @@ tool_call
      └─ 内置 → 引擎内直接执行（fetch_url / memory 等）
 ```
 
-- content script 消息协议同样定义在 `protocol.ts`（`ContentScriptOp` / `ContentScriptResult`），带超时（默认 10s）与单次重注入重试。消息入口除校验 protocol/schema hash 和 request ownership 外，还按工具校验 `params`，并对成功结果、动作证据与结构化失败做运行时校验；未知工具或畸形跨上下文载荷不会进入 DOM 执行器。
+- content script 消息协议同样定义在 `protocol.ts`（`ContentScriptOp` / `ContentScriptResult`），带超时（默认 10s）与单次重注入重试。消息入口除校验 protocol/schema hash 和 request ownership 外，还按工具校验 `params`，并对成功结果、动作证据与结构化失败做运行时校验；请求与结果在详细 schema 遍历前应用独立的跨上下文资源预算，其 64 MiB 累计文本/二进制额度兼容 upload base64 和页面 snapshot，同时阻断异常深度或集合扇出。未知工具或畸形跨上下文载荷不会进入 DOM 执行器。
 - debugger attach 以 tab 为粒度记录；当前在最后一次 CDP 调用空闲 30s 后自动 detach，没有 turn-complete 立即 detach。
 
 ## 6. 当前约束
 
-- `protocol` 或 schema hash 不匹配时，EngineHost 返回 `fatal.reload_required` 并断开；该最小控制信封对版本保持可解析，host 回显请求方 `protocol`，使旧 UI 能进入 `reloadRequired` 并停止重连。`initialized` 与其余普通事件仍只接受当前协议和 schema hash，不提供行为兼容分支。未知 AgentEvent 仍应忽略。
+- `protocol` 或 schema hash 不匹配时，EngineHost 返回 `fatal.reload_required` 并断开；该最小控制信封对版本保持可解析，host 回显请求方 `protocol`，使旧 UI 能进入 `reloadRequired` 并停止重连。`initialized` 与其余已知事件仍按当前 schema 严格校验；未知 AgentEvent 可忽略，但已知事件字段缺失、类型错误或枚举越界会转成 `protocol_mismatch`，不得降级为兼容路径。
 - 多窗口 Side Panel：各窗口独立选择 Thread（`chrome.sidePanel` 本身 per-window），同一 Thread 被多处订阅时靠事件广播保持一致，无须额外绑定机制。
 - L1→L2 升级确认合并进 `approval.request`（flag `escalation_l2`，见 06 §5），不设独立的 `escalation.request` 事件——同一张审批卡片、同一套决策语义，UI 只多渲染一条横幅提示。

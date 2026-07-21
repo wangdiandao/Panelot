@@ -127,6 +127,10 @@ interface Attachment {
 
 截图/快照单独设配额（默认 200MB），超限按 `createdAt` LRU 清理并在对应节点标记 `evicted`。
 
+### 2.4 commandReceipts
+
+Receipt 主键为 `clientId + submissionId`，保存 `commandType`、状态、终态响应和可选 `requestFingerprint`。Fingerprint 是排除 `type/submissionId/clientId` 后的命令 payload 规范编码 SHA-256，只用于识别同一 submission 的 payload 漂移，不保存输入原文，也不建立新索引。已完成 receipt 的终态不可覆盖；支持 Unit-of-Work 的领域仓储把 receipt 表与自己的表加入同一 Dexie 事务。
+
 ## 3. 树操作规范
 
 ### 3.1 追加（正常对话）
@@ -146,6 +150,8 @@ appendNode(threadId, parentId = thread.leafId, node)
 ### 3.3 删除消息
 
 采用 OpenWebUI 的 grandchildren 重链，但受 append-only 约束改为**墓碑标记**：节点加 `payload.deleted = true`，`buildSessionContext` 跳过墓碑并把其子节点视为直连祖父。物理删除仅发生在「删除整个 Thread」与配额清理。
+
+删除整个 Thread 走后台权威的 `thread.delete` 命令，不由 UI 直接操作 Dexie。引擎先停止该 Thread 的队列推进并等待活跃/恢复执行退出，再清理内存等待者；随后在单一事务中删除 `nodes`、`attachments`、`runs`、`approvals`、`interactions` 和 `threads` 中属于该 Thread 的记录，同时把删除命令的 `commandReceipts` 记录写为 acknowledged。receipt 不随 Thread 删除，以保留跨 Worker 重启和 ACK 丢失时的幂等重放依据；事务任一步失败都会回滚整个级联删除。
 
 ### 3.4 完整性校验
 
@@ -179,7 +185,7 @@ Provider 与 MCP 秘密不进入快照，只保存 credential reference。恢复
 
 - 设置页通过 `navigator.storage.estimate()` 展示用量；总量超 80% 时只在“数据”设置页提示，侧边栏当前没有配额告警。
 - 附件总量超过 200MB 后按 `createdAt` 删除最旧附件并跳过活跃 Thread；删除事务先把引用节点标记为 `evicted`，再物理删除附件。启动时清理遗留的半删除记录。
-- “归档 N 天后删除 nodes、保留 ThreadMeta/Markdown 摘要”与删除前 `deleting` 两阶段流程尚未接入设置页或定时任务，属于目标策略。
+- “归档 N 天后删除 nodes、保留 ThreadMeta/Markdown 摘要”的自动保留策略尚未接入设置页或定时任务，属于目标策略；用户主动删除整个 Thread 已走 §3.3 的后台原子级联流程。
 
 ## 6. 当前约束
 

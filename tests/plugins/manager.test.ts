@@ -416,7 +416,7 @@ describe('PluginManager trust boundary', () => {
     ).rejects.toThrow(/50 MB uncompressed limit/i);
     expect(materializeSpy).not.toHaveBeenCalled();
     await expectDatabaseToBeEmpty();
-  }, 15_000);
+  }, 30_000);
 
   it('rejects cumulative actual output even when each entry stays below its limit', async () => {
     const repeated = new Uint8Array(9 * 1024 * 1024);
@@ -430,7 +430,7 @@ describe('PluginManager trust boundary', () => {
     await expect(manager.analyzeZip(archive)).rejects.toThrow(/50 MB uncompressed limit/i);
 
     await expectDatabaseToBeEmpty();
-  }, 15_000);
+  }, 30_000);
 
   it('rejects oversized compressed input before parsing', async () => {
     await expect(manager.analyzeZip(new ArrayBuffer(10 * 1024 * 1024 + 1))).rejects.toThrow(

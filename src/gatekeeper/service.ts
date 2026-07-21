@@ -18,6 +18,7 @@ import { DEFAULT_SENSITIVE_PATTERNS, destinationOrigin, type PermissionRule } fr
 import { HostPermissionBroker } from '../permissions/hostPermissionBroker';
 
 const RULES_KEY = 'permission_rules';
+const DEFAULT_RULES_SEEDED_KEY = 'permission_rule_defaults_seeded_v1';
 const SENSITIVE_KEY = 'sensitive_origins';
 export const GATEKEEPER_SESSION_STATE_KEY = 'panelot_gatekeeper_session_v1';
 export const GATEKEEPER_SESSION_MAX_THREADS = 256;
@@ -384,6 +385,30 @@ export class GatekeeperService {
 
   static async listRules(): Promise<PermissionRule[]> {
     return storageGet<PermissionRule[]>(RULES_KEY, []);
+  }
+
+  /**
+   * Seed shipped defaults exactly once. The durable marker distinguishes a
+   * user-deleted default from a profile that has never been initialized.
+   */
+  static async seedDefaultRules(): Promise<void> {
+    if (await storageGet<boolean>(DEFAULT_RULES_SEEDED_KEY, false)) return;
+    await storageUpdate<PermissionRule[]>(RULES_KEY, [], (rules) =>
+      rules.some((rule) => rule.tool === 'run_javascript')
+        ? rules
+        : [
+            ...rules,
+            {
+              id: 'default:run_javascript-deny',
+              tool: 'run_javascript',
+              origin: '*',
+              verdict: 'deny',
+              source: 'user_setting',
+              createdAt: Date.now(),
+            },
+          ],
+    );
+    await storageUpdate<boolean>(DEFAULT_RULES_SEEDED_KEY, false, () => true);
   }
 
   static async removeRule(id: string): Promise<void> {

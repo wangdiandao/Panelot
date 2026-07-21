@@ -43,16 +43,16 @@ export function PermissionSwitch({ value, onSelect }: Props) {
       <DropdownMenuTrigger asChild>
         <Button
           variant="outline"
-          size="sm"
+          size="xs"
           aria-label={t('perm.switch')}
-          className="h-6 shrink-0 rounded-full"
+          className="shrink-0 rounded-full"
         >
           <Icon data-icon="inline-start" />
-          {t(active.labelKey)}
+          <span className="max-[359px]:sr-only">{t(active.labelKey)}</span>
           <ChevronDown data-icon="inline-end" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" side="top" className="w-64">
+      <DropdownMenuContent align="start" side="top" className="w-[min(16rem,calc(100vw-1rem))]">
         <DropdownMenuRadioGroup
           value={active.id}
           onValueChange={(value) => onSelect(value as PermissionTier)}

@@ -4,11 +4,47 @@ import {
   createProviderFrameError,
   normalizeHttpError,
   parseRetryAfter,
+  requestWithRetry,
   withRetry,
 } from '../../src/providers/http';
 import { ProviderError } from '../../src/providers/types';
 
 const noSleep = () => Promise.resolve();
+
+describe('requestWithRetry', () => {
+  it('normalizes transport failures so provider requests can retry', async () => {
+    const request = vi
+      .fn<(apiKey: string) => Promise<Response>>()
+      .mockRejectedValueOnce(new TypeError('socket closed'))
+      .mockResolvedValueOnce(new Response('ok'));
+
+    const response = await requestWithRetry(createKeyRing(['sticky']), request, {
+      maxAttempts: 2,
+      sleep: noSleep,
+    });
+
+    expect(await response.text()).toBe('ok');
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenNthCalledWith(1, 'sticky');
+    expect(request).toHaveBeenNthCalledWith(2, 'sticky');
+  });
+
+  it('normalizes HTTP failures with provider-specific request ids', async () => {
+    const response = new Response('{"message":"bad request"}', {
+      status: 400,
+      headers: { 'x-trace-id': 'trace-a' },
+    });
+
+    await expect(
+      requestWithRetry(createKeyRing(['key']), async () => response, {
+        requestIdHeaders: ['request-id', 'x-trace-id'],
+      }),
+    ).rejects.toMatchObject({
+      kind: 'protocol',
+      details: { status: 400, requestId: 'trace-a' },
+    });
+  });
+});
 
 describe('createProviderFrameError', () => {
   it.each([

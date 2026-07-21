@@ -105,6 +105,14 @@ const PRESENTATION_BY_KIND: Record<ProviderErrorKind, PresentationPolicy> = {
   },
 };
 
+const PRESENTATION_BY_APP_KIND: Record<string, PresentationPolicy> = {
+  engine_protocol: {
+    summaryKey: 'error.engineProtocol',
+    guidanceKey: 'error.guidance.engineProtocol',
+    opensSettings: false,
+  },
+};
+
 function findOwnPolicy<Key extends string>(
   policies: Record<Key, PresentationPolicy>,
   key: string | undefined,
@@ -129,8 +137,9 @@ export function buildProviderErrorPresentation(
   input: ProviderErrorViewInput,
 ): ProviderErrorPresentation {
   const reasonPolicy = findOwnPolicy(PRESENTATION_BY_REASON, input.details?.reason);
+  const appKindPolicy = findOwnPolicy(PRESENTATION_BY_APP_KIND, input.kind);
   const kindPolicy = findOwnPolicy(PRESENTATION_BY_KIND, input.kind);
-  const policy = reasonPolicy ?? kindPolicy;
+  const policy = reasonPolicy ?? appKindPolicy ?? kindPolicy;
   const detail = detailFrom(input.details);
 
   if (!policy) {

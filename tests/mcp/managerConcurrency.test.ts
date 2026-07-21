@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   close: vi.fn(async () => undefined),
   instances: [] as Array<{ connect: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> }>,
   listMcpServers: vi.fn(),
+  readMcpBearer: vi.fn(),
 }));
 
 vi.mock('../../src/settings/store', () => ({ onStorageChange: vi.fn() }));
@@ -14,7 +15,7 @@ vi.mock('../../src/mcp/store', () => ({
   listMcpServers: mocks.listMcpServers,
   protectMcpServer: vi.fn(async (config) => config),
   readMcpAccess: vi.fn(),
-  readMcpBearer: vi.fn(),
+  readMcpBearer: mocks.readMcpBearer,
   readMcpRefresh: vi.fn(),
   saveMcpServers: vi.fn(),
 }));
@@ -54,6 +55,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.instances.length = 0;
   mocks.listMcpServers.mockResolvedValue([server]);
+  mocks.readMcpBearer.mockImplementation(async (config) => config.auth.token);
   mocks.connect.mockResolvedValue(undefined);
 });
 
@@ -116,5 +118,64 @@ describe('McpManager connection serialization', () => {
     await expect(manager.disconnect(server.id)).rejects.toThrow('close failed');
 
     expect(manager.getState(server.id)).toEqual({ status: 'disconnected' });
+  });
+
+  it('disconnects a stale same-origin path and keeps a lazy server disconnected', async () => {
+    let current = server;
+    mocks.listMcpServers.mockImplementation(async () => [current]);
+    const manager = new McpManager(permissionBroker as never);
+    await manager.connect(server.id);
+
+    current = { ...server, url: 'https://mcp.example.com/another-tenant/mcp' };
+    await (manager as unknown as { reconcileStorage(): Promise<void> }).reconcileStorage();
+
+    expect(mocks.instances).toHaveLength(1);
+    expect(mocks.instances[0]?.close).toHaveBeenCalledOnce();
+    expect(manager.getState(server.id)).toEqual({ status: 'disconnected' });
+  });
+
+  it('reconnects an eager server when its encrypted credential reference changes', async () => {
+    let current = {
+      ...server,
+      auth: { kind: 'bearer' as const, token: 'sealed-token-a' },
+      connectOnStartup: true,
+    };
+    mocks.listMcpServers.mockImplementation(async () => [current]);
+    const manager = new McpManager(permissionBroker as never);
+    await manager.connect(server.id);
+
+    current = {
+      ...current,
+      auth: { kind: 'bearer' as const, token: 'sealed-token-b' },
+    };
+    await (manager as unknown as { reconcileStorage(): Promise<void> }).reconcileStorage();
+
+    expect(mocks.instances).toHaveLength(2);
+    expect(mocks.instances[0]?.close).toHaveBeenCalledOnce();
+    expect(mocks.instances[1]?.connect).toHaveBeenCalledWith({
+      url: server.url,
+      authorization: 'Bearer sealed-token-b',
+    });
+    expect(manager.getState(server.id)).toEqual({ status: 'ready', toolCount: 0 });
+  });
+
+  it('does not commit a candidate whose configuration drifted during connect', async () => {
+    let current = server;
+    let finishConnect: (() => void) | undefined;
+    mocks.listMcpServers.mockImplementation(async () => [current]);
+    mocks.connect.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (finishConnect = resolve)),
+    );
+    const manager = new McpManager(permissionBroker as never);
+
+    const connecting = manager.connect(server.id);
+    await vi.waitFor(() => expect(mocks.connect).toHaveBeenCalledOnce());
+    current = { ...server, url: 'https://mcp.example.com/reconfigured/mcp' };
+    finishConnect?.();
+
+    await expect(connecting).rejects.toThrow(/configuration changed/i);
+    expect(mocks.instances[0]?.close).toHaveBeenCalledOnce();
+    expect(manager.getState(server.id)).toMatchObject({ status: 'error' });
+    expect(await manager.getClient(server.id)).toBeUndefined();
   });
 });

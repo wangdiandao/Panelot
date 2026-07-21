@@ -913,8 +913,12 @@ export class BrowserToolGateway {
       // actual URL change.
       const nav = await this.#detectNavigation(tabId, urlBefore, signal, deadlineAt);
       if (nav) return nav;
-      // "Receiving end does not exist" → content script not injected; retry once.
-      if (!retried && /Receiving end|Could not establish|message channel closed/i.test(message)) {
+      const channelUnavailable = /Receiving end|Could not establish|message channel closed/i.test(
+        message,
+      );
+      // Reads are safe to replay after reinjection. A write has already crossed the
+      // message boundary, so a missing reply is ambiguous even when the URL stayed put.
+      if (!mayWrite && !retried && channelUnavailable) {
         await this.#inject(tabId, signal, deadlineAt);
         return this.#sendToTab(
           tabId,
@@ -926,6 +930,15 @@ export class BrowserToolGateway {
           threadId,
           newTabWatch,
           true,
+        );
+      }
+      if (mayWrite && channelUnavailable) {
+        throw actionError(
+          'navigation_uncertain',
+          '页面写操作已派发，但内容脚本通道在回复前断开。操作可能已生效；请先检查当前页面，不要盲目重试。',
+          'settle',
+          false,
+          { tabId, dispatched: true, effectMayHaveOccurred: true, channelUnavailable: true },
         );
       }
       throw e;

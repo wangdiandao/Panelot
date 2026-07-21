@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { ToolRegistry } from '../../src/agent/tool';
 import { PanelotDB } from '../../src/db/schema';
@@ -44,16 +44,17 @@ function registerTool(
   registry: ToolRegistry,
   description = 'Read a stable value.',
   executionBinding?: ToolExecutionBinding,
+  resultText = 'ok',
 ): void {
   registry.register({
     name: 'stable_read',
     label: 'Stable read',
     description,
     parameters: z.object({ value: z.string() }),
-    level: 'builtin',
+    level: executionBinding?.kind === 'mcp' ? 'mcp' : 'builtin',
     effects: 'read',
     executionBinding,
-    execute: async () => ({ content: [{ type: 'text', text: 'ok' }] }),
+    execute: async () => ({ content: [{ type: 'text', text: resultText }] }),
   });
 }
 
@@ -165,6 +166,77 @@ describe('run environment snapshot', () => {
     await expect(bindToolRegistry(endpointDrift, captured)).rejects.toMatchObject({
       code: 'environment_snapshot_invalid',
     });
+  });
+
+  it('includes normalized safety defaults in the stable tool capability fingerprint', async () => {
+    const initial = new ToolRegistry();
+    registerTool(initial);
+    const captured = await snapshot(initial);
+    expect(captured.toolCatalog[0]).toMatchObject({
+      effects: 'read',
+      recovery: 'retry-safe',
+      resultTrust: 'trusted',
+      resultProvenance: 'tool',
+      execution: { kind: 'local', id: 'stable_read' },
+    });
+
+    const recoveryDrift = new ToolRegistry();
+    recoveryDrift.register({
+      name: 'stable_read',
+      label: 'Stable read',
+      description: 'Read a stable value.',
+      parameters: z.object({ value: z.string() }),
+      level: 'builtin',
+      effects: 'read',
+      recovery: 'never-retry',
+      execute: async () => ({ content: [{ type: 'text', text: 'ok' }] }),
+    });
+
+    const drifted = await captureToolCatalog(recoveryDrift, captured.enabledToolLevels);
+    expect(drifted[0]?.digest).not.toBe(captured.toolCatalog[0]?.digest);
+    await expect(bindToolRegistry(recoveryDrift, captured)).rejects.toMatchObject({
+      code: 'environment_snapshot_invalid',
+    });
+  });
+
+  it('binds the implementation paired with the capability snapshot during registry churn', async () => {
+    const initial = new ToolRegistry();
+    registerTool(initial, 'Read a stable value.', undefined, 'captured');
+    const captured = await snapshot(initial);
+
+    const current = new ToolRegistry();
+    registerTool(current, 'Read a stable value.', undefined, 'matching implementation');
+    const takeSnapshot = current.snapshot.bind(current);
+    vi.spyOn(current, 'snapshot').mockImplementationOnce((levels) => {
+      const atomic = takeSnapshot(levels);
+      current.unregister('stable_read');
+      registerTool(current, 'Changed after snapshot.', undefined, 'replacement implementation');
+      return atomic;
+    });
+
+    const bound = await bindToolRegistry(current, captured);
+    await expect(
+      bound.get('stable_read')?.execute('call-1', { value: 'x' }, new AbortController().signal),
+    ).resolves.toMatchObject({ content: [{ text: 'matching implementation' }] });
+  });
+
+  it('accepts legacy v1 tool fingerprints that omitted equivalent result defaults', async () => {
+    const registry = new ToolRegistry();
+    registerTool(registry);
+    const legacy = structuredClone(await snapshot(registry));
+    const legacyTool = legacy.toolCatalog[0]!;
+    delete legacyTool.resultTrust;
+    delete legacyTool.resultProvenance;
+    const { digest: discardedToolDigest, ...legacyCapability } = legacyTool;
+    void discardedToolDigest;
+    legacyTool.digest = await digestCanonical(legacyCapability);
+    legacy.toolCatalogDigest = await digestCanonical(legacy.toolCatalog);
+    const { digest: discardedEnvironmentDigest, ...legacyEnvironment } = legacy;
+    void discardedEnvironmentDigest;
+    legacy.digest = await digestCanonical(legacyEnvironment);
+
+    await expect(verifyRunEnvironmentSnapshot(legacy, { text: 'hello' })).resolves.toBe(legacy);
+    await expect(bindToolRegistry(registry, legacy)).resolves.toBeInstanceOf(ToolRegistry);
   });
 
   it('allows referenced secret rotation only when provider transport facts stay unchanged', async () => {

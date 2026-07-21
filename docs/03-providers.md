@@ -165,7 +165,7 @@ interface QuirkFlags {
 
 ## 6. Verify 连接测试与模型拉取
 
-- **Verify**：OpenAI 路径依次 ① `GET /models`（底层 4s 超时）② 最小 streaming chat 请求 ③ echo 工具探测；Anthropic 路径执行最小 streaming/tool 探测。产出可达性 / key / 流式 / 工具结构化结果，设置页在发请求前动态申请 endpoint host permission。
+- **Verify**：OpenAI 路径依次 ① `GET /models`（整个请求与 key failover 共用 4s 超时）② 最小 streaming chat 请求 ③ echo 工具探测；Anthropic 路径执行最小 streaming/tool 探测。产出可达性 / key / 流式 / 工具结构化结果，设置页在发请求前动态申请 endpoint host permission。
 - `/models` 响应在使用前必须是包含非空字符串 `id` 的 `data` 数组；非 JSON、缺字段或畸形条目归类为 protocol 错误，不把未经校验的 Provider 数据写入模型列表。
 - **模型拉取**：所有 enabled 连接并发拉取，adapter `listModels()` 各自使用 4s timeout；失败连接独立返回 error。对话内的 ModelSelector 在组件首次打开时拉取；设置页的默认模型选择器会立即拉取，以保证其值始终指向一个明确的可用模型。结果缓存到组件实例，当前没有 1h TTL 或手动刷新按钮。
 
@@ -174,7 +174,7 @@ interface QuirkFlags {
 ```ts
 type ProviderError =
   | { kind: 'auth' } // 401/403 → 换下一个 key；全失败则提示用户
-  | { kind: 'rate_limit'; retryAfterMs?: number } // 429 → 尊重 retry-after（秒或 HTTP 日期），带抖动的指数退避（1s 起 ×2 上限 32s，最多 4 次）；多 key 时先 failover
+  | { kind: 'rate_limit'; retryAfterMs?: number } // 429 → 尊重 retry-after（秒或 HTTP 日期），带抖动的指数退避（1s 起 ×2 上限 32s）；多 key 时先 failover
   | { kind: 'overloaded' } // 529/503 → 同 429 策略
   | { kind: 'context_too_long' } // → 不重试，直接报错并建议用户新开会话
   | { kind: 'content_filter' }
@@ -188,5 +188,6 @@ type ProviderError =
 
 ## 8. 当前约束
 
-- 多 key 轮换粒度：**粘性 key + 失败才切换**（非 round-robin）——对 provider 侧 prompt cache 更友好（Anthropic cache 按账号，OpenAI 按 key）。429/401 时先 failover 到下一个 key，全部失效才报错。
+- 多 key 轮换粒度：**粘性 key + 失败才切换**（非 round-robin）——对 provider 侧 prompt cache 更友好（Anthropic cache 按账号，OpenAI 按 key）。429/401 时先 failover 到下一个 key；单次模型请求和模型列表请求的尝试上限至少覆盖全部已配置 key，全部失效才报错。
+- OpenAI 与 Anthropic 的流式请求、模型发现共用同一个 HTTP 重试边界：fetch/网络异常先归一化为 `network`，非 2xx 响应统一提取 `retry-after`、Provider request id 与脱敏错误，再进入上述 key 轮换/退避策略。适配器只负责 URL、Header 和响应协议，避免不同端点各自实现一套失败语义。
 - Gemini 不做第三种 kind：其 OpenAI 兼容层已覆盖需求，新增线协议的维护成本不值。

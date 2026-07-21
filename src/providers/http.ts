@@ -485,6 +485,65 @@ export async function withRetry<T>(
   throw lastError;
 }
 
+export interface RetryingHttpRequestOptions extends RetryOptions {
+  /** Provider-specific correlation header, in lookup priority order. */
+  requestIdHeaders?: string | readonly string[];
+}
+
+/**
+ * Model discovery shares a short overall deadline across every attempt. Keep
+ * its retry delays well inside that budget while still visiting every key on
+ * authentication failures.
+ */
+export function modelDiscoveryRetryOptions(apiKeyCount: number): RetryOptions {
+  return {
+    maxAttempts: Math.max(4, apiKeyCount),
+    baseDelayMs: 50,
+    capDelayMs: 250,
+  };
+}
+
+/**
+ * Shared fetch boundary for provider adapters. It normalizes transport and
+ * non-2xx failures before applying the same sticky-key retry policy.
+ */
+export function requestWithRetry(
+  keys: KeyRing,
+  request: (apiKey: string) => Promise<Response>,
+  options: RetryingHttpRequestOptions = {},
+): Promise<Response> {
+  const requestIdHeaders =
+    typeof options.requestIdHeaders === 'string'
+      ? [options.requestIdHeaders]
+      : (options.requestIdHeaders ?? []);
+  return withRetry(
+    keys,
+    async (apiKey) => {
+      let response: Response;
+      try {
+        response = await request(apiKey);
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') throw error;
+        if (error instanceof ProviderError) throw error;
+        const message = error instanceof Error ? error.message : String(error);
+        throw new ProviderError('network', `fetch failed: ${message}`);
+      }
+      if (response.ok) return response;
+
+      const requestId = requestIdHeaders
+        .map((header) => response.headers.get(header))
+        .find((value): value is string => value !== null);
+      throw normalizeHttpError(
+        response.status,
+        await response.text().catch(() => ''),
+        response.headers.get('retry-after'),
+        requestId,
+      );
+    },
+    options,
+  );
+}
+
 function jitteredBackoff(base: number, cap: number, attempt: number, random: () => number): number {
   const ceiling = Math.min(base * 2 ** attempt, cap);
   return Math.floor(ceiling * (0.5 + Math.min(1, Math.max(0, random())) * 0.5));

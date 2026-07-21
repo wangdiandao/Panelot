@@ -31,6 +31,24 @@ export interface EngineTransport {
   close(): void;
 }
 
+/**
+ * Decode an untrusted background message at the UI boundary. New event names
+ * are ignored for rolling extension updates; malformed payloads for event
+ * names this UI understands remain visible as protocol errors.
+ */
+export function decodeAgentEvent(message: unknown): AgentEvent | undefined {
+  const parsed = parseAgentEvent(message);
+  if (parsed.ok) return parsed.value;
+  if (parsed.kind === 'unsupported') return undefined;
+  return {
+    type: 'error',
+    code: 'protocol_mismatch',
+    message: `Malformed engine event: ${parsed.diagnostic}`,
+    retryable: false,
+    submissionId: parsed.submissionId,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // DirectTransport — in-process pair for tests (no chrome APIs)
 // ---------------------------------------------------------------------------
@@ -70,7 +88,9 @@ export function createDirectPair(): { transport: EngineTransport; connection: En
     post(ev) {
       if (closed) return;
       queueMicrotask(() => {
-        for (const cb of eventSubs) cb(ev);
+        const event = decodeAgentEvent(ev);
+        if (!event) return;
+        for (const cb of eventSubs) cb(event);
       });
     },
     onOp(cb) {
@@ -97,16 +117,8 @@ export function createPortTransport(): EngineTransport {
   const disconnectSubs = new Set<() => void>();
 
   port.onMessage.addListener((msg) => {
-    const parsed = parseAgentEvent(msg);
-    const event: AgentEvent = parsed.ok
-      ? parsed.value
-      : {
-          type: 'error',
-          code: 'protocol_mismatch',
-          message: `Malformed engine event: ${parsed.diagnostic}`,
-          retryable: false,
-          submissionId: parsed.submissionId,
-        };
+    const event = decodeAgentEvent(msg);
+    if (!event) return;
     for (const cb of eventSubs) cb(event);
   });
   port.onDisconnect.addListener(() => {

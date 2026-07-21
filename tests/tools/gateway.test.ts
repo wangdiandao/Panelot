@@ -238,6 +238,51 @@ describe('navigation-aware dispatch (click → page change ≠ failure)', () => 
     expect(calls).toBeGreaterThanOrEqual(2);
   });
 
+  it('does not replay a dispatched write when the channel closes without navigation', async () => {
+    tabs = [{ id: 5, url: 'https://shop.example.com/cart', active: true }];
+    const gateway = new BrowserToolGateway();
+    let clickCalls = 0;
+    sendMessage.mockImplementation(async (_tabId: number, op: { kind: string; tool?: string }) => {
+      if (op.kind === 'ping') return 'pong';
+      if (op.tool === 'click') {
+        clickCalls++;
+        throw new Error('The message channel closed before a response was received.');
+      }
+      throw new Error(`unexpected ${op.tool}`);
+    });
+
+    await expect(gateway.callContentTool('t1', 'click', { ref: 's0_1' }, 5)).rejects.toMatchObject({
+      failure: {
+        code: 'navigation_uncertain',
+        retryable: false,
+        details: { dispatched: true, effectMayHaveOccurred: true, channelUnavailable: true },
+      },
+    });
+    expect(clickCalls).toBe(1);
+    expect(executeScript).toHaveBeenCalledTimes(2); // install + restore dialog interception only
+  });
+
+  it('still reinjects and retries a read after a missing content-script channel', async () => {
+    tabs = [{ id: 5, url: 'https://shop.example.com/cart', active: true }];
+    const gateway = new BrowserToolGateway();
+    let readCalls = 0;
+    sendMessage.mockImplementation(
+      async (_tabId: number, op: { kind: string; requestId: string; tool?: string }) => {
+        if (op.kind === 'ping') return 'pong';
+        if (op.tool !== 'read_page') throw new Error(`unexpected ${op.tool}`);
+        readCalls++;
+        if (readCalls === 1) throw new Error('Could not establish connection.');
+        return { requestId: op.requestId, ok: true, result: { resultText: 'safe read' } };
+      },
+    );
+
+    await expect(gateway.callContentTool('t1', 'read_page', {}, 5)).resolves.toMatchObject({
+      resultText: 'safe read',
+    });
+    expect(readCalls).toBe(2);
+    expect(executeScript).toHaveBeenCalledTimes(1);
+  });
+
   it('adopts a link-opened child tab and foregrounds it when the user is on Panelot chat', async () => {
     tabs = [
       {
@@ -403,9 +448,12 @@ describe('navigation-aware dispatch (click → page change ≠ failure)', () => 
       // Never resolves for the real tool → the race rejects with a timeout.
       return new Promise(() => {});
     });
-    await expect(gw.callContentTool('t1', 'click', { ref: 's1_1' })).rejects.toThrow(/超时/);
+    const deadlineAt = Date.now() + 100;
+    await expect(
+      gw.callContentTool('t1', 'click', { ref: 's1_1' }, undefined, undefined, deadlineAt),
+    ).rejects.toThrow(/超时/);
     expect(pinged).toBe(true);
-  }, 20_000);
+  });
 });
 
 describe('same-tab request serialization and cancellation', () => {

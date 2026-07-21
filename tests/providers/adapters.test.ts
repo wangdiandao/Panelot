@@ -138,9 +138,89 @@ describe('Provider model list validation', () => {
       details: { status: 200, reason: 'response_format' },
     });
   });
+
+  it.each([
+    {
+      name: 'OpenAI',
+      make: () => new OpenAiAdapter(conn({ apiKeys: ['bad', 'good'] })),
+    },
+    {
+      name: 'Anthropic',
+      make: () =>
+        new AnthropicAdapter(
+          conn({
+            kind: 'anthropic',
+            baseUrl: 'https://api.anthropic.com',
+            apiKeys: ['bad', 'good'],
+          }),
+        ),
+    },
+  ])('fails over authentication keys while listing $name models', async ({ make }) => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { message: 'bad key' } }), { status: 401 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: [{ id: 'model-from-secondary' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+    await expect(make().listModels()).resolves.toEqual(['model-from-secondary']);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    const requestKey = (call: (typeof fetchSpy.mock.calls)[number] | undefined) => {
+      const headers = new Headers(call?.[1]?.headers);
+      return headers.get('authorization') ?? headers.get('x-api-key');
+    };
+    expect(requestKey(fetchSpy.mock.calls[0])).toContain('bad');
+    expect(requestKey(fetchSpy.mock.calls[1])).toContain('good');
+  });
+
+  it('tries every configured key even when there are more than the default retry count', async () => {
+    const apiKeys = ['bad-1', 'bad-2', 'bad-3', 'bad-4', 'good-5'];
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    for (let index = 0; index < apiKeys.length - 1; index++) {
+      fetchSpy.mockResolvedValueOnce(new Response('unauthorized', { status: 401 }));
+    }
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: [{ id: 'fifth-key-model' }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await expect(new OpenAiAdapter(conn({ apiKeys })).listModels()).resolves.toEqual([
+      'fifth-key-model',
+    ]);
+    expect(fetchSpy).toHaveBeenCalledTimes(5);
+  });
 });
 
 describe('OpenAiAdapter streaming', () => {
+  it('can reach a valid key beyond the default retry count', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    for (let index = 0; index < 4; index++) {
+      fetchSpy.mockResolvedValueOnce(new Response('unauthorized', { status: 401 }));
+    }
+    fetchSpy.mockResolvedValueOnce(
+      sseResponse([
+        'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n',
+        'data: [DONE]\n\n',
+      ]),
+    );
+
+    const result = await new OpenAiAdapter(
+      conn({ apiKeys: ['bad-1', 'bad-2', 'bad-3', 'bad-4', 'good-5'] }),
+    )
+      .stream(baseReq)
+      .final();
+
+    expect(result.message).toEqual([{ type: 'text', text: 'ok' }]);
+    expect(fetchSpy).toHaveBeenCalledTimes(5);
+  });
+
   it('streams text deltas and aggregates the final message + usage', async () => {
     mockFetchOnce(
       sseResponse([

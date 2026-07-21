@@ -9,16 +9,16 @@
  * before the UI knows about them.
  */
 
-import type { ProviderErrorDetails } from '../providers/types';
+import type { ProviderErrorDetails, ProviderErrorKind } from '../providers/types';
 import type { ExecuteResult } from '../tools/content/protocol';
 
 export const PROTOCOL_VERSION = 1;
 export const ENGINE_PROTOCOL = 'panelot/engine-v1' as const;
 export const ENGINE_SCHEMA_HASH =
-  'fbf1e682038a1c5ecdc4d783b2c86579305392561714cf3afb00d5a3f05862bf' as const;
+  'f90beca3a27549f7b59649cd38792cda76fb041ed12ecd85e23dcd35312c220e' as const;
 export const CONTENT_SCRIPT_PROTOCOL = 'panelot/content-v1' as const;
 export const CONTENT_SCRIPT_SCHEMA_HASH =
-  '17913cdb3e3a729f5d7e3bba42e3038340a18c0f82f350764d06d76bc9bc74d9' as const;
+  'a599d8c67987c8e5baee9f65d15b26e11245747b873d6ecaa5d10d508664f841' as const;
 export { DATA_IMPORT_RPC_TYPE } from '../data/maintenanceRpcProtocol';
 
 // ---------------------------------------------------------------------------
@@ -154,7 +154,21 @@ export type InteractionResponse =
 export type ItemKind =
   'user_message' | 'assistant_message' | 'reasoning' | 'tool_call' | 'approval' | 'system_notice';
 
+export const ITEM_KIND_CATALOG = {
+  user_message: true,
+  assistant_message: true,
+  reasoning: true,
+  tool_call: true,
+  approval: true,
+  system_notice: true,
+} as const satisfies Record<ItemKind, true>;
+
 export type TurnKind = 'user' | 'title';
+
+export const TURN_KIND_CATALOG = {
+  user: true,
+  title: true,
+} as const satisfies Record<TurnKind, true>;
 
 export type ProviderStopReason = 'end' | 'tool_use' | 'max_tokens' | 'content_filter';
 
@@ -165,6 +179,16 @@ export type StopReason =
   | 'interrupted'
   | 'error'
   | 'budget_pause';
+
+export const STOP_REASON_CATALOG = {
+  end: true,
+  max_tokens: true,
+  content_filter: true,
+  done: true,
+  interrupted: true,
+  error: true,
+  budget_pause: true,
+} as const satisfies Record<StopReason, true>;
 
 export interface ItemMeta {
   /** For tool_call items: tool identity + display label + params summary. */
@@ -305,6 +329,7 @@ export type Op =
     }
   | { type: 'thread.create'; submissionId: string; preset?: string; folderId?: string }
   | { type: 'thread.subscribe'; submissionId: string; threadId: string }
+  | { type: 'thread.delete'; submissionId: string; threadId: string }
   | { type: 'thread.fork'; submissionId: string; threadId: string; atNodeId: string }
   | {
       /** Branch switch: move leafId to the sibling's deepest default descendant. */
@@ -399,6 +424,31 @@ export type ErrorCode =
   | 'invalid_command'
   | 'internal';
 
+export const ERROR_CODE_CATALOG = {
+  protocol_mismatch: true,
+  thread_not_found: true,
+  turn_mismatch: true,
+  turn_not_steerable: true,
+  no_active_turn: true,
+  queue_full: true,
+  overloaded: true,
+  interrupted: true,
+  provider_error: true,
+  not_configured: true,
+  invalid_command: true,
+  internal: true,
+} as const satisfies Record<ErrorCode, true>;
+
+export const PROVIDER_ERROR_KIND_CATALOG = {
+  auth: true,
+  rate_limit: true,
+  overloaded: true,
+  context_too_long: true,
+  content_filter: true,
+  network: true,
+  protocol: true,
+} as const satisfies Record<ProviderErrorKind, true>;
+
 export interface CommandAck {
   type: 'command.ack';
   submissionId: string;
@@ -444,18 +494,12 @@ export type AgentEvent =
         message: string;
         retryable: boolean;
         /** Provider error taxonomy for human-readable attribution (docs/03 §7). */
-        errorKind?:
-          | 'auth'
-          | 'rate_limit'
-          | 'overloaded'
-          | 'context_too_long'
-          | 'content_filter'
-          | 'network'
-          | 'protocol';
+        errorKind?: ProviderErrorKind;
         providerDetails?: ProviderErrorDetails;
       }
     | { type: 'thread.created'; submissionId: string; threadId: string }
     | { type: 'thread.forked'; submissionId: string; threadId: string; newThreadId: string }
+    | { type: 'thread.deleted'; threadId: string }
 
     // —— turn lifecycle ——
     | {
@@ -603,32 +647,72 @@ export type ContentScriptResult =
 // Type guards / helpers
 // ---------------------------------------------------------------------------
 
-const OP_TYPES = new Set<Op['type']>([
-  'initialize',
-  'thread.create',
-  'thread.subscribe',
-  'thread.fork',
-  'thread.selectBranch',
-  'turn.submit',
-  'turn.fork',
-  'turn.steer',
-  'turn.enqueue',
-  'turn.interrupt',
-  'queue.update',
-  'queue.remove',
-  'run.resume',
-  'run.resolveUncertain',
-  'approval.response',
-  'interaction.response',
-  'ping',
-]);
+/**
+ * Runtime command catalog. `satisfies Record<Op['type'], true>` makes the
+ * compiler reject both missing and invented entries when the Op union changes.
+ */
+export const OP_TYPE_CATALOG = {
+  initialize: true,
+  'thread.create': true,
+  'thread.subscribe': true,
+  'thread.delete': true,
+  'thread.fork': true,
+  'thread.selectBranch': true,
+  'turn.submit': true,
+  'turn.fork': true,
+  'turn.steer': true,
+  'turn.enqueue': true,
+  'turn.interrupt': true,
+  'queue.update': true,
+  'queue.remove': true,
+  'run.resume': true,
+  'run.resolveUncertain': true,
+  'approval.response': true,
+  'interaction.response': true,
+  ping: true,
+} as const satisfies Record<Op['type'], true>;
 
+/**
+ * Runtime event catalog. Unknown event names are intentionally outside this
+ * catalog so older UIs can ignore them while known event payloads remain
+ * strictly validated.
+ */
+export const AGENT_EVENT_TYPE_CATALOG = {
+  initialized: true,
+  'fatal.reload_required': true,
+  'command.ack': true,
+  'command.rejected': true,
+  pong: true,
+  error: true,
+  'thread.created': true,
+  'thread.forked': true,
+  'thread.deleted': true,
+  'turn.start': true,
+  'turn.complete': true,
+  'token.usage': true,
+  'item.start': true,
+  'item.delta': true,
+  'item.complete': true,
+  'approval.request': true,
+  'interaction.request': true,
+  'thread.updated': true,
+  'queue.updated': true,
+  'run.recovery_required': true,
+  'tabs.updated': true,
+  'activity.updated': true,
+} as const satisfies Record<AgentEvent['type'], true>;
+
+export function isKnownAgentEventType(value: unknown): value is AgentEvent['type'] {
+  return typeof value === 'string' && Object.hasOwn(AGENT_EVENT_TYPE_CATALOG, value);
+}
+
+/** Shallow classifier only; cross-context inputs must go through `parseOp`. */
 export function isOp(value: unknown): value is Op {
   return (
     typeof value === 'object' &&
     value !== null &&
     typeof (value as { type?: unknown }).type === 'string' &&
-    OP_TYPES.has((value as { type: Op['type'] }).type) &&
+    Object.hasOwn(OP_TYPE_CATALOG, (value as { type: string }).type) &&
     typeof (value as { submissionId?: unknown }).submissionId === 'string'
   );
 }

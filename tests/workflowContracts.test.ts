@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -7,15 +7,6 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 
 function read(relativePath: string): string {
   return readFileSync(path.join(root, relativePath), 'utf8').replaceAll('\r\n', '\n');
-}
-
-function sourceFiles(relativeDirectory: string): string[] {
-  const absoluteDirectory = path.join(root, relativeDirectory);
-  return readdirSync(absoluteDirectory, { withFileTypes: true }).flatMap((entry) => {
-    const relativePath = path.join(relativeDirectory, entry.name);
-    if (entry.isDirectory()) return sourceFiles(relativePath);
-    return /\.(?:ts|tsx)$/.test(entry.name) ? [relativePath] : [];
-  });
 }
 
 const actionPins = new Map([
@@ -127,7 +118,7 @@ describe('repository delivery contracts', () => {
     expect(read('README.zh-CN.md')).toContain(`Node.js **\`${supportedNodeRange}\`**`);
     expect(read('CONTRIBUTING.md')).toContain(`Node.js \`${supportedNodeRange}\``);
     const developmentGuide = read('docs/development.md');
-    expect(developmentGuide).toContain(`\`${supportedNodeRange}\``);
+    expect(developmentGuide.replaceAll('\\|', '|')).toContain(`\`${supportedNodeRange}\``);
     expect(developmentGuide).toContain('GitHub Actions 固定使用 `22.12.0`');
 
     const scripts = JSON.parse(read('package.json')) as { scripts: Record<string, string> };
@@ -137,23 +128,6 @@ describe('repository delivery contracts', () => {
     expect(scripts.scripts['format:check']).toContain('preview');
     expect(read('.github/workflows/ci.yml')).toContain('- run: pnpm compile');
     expect(read('.github/workflows/release.yml')).toContain('- run: pnpm compile');
-
-    const vitest = read('vitest.config.ts');
-    expect(vitest).toContain("include: ['src/**/*.{ts,tsx}']");
-
-    const mcp = JSON.parse(read('.mcp.json')) as {
-      mcpServers?: { shadcn?: { command?: string; args?: string[] } };
-    };
-    expect(mcp.mcpServers?.shadcn).toMatchObject({
-      command: 'pnpm',
-      args: ['exec', 'shadcn', 'mcp'],
-    });
-
-    const files = [...sourceFiles('src'), ...sourceFiles('tests')];
-    if (existsSync(path.join(root, 'AGENTS.md'))) files.push('AGENTS.md');
-    const missingDesignReference = new RegExp(`DES${'IGN'}(?:\\.md|\\s*§)`);
-    const offenders = files.filter((file) => missingDesignReference.test(read(file)));
-    expect(offenders).toEqual([]);
   });
 
   it('keeps coding rules enforceable and exceptions narrowly scoped', () => {

@@ -91,7 +91,7 @@ async function click(text: string): Promise<void> {
   });
 }
 
-describe('Onboarding verification races', () => {
+describe('Onboarding verification ordering', () => {
   it('keeps only the newest fingerprint result and saves it with an atomic upsert', async () => {
     const first = deferred<VerifyResult>();
     const second = deferred<VerifyResult>();

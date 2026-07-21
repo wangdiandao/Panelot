@@ -75,7 +75,7 @@ async function typeAndSubmit(value: string): Promise<void> {
   });
 }
 
-describe('PromptInput submission ordering', () => {
+describe('PromptInput asynchronous submissions', () => {
   it('drops queued variable expansion after the composer unmounts', async () => {
     const expansion = deferred<string>();
     composerMocks.evaluateVariables.mockReturnValueOnce(expansion.promise);
@@ -316,7 +316,7 @@ describe('PromptInput submission ordering', () => {
     expect(session.store.getState().threadId).toBe('thread-b');
     expect(session.store.getState().liveItems).toEqual([]);
     expect(removeContext).not.toHaveBeenCalled();
-    session.stop();
+    await act(async () => session.stop());
   });
 });
 

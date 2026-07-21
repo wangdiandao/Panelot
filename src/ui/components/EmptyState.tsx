@@ -12,7 +12,9 @@
  *  - no shuffle / stagger animation (no-decorative-animation constraint).
  */
 
+import { Sparkles } from 'lucide-react';
 import { t } from '../i18n';
+import { cn } from '../lib/utils';
 import { Button } from './ui/button';
 import {
   Empty,
@@ -79,9 +81,11 @@ export function EmptyState({ variant, onPick, pageUrl }: Props) {
   ).slice(0, MAX_SUGGESTIONS);
 
   return (
-    <Empty className="h-full min-w-0 px-4 py-6">
+    <Empty className={cn('h-full min-w-0', variant === 'panel' ? 'px-3 py-5' : 'px-4 py-6')}>
       <EmptyHeader>
-        <EmptyMedia variant="icon">✦</EmptyMedia>
+        <EmptyMedia variant="icon">
+          <Sparkles />
+        </EmptyMedia>
         <EmptyTitle>{t(greetingKey(new Date().getHours()))}</EmptyTitle>
         <EmptyDescription>{t('empty.hint')}</EmptyDescription>
       </EmptyHeader>

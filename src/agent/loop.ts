@@ -70,6 +70,7 @@ export type ApprovalRequester = (
   turnId: string,
   request: ApprovalRequestPayload,
   pendingTool: PendingToolExecution,
+  toolCallNode: AppendNodeInput,
   signal: AbortSignal,
 ) => Promise<ApprovalDecision>;
 
@@ -78,6 +79,7 @@ export type InteractionRequester = (
   itemId: string,
   request: InteractionRequestPayload,
   pendingTool: PendingToolExecution,
+  toolCallNode: AppendNodeInput,
   signal: AbortSignal,
 ) => Promise<InteractionResponse>;
 
@@ -566,7 +568,7 @@ export function runTurn(
         }
 
         // ---- execute tool calls ----------------------------------------------
-        for (const call of final.toolCalls) {
+        for (const [batchOrdinal, call] of final.toolCalls.entries()) {
           if (abort.signal.aborted) {
             stopReason = 'interrupted';
             break loop;
@@ -586,6 +588,18 @@ export function runTurn(
 
           const tool = env.tools.get(call.name);
 
+          const toolCallNode: AppendNodeInput = {
+            id: `tool-call:${turnId}:${nextStepCursor}:${batchOrdinal}`,
+            type: 'tool_call',
+            payload: {
+              itemId: callItemId,
+              toolName: call.name,
+              params: call.params,
+              level: tool?.level ?? 'builtin',
+            },
+          };
+          let toolCallPersisted = false;
+
           env.emit({
             type: 'item.start',
             threadId,
@@ -594,15 +608,19 @@ export function runTurn(
             kind: 'tool_call',
             meta: { toolName: call.name, label: tool?.label ?? call.name, level: tool?.level },
           });
-          await env.tree.appendNode(threadId, {
-            type: 'tool_call',
-            payload: {
-              itemId: callItemId,
-              toolName: call.name,
-              params: call.params,
-              level: tool?.level ?? 'builtin',
-            },
-          });
+          const persistPreparedToolCall = async (
+            state: 'waiting_approval' | 'waiting_interaction' | 'executing_tool',
+            pendingTool: PendingToolExecution,
+          ) => {
+            if (toolCallPersisted) return;
+            if (env.appendNodesAndSetRunState) {
+              await env.appendNodesAndSetRunState([toolCallNode], state, { pendingTool });
+            } else {
+              await env.tree.appendNode(threadId, toolCallNode);
+              await env.setRunState?.(state, { pendingTool });
+            }
+            toolCallPersisted = true;
+          };
 
           // countsAsFailure=false for user declines / policy denies: those are
           // deliberate "no", not a broken tool. Counting them would let 5
@@ -621,12 +639,22 @@ export function runTurn(
               },
             };
             if (env.appendNodesAndSetRunState) {
-              await env.appendNodesAndSetRunState([resultNode], state, {
+              await env.appendNodesAndSetRunState(
+                toolCallPersisted ? [resultNode] : [toolCallNode, resultNode],
+                state,
+                {
+                  pendingTool: undefined,
+                },
+              );
+            } else {
+              if (!toolCallPersisted) {
+                await env.tree.appendNode(threadId, toolCallNode);
+                toolCallPersisted = true;
+              }
+              await env.tree.appendNode(threadId, resultNode);
+              await env.setRunState?.(state, {
                 pendingTool: undefined,
               });
-            } else {
-              await env.tree.appendNode(threadId, resultNode);
-              await env.setRunState?.(state, { pendingTool: undefined });
             }
             env.emit({
               type: 'item.complete',
@@ -654,14 +682,20 @@ export function runTurn(
             await fail(validation.error);
             continue;
           }
-          const preparedTool: PendingToolExecution = {
-            itemId: callItemId,
-            toolName: call.name,
-            params: validation.params,
-            target: await tool.resolveTarget?.(validation.params as never),
-            effect: tool.effects,
-            recovery: tool.recovery ?? (tool.effects === 'read' ? 'retry-safe' : 'never-retry'),
-          };
+          let preparedTool: PendingToolExecution;
+          try {
+            preparedTool = {
+              itemId: callItemId,
+              toolName: call.name,
+              params: validation.params,
+              target: await tool.resolveTarget?.(validation.params as never),
+              effect: tool.effects,
+              recovery: tool.recovery,
+            };
+          } catch (error) {
+            await fail(error instanceof Error ? error.message : String(error));
+            continue;
+          }
 
           // Gatekeeper — the single interception point (docs/06 §2).
           const verdictResult = await env.gatekeeper.check(
@@ -684,8 +718,10 @@ export function runTurn(
               turnId,
               verdictResult.request,
               preparedTool,
+              toolCallNode,
               abort.signal,
             );
+            toolCallPersisted = true;
             if (decision.kind === 'decline' || decision.kind === 'cancel') {
               const note =
                 decision.kind === 'decline' && decision.note ? ` User said: ${decision.note}` : '';
@@ -736,8 +772,10 @@ export function runTurn(
               callItemId,
               request,
               preparedTool,
+              toolCallNode,
               abort.signal,
             );
+            toolCallPersisted = true;
             if (abort.signal.aborted) {
               stopReason = 'interrupted';
               await fail('interrupted', false, 'streaming_model');
@@ -787,9 +825,12 @@ export function runTurn(
               preparedTool,
               verdictResult,
             );
-            await env.setRunState?.('executing_tool', {
-              pendingTool: { ...preparedTool, startedAt: Date.now() },
-            });
+            const executingTool = { ...preparedTool, startedAt: Date.now() };
+            if (toolCallPersisted) {
+              await env.setRunState?.('executing_tool', { pendingTool: executingTool });
+            } else {
+              await persistPreparedToolCall('executing_tool', executingTool);
+            }
             const result = await tool.execute(
               callItemId,
               validation.params as never,
@@ -812,10 +853,8 @@ export function runTurn(
                 ok: true,
                 contentForLlm: result.content,
                 details: result.details,
-                trust: tool.resultTrust ?? (tool.level === 'builtin' ? 'trusted' : 'untrusted'),
-                provenance:
-                  tool.resultProvenance ??
-                  (tool.level === 'mcp' ? 'mcp' : tool.level === 'builtin' ? 'tool' : 'page'),
+                trust: tool.resultTrust,
+                provenance: tool.resultProvenance,
                 origin: preparedTool.target?.origin,
               },
             };
@@ -871,10 +910,19 @@ export function runTurn(
                 params: escalationValidation.params,
                 target: escalationTarget,
                 effect: escalationTool.effects,
-                recovery:
-                  escalationTool.recovery ??
-                  (escalationTool.effects === 'read' ? 'retry-safe' : 'never-retry'),
+                recovery: escalationTool.recovery,
               };
+              const escalationToolCallNode: AppendNodeInput = {
+                id: `${toolCallNode.id}:escalation:${escalationTool.name}`,
+                type: 'tool_call',
+                payload: {
+                  itemId: callItemId,
+                  toolName: escalationTool.name,
+                  params: escalationValidation.params,
+                  level: escalationTool.level,
+                },
+              };
+              let escalationToolCallPersisted = false;
               const escalationVerdict = await env.gatekeeper.check(
                 {
                   toolName: escalationTool.name,
@@ -894,8 +942,10 @@ export function runTurn(
                   turnId,
                   escalationVerdict.request,
                   escalationPreparedTool,
+                  escalationToolCallNode,
                   abort.signal,
                 );
+                escalationToolCallPersisted = true;
                 if (decision.kind === 'decline' || decision.kind === 'cancel') {
                   await fail('The user declined the trusted-input escalation.', false);
                   if (decision.kind === 'cancel') {
@@ -919,9 +969,26 @@ export function runTurn(
                   escalationPreparedTool,
                   escalationVerdict,
                 );
-                await env.setRunState?.('executing_tool', {
-                  pendingTool: { ...escalationPreparedTool, startedAt: Date.now() },
-                });
+                const executingEscalation = {
+                  ...escalationPreparedTool,
+                  startedAt: Date.now(),
+                };
+                if (escalationToolCallPersisted) {
+                  await env.setRunState?.('executing_tool', {
+                    pendingTool: executingEscalation,
+                  });
+                } else if (env.appendNodesAndSetRunState) {
+                  await env.appendNodesAndSetRunState([escalationToolCallNode], 'executing_tool', {
+                    pendingTool: executingEscalation,
+                  });
+                  escalationToolCallPersisted = true;
+                } else {
+                  await env.tree.appendNode(threadId, escalationToolCallNode);
+                  await env.setRunState?.('executing_tool', {
+                    pendingTool: executingEscalation,
+                  });
+                  escalationToolCallPersisted = true;
+                }
                 const escalated = await escalationTool.execute(
                   callItemId,
                   escalationValidation.params as never,
@@ -941,8 +1008,8 @@ export function runTurn(
                     ok: true,
                     contentForLlm: escalated.content,
                     details: escalationDetails,
-                    trust: escalationTool.resultTrust ?? 'untrusted',
-                    provenance: escalationTool.resultProvenance ?? 'page',
+                    trust: escalationTool.resultTrust,
+                    provenance: escalationTool.resultProvenance,
                     origin: escalationTarget?.origin,
                   },
                 };

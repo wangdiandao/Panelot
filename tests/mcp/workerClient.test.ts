@@ -98,6 +98,30 @@ describe('McpWorkerClient', () => {
     expect(client.resources).toEqual([]);
   });
 
+  it('rejects pathologically deep worker payloads before recursive schema handling', async () => {
+    const inputSchema: Record<string, unknown> = {};
+    let cursor = inputSchema;
+    for (let depth = 0; depth < 70; depth += 1) {
+      const nested: Record<string, unknown> = {};
+      cursor.nested = nested;
+      cursor = nested;
+    }
+    sendMessage.mockResolvedValueOnce({
+      ok: true,
+      catalog: {
+        tools: [{ name: 'deep', inputSchema }],
+        prompts: [],
+        resources: [],
+      },
+    });
+    const client = new McpWorkerClient('server-a', () => {});
+
+    await expect(
+      client.connect({ url: 'https://mcp.example/mcp', authorization: null }),
+    ).rejects.toThrow(/nesting is too deep/);
+    expect(client.tools).toEqual([]);
+  });
+
   it('ignores a malformed capability-change event without polluting the existing catalog', async () => {
     const changed = vi.fn();
     sendMessage.mockResolvedValueOnce({
@@ -110,15 +134,82 @@ describe('McpWorkerClient', () => {
     });
     const client = new McpWorkerClient('server-a', changed);
     await client.connect({ url: 'https://mcp.example/mcp', authorization: null });
+    const connectionId = sendMessage.mock.calls[0]?.[0]?.connectionId as string;
 
     listeners[0]?.({
       type: 'panelot.mcpWorker.changed',
       serverId: 'server-a',
+      connectionId,
       catalog: { tools: [{ name: 'bad' }], prompts: [], resources: [] },
     });
 
     expect(client.tools).toEqual([expect.objectContaining({ name: 'echo' })]);
     expect(changed).not.toHaveBeenCalled();
+  });
+
+  it('admits capability changes only from its own worker connection instance', async () => {
+    const changed = vi.fn();
+    sendMessage.mockResolvedValueOnce({
+      ok: true,
+      catalog: { tools: [{ name: 'old', inputSchema: {} }], prompts: [], resources: [] },
+    });
+    const client = new McpWorkerClient('server-a', changed);
+    await client.connect({ url: 'https://mcp.example/mcp', authorization: null });
+    const connectionId = sendMessage.mock.calls[0]?.[0]?.connectionId as string;
+    const catalog = {
+      tools: [{ name: 'new', inputSchema: { type: 'object' } }],
+      prompts: [],
+      resources: [],
+    };
+
+    listeners[0]?.({
+      type: 'panelot.mcpWorker.changed',
+      serverId: 'server-a',
+      connectionId: 'replacement-connection',
+      catalog,
+    });
+    expect(client.tools[0]?.name).toBe('old');
+    listeners[0]?.({
+      type: 'panelot.mcpWorker.changed',
+      serverId: 'server-a',
+      connectionId,
+      catalog,
+    });
+    expect(client.tools[0]?.name).toBe('new');
+    expect(changed).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels an in-flight worker operation with the same connection identity', async () => {
+    let resolveCall: ((value: unknown) => void) | undefined;
+    sendMessage.mockImplementation((message: { type?: string }) => {
+      if (message.type === 'panelot.mcpWorker.callTool') {
+        return new Promise((resolve) => {
+          resolveCall = resolve;
+        });
+      }
+      return Promise.resolve({ ok: true });
+    });
+    const client = new McpWorkerClient('server-a', () => {});
+    const controller = new AbortController();
+    const call = client.callTool('echo', {}, undefined, controller.signal);
+    await vi.waitFor(() =>
+      expect(sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'panelot.mcpWorker.callTool' }),
+      ),
+    );
+    const dispatched = sendMessage.mock.calls.find(
+      ([message]) => message.type === 'panelot.mcpWorker.callTool',
+    )?.[0];
+
+    controller.abort();
+    await expect(call).rejects.toMatchObject({ name: 'AbortError' });
+    expect(sendMessage).toHaveBeenCalledWith({
+      type: 'panelot.mcpWorker.cancel',
+      serverId: 'server-a',
+      connectionId: dispatched.connectionId,
+      operationId: dispatched.operationId,
+    });
+    resolveCall?.({ ok: true, result: { content: [] } });
   });
 
   it('validates operation-specific nested results', async () => {

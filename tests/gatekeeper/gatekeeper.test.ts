@@ -143,6 +143,15 @@ describe('sensitive origins & payloads', () => {
     expect(isSensitiveOrigin(DEFAULT_SENSITIVE_PATTERNS, 'chrome-extension://abcdef')).toBe(false);
   });
 
+  it('does not treat a scheme-qualified origin as a bare string prefix', () => {
+    const patterns = ['https://bank.example'];
+
+    expect(isSensitiveOrigin(patterns, 'https://bank.example')).toBe(true);
+    expect(isSensitiveOrigin(patterns, 'https://bank.example:443')).toBe(true);
+    expect(isSensitiveOrigin(patterns, 'https://bank.example.evil')).toBe(false);
+    expect(isSensitiveOrigin(patterns, 'https://bank.example@evil.test')).toBe(false);
+  });
+
   it('detects Luhn-valid card numbers and credential-shaped fields', () => {
     expect(detectSensitivePayload({ text: '4111 1111 1111 1111' })).toContain('card_number');
     expect(detectSensitivePayload({ text: '4111 1111 1111 1112' })).not.toContain('card_number'); // Luhn fail

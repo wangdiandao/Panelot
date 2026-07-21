@@ -14,6 +14,7 @@ import {
 } from '../../src/engine/core';
 import { RunRepository } from '../../src/engine/runRepository';
 import { ApprovalRepository } from '../../src/engine/approvalRepository';
+import { InteractionRepository } from '../../src/engine/interactionRepository';
 import { EngineHost } from '../../src/engine/host';
 import { createDirectPair } from '../../src/messaging/transport';
 import { ToolRegistry } from '../../src/agent/tool';
@@ -163,7 +164,18 @@ class TestClient {
     if (existing) return Promise.resolve(existing);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(
-        () => reject(new Error('timeout waiting for matching event')),
+        () =>
+          reject(
+            new Error(
+              `timeout waiting for matching event; got: ${this.events
+                .map((event) =>
+                  'submissionId' in event
+                    ? `${event.type}:${event.submissionId ?? ''}`
+                    : event.type,
+                )
+                .join(',')}`,
+            ),
+          ),
         timeoutMs,
       );
       this.waiters.push({
@@ -341,6 +353,65 @@ async function seedPreparedToolRun(
     },
   });
   return { run, thread };
+}
+
+async function seedRecoveredApproval(targetDb: PanelotDB, registry: ToolRegistry) {
+  const tree = new ThreadTree(targetDb);
+  const thread = await tree.createThread({ title: 'recovered approval owner' });
+  await tree.appendNode(thread.id, {
+    type: 'turn_context',
+    payload: {
+      turnId: 'turn-recovered-approval',
+      model: { connectionId: 'connection', modelId: 'mock' },
+      permissionPolicy: 'untrusted',
+      activeSkills: [],
+    },
+  });
+  await tree.appendNode(thread.id, {
+    type: 'user_message',
+    payload: { content: [{ type: 'text', text: 'approve the recovered action' }] },
+  });
+  const toolCallNode = await tree.appendNode(thread.id, {
+    type: 'tool_call',
+    payload: {
+      itemId: 'recovered-approval-call',
+      toolName: 'recovered_approval_write',
+      params: {},
+      level: 'L1',
+    },
+  });
+  const runs = new RunRepository(targetDb);
+  const run = await runs.enqueue({
+    threadId: thread.id,
+    clientId: 'recovery-client',
+    submissionId: 'recovered-approval-run',
+    input: { text: 'approve the recovered action' },
+  });
+  await runs.prepare(run.id, await testRunEnvironment(run.input, registry));
+  const approvals = new ApprovalRepository(targetDb);
+  const { approval } = await approvals.createPendingWork({
+    id: 'recovered-approval',
+    threadId: thread.id,
+    runId: run.id,
+    turnId: run.turnId,
+    request: {
+      tool: 'recovered_approval_write',
+      label: 'Recovered approval write',
+      params: {},
+      targetOrigin: 'https://example.test',
+      flags: [],
+    },
+    pendingTool: {
+      itemId: 'recovered-approval-call',
+      toolName: 'recovered_approval_write',
+      params: {},
+      effect: 'write',
+      recovery: 'never-retry',
+    },
+    toolCallNode,
+    deadlineAt: Date.now() + 300_000,
+  });
+  return { approval, run, thread, toolCallNode };
 }
 
 // ---------------------------------------------------------------------------
@@ -670,6 +741,259 @@ describe('engine integration (Op → events → DB)', () => {
     });
     expect(decisionPersistedBeforeExecution).toBe(true);
     expect(toolExecutionCount).toBe(1);
+  });
+
+  it('keeps the committed approval ACK when post-commit continuation fails', async () => {
+    const ask: GatekeeperCheck = {
+      check: async () => ({
+        verdict: 'ask',
+        request: {
+          tool: 'poke',
+          label: 'Poke',
+          params: {},
+          targetOrigin: 'https://example.test',
+          flags: [],
+        },
+      }),
+    };
+    const { core, host } = buildEngine(undefined, undefined, ask);
+    core.onApprovalDecision = async () => {
+      throw new Error('injected post-commit continuation failure');
+    };
+    tools.register({
+      name: 'poke',
+      label: 'Poke',
+      description: 'poke',
+      parameters: z.object({}),
+      level: 'L1',
+      effects: 'write',
+      recovery: 'never-retry',
+      execute: async () => ({ content: [{ type: 'text', text: 'poked' }] }),
+    });
+    const client = connect(host);
+    const threadId = await initThread(client);
+    provider.queue({ toolCalls: [{ id: 'c1', name: 'poke', params: {} }] });
+    client.post({ type: 'turn.submit', threadId, input: { text: 'poke it' } });
+    const request = await client.waitFor('approval.request');
+    const submissionId = crypto.randomUUID();
+    const response = {
+      type: 'approval.response' as const,
+      submissionId,
+      approvalId: request.approvalId,
+      decision: { kind: 'accept' as const },
+    };
+
+    client.post(response);
+    await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
+        event.type === 'command.ack' && event.submissionId === submissionId,
+    );
+    await host.waitForAdmissionIdle();
+
+    expect(await db.approvals.get(request.approvalId)).toMatchObject({
+      status: 'decided',
+      decision: { kind: 'accept' },
+    });
+    expect(await db.commandReceipts.get(`integration-client\u0000${submissionId}`)).toMatchObject({
+      status: 'acknowledged',
+      response: { type: 'command.ack', threadId },
+    });
+    expect(
+      client.events.filter(
+        (event) => event.type === 'command.rejected' && event.submissionId === submissionId,
+      ),
+    ).toHaveLength(0);
+
+    client.post(response);
+    await vi.waitFor(() => {
+      expect(
+        client.events.filter(
+          (event) => event.type === 'command.ack' && event.submissionId === submissionId,
+        ),
+      ).toHaveLength(2);
+    });
+  });
+
+  it('rejects a live approval command that conflicts with an in-flight timeout settlement', async () => {
+    const ask: GatekeeperCheck = {
+      check: async () => ({
+        verdict: 'ask',
+        request: {
+          tool: 'poke',
+          label: 'Poke',
+          params: {},
+          targetOrigin: 'https://example.test',
+          flags: [],
+        },
+      }),
+    };
+    const { core, host } = buildEngine(undefined, undefined, ask, { approvalTimeoutMs: 5 });
+    let timeoutSettled: () => void;
+    let releaseContinuation: () => void;
+    const timeoutSettlement = new Promise<void>((resolve) => (timeoutSettled = resolve));
+    const continuationGate = new Promise<void>((resolve) => (releaseContinuation = resolve));
+    core.onApprovalDecision = async (_id, _threadId, _tool, _origin, decision) => {
+      if (decision.kind === 'decline') {
+        timeoutSettled!();
+        await continuationGate;
+      }
+    };
+    tools.register({
+      name: 'poke',
+      label: 'Poke',
+      description: 'poke',
+      parameters: z.object({}),
+      level: 'L1',
+      effects: 'write',
+      recovery: 'never-retry',
+      execute: async () => ({ content: [{ type: 'text', text: 'poked' }] }),
+    });
+    const client = connect(host);
+    const threadId = await initThread(client);
+    provider.queue({ toolCalls: [{ id: 'c1', name: 'poke', params: {} }] });
+    client.post({ type: 'turn.submit', threadId, input: { text: 'poke it' } });
+    const request = await client.waitFor('approval.request');
+    await timeoutSettlement;
+
+    const submissionId = client.post({
+      type: 'approval.response',
+      approvalId: request.approvalId,
+      decision: { kind: 'accept' },
+    });
+    await vi.waitFor(async () => {
+      await expect(
+        db.commandReceipts.get(`integration-client\u0000${submissionId}`),
+      ).resolves.toMatchObject({ status: 'processing' });
+    });
+    releaseContinuation!();
+
+    const rejection = await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.rejected' }> =>
+        event.type === 'command.rejected' && event.submissionId === submissionId,
+    );
+    expect(rejection).toMatchObject({
+      code: 'invalid_command',
+      threadId,
+      message: `Approval ${request.approvalId} was already decided with a different decision.`,
+    });
+    await host.waitForAdmissionIdle();
+    expect(await db.approvals.get(request.approvalId)).toMatchObject({
+      status: 'decided',
+      decision: { kind: 'decline' },
+    });
+    expect(await db.commandReceipts.get(`integration-client\u0000${submissionId}`)).toMatchObject({
+      status: 'rejected',
+      response: { type: 'command.rejected', code: 'invalid_command', threadId },
+    });
+    expect(
+      client.events.filter(
+        (event) => event.type === 'command.ack' && event.submissionId === submissionId,
+      ),
+    ).toHaveLength(0);
+    const decisionNodes = await db.nodes
+      .where('threadId')
+      .equals(threadId)
+      .filter((node) => node.type === 'approval_decision')
+      .toArray();
+    expect(decisionNodes).toHaveLength(1);
+    expect(decisionNodes[0]?.payload).toMatchObject({ decision: { kind: 'decline' } });
+  });
+
+  it('rejects a conflicting interaction response after reconstruction without a live waiter', async () => {
+    const sharedDb = new PanelotDB(`recovered-interaction-conflict-${Date.now()}`);
+    const thread = await new ThreadTree(sharedDb).createThread({ title: 'recovered interaction' });
+    const runs = new RunRepository(sharedDb);
+    const run = await runs.enqueue({
+      threadId: thread.id,
+      clientId: 'original-client',
+      submissionId: 'original-run',
+      input: { text: 'ask' },
+    });
+    await runs.transition(run.id, 'preparing');
+    const interactions = new InteractionRepository(sharedDb);
+    await interactions.createPendingWork({
+      id: 'recovered-interaction',
+      threadId: thread.id,
+      runId: run.id,
+      turnId: run.turnId,
+      itemId: 'ask-call',
+      request: {
+        kind: 'ask_user',
+        questions: [{ id: 'choice', question: 'Which option?' }],
+      },
+      pendingTool: {
+        itemId: 'ask-call',
+        toolName: 'ask_user',
+        params: {},
+        effect: 'read',
+        recovery: 'retry-safe',
+      },
+      toolCallNode: {
+        id: 'tool-call:recovered-interaction:1:0',
+        type: 'tool_call',
+        payload: {
+          itemId: 'ask-call',
+          toolName: 'ask_user',
+          params: {},
+          level: 'builtin',
+        },
+      },
+    });
+    const originalResponse = {
+      kind: 'submit' as const,
+      value: { answers: [{ id: 'choice', value: 'Option A' }] },
+    };
+    await interactions.resolve('recovered-interaction', originalResponse);
+    await runs.transition(run.id, 'failed', {
+      error: { code: 'stopped', message: 'Already terminal before reconstruction.' },
+    });
+    const { core } = buildEngine(sharedDb);
+    const events: AgentEvent[] = [];
+    const submissionId = 'conflicting-recovered-interaction';
+
+    await core.handleOp(
+      {
+        type: 'interaction.response',
+        submissionId,
+        interactionId: 'recovered-interaction',
+        response: { kind: 'cancel' },
+        clientId: 'reconnected-client',
+      } as Op,
+      (event) => events.push(event),
+    );
+
+    expect(await sharedDb.interactions.get('recovered-interaction')).toMatchObject({
+      status: 'resolved',
+      response: originalResponse,
+    });
+    expect(
+      await sharedDb.commandReceipts.get(`reconnected-client\u0000${submissionId}`),
+    ).toMatchObject({
+      status: 'rejected',
+      response: {
+        type: 'command.rejected',
+        code: 'invalid_command',
+        threadId: thread.id,
+      },
+    });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'command.rejected',
+        submissionId,
+        code: 'invalid_command',
+        threadId: thread.id,
+      }),
+    );
+    expect(
+      events.some((event) => event.type === 'command.ack' && event.submissionId === submissionId),
+    ).toBe(false);
+    expect(
+      await sharedDb.nodes
+        .where('threadId')
+        .equals(thread.id)
+        .filter((node) => node.type === 'interaction_response')
+        .count(),
+    ).toBe(1);
   });
 
   it('turn.steer with wrong expectedTurnId errors; correct id injects', async () => {
@@ -1894,6 +2218,128 @@ describe('engine integration (Op → events → DB)', () => {
     expect((await sharedDb.runs.get(run.id))?.state).toBe('completed');
   });
 
+  it('keeps a recovered approval as the thread owner until its continuation completes', async () => {
+    const sharedDb = new PanelotDB(`recovered-approval-busy-${Date.now()}`);
+    const { core } = buildEngine(sharedDb);
+    let executions = 0;
+    tools.register({
+      name: 'recovered_approval_write',
+      label: 'Recovered approval write',
+      description: 'Executes once after the recovered approval.',
+      parameters: z.object({}),
+      level: 'L1',
+      effects: 'write',
+      recovery: 'never-retry',
+      execute: async () => {
+        executions++;
+        return { content: [{ type: 'text', text: 'recovered write completed' }] };
+      },
+    });
+    const { approval, run, thread, toolCallNode } = await seedRecoveredApproval(sharedDb, tools);
+    const runs = new RunRepository(sharedDb);
+    const events: AgentEvent[] = [];
+    core.onBroadcast = (event) => events.push(event);
+
+    await core.recover();
+    expect(core.activeThreadIds()).toContain(thread.id);
+    const interrupted = await runs.enqueue({
+      threadId: thread.id,
+      clientId: 'resume-client',
+      submissionId: 'resume-while-recovered',
+      input: { text: 'must remain interrupted' },
+    });
+    await runs.transition(interrupted.id, 'interrupted');
+
+    const submitEvents: AgentEvent[] = [];
+    await core.handleOp(
+      {
+        type: 'turn.submit',
+        submissionId: 'submit-behind-recovered-approval',
+        clientId: 'queue-client',
+        threadId: thread.id,
+        input: { text: 'run only after the recovered action' },
+      } as Op,
+      (event) => submitEvents.push(event),
+    );
+    expect(provider.requests).toHaveLength(0);
+    expect(
+      await sharedDb.runs.where('submissionId').equals('submit-behind-recovered-approval').first(),
+    ).toMatchObject({ state: 'queued' });
+    expect(submitEvents).toContainEqual(
+      expect.objectContaining({
+        type: 'command.ack',
+        submissionId: 'submit-behind-recovered-approval',
+      }),
+    );
+
+    for (const op of [
+      {
+        type: 'turn.fork',
+        submissionId: 'fork-behind-recovered-approval',
+        threadId: thread.id,
+        siblingOfNodeId: toolCallNode.id,
+        input: { text: 'must not fork yet' },
+      },
+      {
+        type: 'thread.selectBranch',
+        submissionId: 'branch-behind-recovered-approval',
+        threadId: thread.id,
+        nodeId: toolCallNode.id,
+      },
+      {
+        type: 'run.resume',
+        submissionId: 'resume-behind-recovered-approval',
+        threadId: thread.id,
+        runId: interrupted.id,
+      },
+    ] as const) {
+      const rejected: AgentEvent[] = [];
+      await core.handleOp(op as Op, (event) => rejected.push(event));
+      expect(rejected).toContainEqual(
+        expect.objectContaining({
+          type: 'command.rejected',
+          submissionId: op.submissionId,
+          code: 'turn_mismatch',
+        }),
+      );
+    }
+
+    provider.queue(
+      { streamText: ['continued recovered approval'] },
+      { streamText: ['ran queued input'] },
+    );
+    const approvalEvents: AgentEvent[] = [];
+    await core.handleOp(
+      {
+        type: 'approval.response',
+        submissionId: 'accept-recovered-approval',
+        clientId: 'approval-client',
+        approvalId: approval.id,
+        decision: { kind: 'accept' },
+      } as Op,
+      (event) => approvalEvents.push(event),
+    );
+
+    const started = Date.now();
+    while (events.filter((event) => event.type === 'turn.complete').length < 2) {
+      if (Date.now() - started > 3_000) throw new Error('timeout waiting for serialized turns');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(executions).toBe(1);
+    expect(provider.requests).toHaveLength(2);
+    expect((await sharedDb.runs.get(run.id))?.state).toBe('completed');
+    expect((await sharedDb.runs.get(interrupted.id))?.state).toBe('interrupted');
+    expect(
+      await sharedDb.runs.where('submissionId').equals('submit-behind-recovered-approval').first(),
+    ).toMatchObject({ state: 'completed' });
+    expect(approvalEvents).toContainEqual(
+      expect.objectContaining({
+        type: 'command.ack',
+        submissionId: 'accept-recovered-approval',
+      }),
+    );
+  });
+
   it('replays a prepared read after restart without duplicating the user node', async () => {
     const sharedDb = new PanelotDB(`safe-tool-recovery-${Date.now()}`);
     const { core } = buildEngine(sharedDb);
@@ -2085,6 +2531,158 @@ describe('engine integration (Op → events → DB)', () => {
         payload: expect.objectContaining({ text: 'Manual input detected.', noticeKind: 'paused' }),
       }),
     );
+  });
+
+  it('waits for recovered tool cleanup before committing thread deletion', async () => {
+    const sharedDb = new PanelotDB(`recovery-delete-${Date.now()}`);
+    const { core } = buildEngine(sharedDb);
+    let started!: () => void;
+    const executionStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let releaseCleanup!: () => void;
+    const cleanupGate = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    let sawAbort = false;
+    tools.register({
+      name: 'delete_recovery_read',
+      label: 'Delete recovery read',
+      description: 'Defers abort cleanup so deletion ordering is observable.',
+      parameters: z.object({}),
+      level: 'builtin',
+      effects: 'read',
+      recovery: 'retry-safe',
+      execute: async (_id, _params, signal) => {
+        started();
+        await new Promise<void>((_resolve, reject) => {
+          const onAbort = () => {
+            sawAbort = true;
+            void cleanupGate.then(() => reject(signal.reason));
+          };
+          signal.addEventListener('abort', onAbort, { once: true });
+          if (signal.aborted) onAbort();
+        });
+        return { content: [{ type: 'text', text: 'unreachable' }] };
+      },
+    });
+    const { thread } = await seedPreparedToolRun(
+      sharedDb,
+      tools,
+      'delete_recovery_read',
+      'read',
+      'retry-safe',
+    );
+    const events: AgentEvent[] = [];
+    core.onBroadcast = (event) => events.push(event);
+
+    const recovery = core.recover();
+    await executionStarted;
+    let deletionSettled = false;
+    const deletion = core
+      .handleOp(
+        {
+          type: 'thread.delete',
+          submissionId: 'delete-during-recovery',
+          threadId: thread.id,
+        },
+        (event) => events.push(event),
+      )
+      .then(() => {
+        deletionSettled = true;
+      });
+    await vi.waitFor(() => expect(sawAbort).toBe(true));
+
+    expect(deletionSettled).toBe(false);
+    expect(await sharedDb.threads.get(thread.id)).toBeDefined();
+    expect(
+      await sharedDb.commandReceipts.get('unidentified-client\u0000delete-during-recovery'),
+    ).toMatchObject({ status: 'processing' });
+
+    releaseCleanup();
+    await Promise.all([recovery, deletion]);
+
+    expect(deletionSettled).toBe(true);
+    expect(await sharedDb.threads.get(thread.id)).toBeUndefined();
+    expect(await sharedDb.nodes.where('threadId').equals(thread.id).count()).toBe(0);
+    expect(await sharedDb.runs.where('threadId').equals(thread.id).count()).toBe(0);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'thread.deleted' }));
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'command.ack',
+        submissionId: 'delete-during-recovery',
+        threadId: thread.id,
+      }),
+    );
+  });
+
+  it('preserves recovered owners, timers, and queues when durable deletion fails', async () => {
+    const sharedDb = new PanelotDB(`recovery-delete-rollback-${Date.now()}`);
+    const { core } = buildEngine(sharedDb);
+    tools.register({
+      name: 'recovered_approval_write',
+      label: 'Recovered approval write',
+      description: 'Requires a durable recovered approval.',
+      parameters: z.object({}),
+      level: 'L1',
+      effects: 'write',
+      recovery: 'never-retry',
+      execute: async () => ({ content: [{ type: 'text', text: 'written' }] }),
+    });
+    const { approval, thread } = await seedRecoveredApproval(sharedDb, tools);
+    await core.recover();
+    await core.handleOp(
+      {
+        type: 'turn.enqueue',
+        submissionId: 'queued-before-failed-delete',
+        threadId: thread.id,
+        input: { text: 'keep queued' },
+      },
+      () => {},
+    );
+    const runtime = core as unknown as {
+      tree: ThreadTree;
+      queues: Map<string, unknown[]>;
+      recoveredApprovalsByThread: Map<string, unknown>;
+      recoveredApprovalTimers: Map<string, unknown>;
+    };
+    expect(runtime.queues.get(thread.id)).toHaveLength(1);
+    expect(runtime.recoveredApprovalsByThread.has(thread.id)).toBe(true);
+    expect(runtime.recoveredApprovalTimers.has(approval.id)).toBe(true);
+    vi.spyOn(runtime.tree, 'deleteThread').mockRejectedValueOnce(new Error('delete failed'));
+    const deleteEvents: AgentEvent[] = [];
+
+    await core.handleOp(
+      {
+        type: 'thread.delete',
+        submissionId: 'failed-thread-delete',
+        threadId: thread.id,
+      },
+      (event) => deleteEvents.push(event),
+    );
+
+    expect(
+      await sharedDb.commandReceipts.get('unidentified-client\u0000failed-thread-delete'),
+    ).toMatchObject({
+      status: 'rejected',
+      response: { type: 'command.rejected', code: 'internal', threadId: thread.id },
+    });
+    expect(deleteEvents).toContainEqual(
+      expect.objectContaining({
+        type: 'command.rejected',
+        submissionId: 'failed-thread-delete',
+        code: 'internal',
+        message: 'delete failed',
+        threadId: thread.id,
+      }),
+    );
+    expect(await sharedDb.threads.get(thread.id)).toBeDefined();
+    expect(await sharedDb.approvals.get(approval.id)).toBeDefined();
+    expect(await sharedDb.runs.where('threadId').equals(thread.id).count()).toBe(2);
+    expect(runtime.queues.get(thread.id)).toHaveLength(1);
+    expect(runtime.recoveredApprovalsByThread.has(thread.id)).toBe(true);
+    expect(runtime.recoveredApprovalTimers.has(approval.id)).toBe(true);
+    expect(core.activeThreadIds()).toContain(thread.id);
   });
 
   it('cancels a recovered waiting approval when manual input conflicts with its tab', async () => {
@@ -2677,10 +3275,13 @@ describe('engine integration (Op → events → DB)', () => {
       approvalId: request.approvalId,
       decision: { kind: 'accept' },
     });
-    await client.waitForMatching(
-      (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
-        event.type === 'command.ack' && event.submissionId === lateSubmission,
+    const responseOutcome = await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.rejected' }> =>
+        event.type === 'command.rejected' &&
+        event.submissionId === lateSubmission &&
+        event.code === 'invalid_command',
     );
+    expect(responseOutcome).toMatchObject({ type: 'command.rejected', code: 'invalid_command' });
 
     expect(executions).toBe(0);
     expect(await db.approvals.get(request.approvalId)).toMatchObject({
@@ -2732,8 +3333,10 @@ describe('engine integration (Op → events → DB)', () => {
       decision: { kind: 'accept' },
     });
     await client.waitForMatching(
-      (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
-        event.type === 'command.ack' && event.submissionId === timeoutResponse,
+      (event): event is Extract<AgentEvent, { type: 'command.rejected' }> =>
+        event.type === 'command.rejected' &&
+        event.submissionId === timeoutResponse &&
+        event.code === 'invalid_command',
     );
 
     expect(executions).toBe(0);
@@ -2769,7 +3372,7 @@ describe('engine integration (Op → events → DB)', () => {
         type: 'user_message',
         payload: { content: [{ type: 'text', text: 'write once' }] },
       });
-      await tree.appendNode(thread.id, {
+      const toolCallNode = await tree.appendNode(thread.id, {
         type: 'tool_call',
         payload: {
           itemId: 'write-once-call',
@@ -2809,6 +3412,7 @@ describe('engine integration (Op → events → DB)', () => {
           effect: 'write',
           recovery: 'never-retry',
         },
+        toolCallNode,
         deadlineAt: Date.now() + 300_000,
       });
 
@@ -3144,6 +3748,105 @@ describe('engine integration (Op → events → DB)', () => {
     });
   });
 
+  it('interrupts an active run before atomically deleting its durable thread state', async () => {
+    const { core, host } = buildEngine();
+    const client = connect(host);
+    const threadId = await initThread(client);
+    let streamStarted: () => void;
+    const started = new Promise<void>((resolve) => (streamStarted = resolve));
+    provider.queue({ waitForAbort: true, onStreamStart: () => streamStarted!() });
+    client.post({
+      type: 'turn.submit',
+      threadId,
+      input: { text: 'delete while streaming' },
+    });
+    await started;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await db.attachments.add({
+      id: 'delete-active-attachment',
+      threadId,
+      createdAt: 1,
+      kind: 'file',
+      mime: 'text/plain',
+      bytes: new Blob(['delete me']),
+    });
+    await db.interactions.add({
+      id: 'delete-active-interaction',
+      threadId,
+      runId: 'delete-active-run',
+      turnId: 'delete-active-turn',
+      itemId: 'delete-active-item',
+      request: { kind: 'ask_user', questions: [{ id: 'confirm', question: 'Continue?' }] },
+      status: 'pending',
+      requestedAt: 1,
+    });
+    const resolvedInteractions: string[] = [];
+    core.onInteractionResolved = (interactionId) => resolvedInteractions.push(interactionId);
+
+    const submissionId = client.post({
+      type: 'thread.delete',
+      threadId,
+      submissionId: 'stable-thread-delete',
+    });
+    const deleted = await client.waitFor('thread.deleted');
+    const acknowledged = await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
+        event.type === 'command.ack' && event.submissionId === submissionId,
+    );
+
+    expect(deleted.threadId).toBe(threadId);
+    expect(acknowledged.threadId).toBe(threadId);
+    expect(resolvedInteractions).toEqual(['delete-active-interaction']);
+    expect(await db.threads.get(threadId)).toBeUndefined();
+    expect(await db.nodes.where('threadId').equals(threadId).count()).toBe(0);
+    expect(await db.attachments.where('threadId').equals(threadId).count()).toBe(0);
+    expect(await db.runs.where('threadId').equals(threadId).count()).toBe(0);
+    expect(await db.interactions.where('threadId').equals(threadId).count()).toBe(0);
+    expect(await db.commandReceipts.get(`integration-client\u0000${submissionId}`)).toMatchObject({
+      status: 'acknowledged',
+      response: { type: 'command.ack', threadId },
+    });
+
+    client.events.length = 0;
+    client.post({ type: 'thread.delete', threadId, submissionId });
+    await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
+        event.type === 'command.ack' && event.submissionId === submissionId,
+    );
+    expect(client.events.some((event) => event.type === 'command.rejected')).toBe(false);
+  });
+
+  it('rejects an enqueue serialized after deletion without creating an orphan run', async () => {
+    const { host } = buildEngine();
+    const client = connect(host);
+    const threadId = await initThread(client);
+
+    const deleteSubmission = client.post({ type: 'thread.delete', threadId });
+    const enqueueSubmission = client.post({
+      type: 'turn.enqueue',
+      threadId,
+      input: { text: 'must not become orphaned' },
+    });
+    await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
+        event.type === 'command.ack' && event.submissionId === deleteSubmission,
+    );
+    const rejected = await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.rejected' }> =>
+        event.type === 'command.rejected' && event.submissionId === enqueueSubmission,
+    );
+
+    expect(rejected).toMatchObject({ code: 'thread_not_found', threadId });
+    expect(await db.runs.where('threadId').equals(threadId).count()).toBe(0);
+    expect(
+      await db.commandReceipts.get(`integration-client\u0000${enqueueSubmission}`),
+    ).toMatchObject({
+      status: 'rejected',
+      response: { type: 'command.rejected', code: 'thread_not_found', threadId },
+    });
+  });
+
   it('replays thread.created for a duplicate thread creation submission', async () => {
     const { host } = buildEngine();
     const client = connect(host);
@@ -3163,5 +3866,90 @@ describe('engine integration (Op → events → DB)', () => {
 
     expect(replayed.threadId).toBe(created.threadId);
     expect(await db.threads.count()).toBe(1);
+  });
+
+  it('atomically replays thread forks and rejects payload drift for the same submission', async () => {
+    const { host } = buildEngine();
+    const client = connect(host);
+    const threadId = await initThread(client);
+    const submissionId = 'stable-thread-fork';
+    const command = {
+      type: 'thread.fork' as const,
+      submissionId,
+      threadId,
+      atNodeId: 'anchor-a',
+    };
+
+    client.post(command);
+    const created = await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'thread.forked' }> =>
+        event.type === 'thread.forked' && event.submissionId === submissionId,
+    );
+    await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
+        event.type === 'command.ack' && event.submissionId === submissionId,
+    );
+    expect(await db.threads.count()).toBe(2);
+
+    client.events.length = 0;
+    client.post(command);
+    const replayed = await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'thread.forked' }> =>
+        event.type === 'thread.forked' && event.submissionId === submissionId,
+    );
+    expect(replayed.newThreadId).toBe(created.newThreadId);
+    expect(await db.threads.count()).toBe(2);
+
+    client.events.length = 0;
+    client.post({ ...command, atNodeId: 'anchor-b' });
+    const rejected = await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.rejected' }> =>
+        event.type === 'command.rejected' && event.submissionId === submissionId,
+    );
+    expect(rejected).toMatchObject({ code: 'invalid_command' });
+    expect(await db.threads.count()).toBe(2);
+  });
+
+  it('binds a queue update receipt to its original payload', async () => {
+    const { host } = buildEngine();
+    const client = connect(host);
+    const threadId = await initThread(client);
+    const queued = await new RunRepository(db).enqueue({
+      threadId,
+      clientId: 'seed-client',
+      submissionId: 'seed-queued-run',
+      input: { text: 'original' },
+    });
+    const submissionId = 'stable-queue-update';
+    client.post({
+      type: 'queue.update',
+      submissionId,
+      threadId,
+      runId: queued.id,
+      input: { text: 'first update' },
+    });
+    await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.ack' }> =>
+        event.type === 'command.ack' && event.submissionId === submissionId,
+    );
+
+    client.events.length = 0;
+    client.post({
+      type: 'queue.update',
+      submissionId,
+      threadId,
+      runId: queued.id,
+      input: { text: 'conflicting update' },
+    });
+    const rejected = await client.waitForMatching(
+      (event): event is Extract<AgentEvent, { type: 'command.rejected' }> =>
+        event.type === 'command.rejected' && event.submissionId === submissionId,
+    );
+
+    expect(rejected).toMatchObject({ code: 'invalid_command' });
+    expect(await db.runs.get(queued.id)).toMatchObject({
+      input: { text: 'first update' },
+      revision: 1,
+    });
   });
 });

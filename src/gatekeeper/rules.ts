@@ -236,9 +236,10 @@ export const DEFAULT_SENSITIVE_PATTERNS: readonly string[] = [
 
 export function isSensitiveOrigin(patterns: readonly string[], origin: string): boolean {
   if (!origin) return false;
-  // chrome:// style schemes match on prefix.
   for (const p of patterns) {
-    if (p.includes('://') || p.startsWith('about:')) {
+    // Explicit opaque-scheme wildcards match by prefix. Ordinary HTTP(S)
+    // origins still require exact protocol/host/port matching.
+    if ((p.includes('://') && p.endsWith('*')) || p.startsWith('about:')) {
       const prefix = p.endsWith('*') ? p.slice(0, -1) : p;
       if (origin.startsWith(prefix)) return true;
     } else if (originMatches(p.startsWith('*.') ? p : p, origin)) {

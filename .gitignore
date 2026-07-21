@@ -1,17 +1,52 @@
+# Dependencies and package-manager state
 node_modules/
+.pnpm-store/
+
+# Build and generated output
 dist/
 .output/
 .wxt/
 stats.html
 stats-*.json
-*.log
-.DS_Store
+*.tsbuildinfo
+
+# Test output
+coverage/
 test-results/
 playwright-report/
+blob-report/
 output/playwright/
-coverage/
-scratch/
-*.pem
-*.crx
-AGENTS.md
+
+# Local environment and tool state
+.env
+.env.*
+!.env.example
+!.env.*.example
+.agents/
+.codex/
+.playwright-cli/
 .mcp.json
+AGENTS.md
+scratch/
+
+# Editor and operating-system files
+.idea/
+.vscode/
+.eslintcache
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+
+# Logs, temporary files, and local credentials
+*.log
+*.tmp
+*.temp
+*.bak
+*.pem
+*.key
+*.p12
+*.pfx
+*.crx

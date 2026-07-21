@@ -1,9 +1,5 @@
 // @vitest-environment happy-dom
-/**
- * Snapshot perception through open shadow DOM and same-origin iframes —
- * modern component sites were entirely invisible before (walk used only
- * el.children), so the model "saw" pages that weren't there.
- */
+/** Snapshot traversal through open shadow DOM and same-origin iframes. */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { buildSnapshot } from '../../src/tools/snapshot/engine';
 

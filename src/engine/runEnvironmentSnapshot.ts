@@ -1,11 +1,15 @@
-import { ToolRegistry, type AnyAgentTool } from '../agent/tool';
+import {
+  defaultToolResultProvenance,
+  defaultToolResultTrust,
+  ToolRegistry,
+  type ToolCapabilityDescriptor,
+} from '../agent/tool';
 import type {
   ProviderEnvironmentBinding,
   ResolvedRunEnvironment,
   RunEnvironmentSnapshot,
   RunSkillSnapshot,
   RunToolSnapshot,
-  ToolExecutionBinding,
 } from '../db/types';
 import type { UserInput } from '../messaging/protocol';
 import { normalizePermissionPolicy } from '../settings/permissionPolicy';
@@ -69,31 +73,21 @@ export async function captureToolCatalog(
   registry: ToolRegistry,
   enabledLevels: RunEnvironmentSnapshot['enabledToolLevels'],
 ): Promise<RunToolSnapshot[]> {
-  const tools = registry.list(enabledLevels);
+  return captureToolCapabilities(registry.capabilities(enabledLevels));
+}
+
+async function captureToolCapabilities(
+  capabilities: readonly ToolCapabilityDescriptor[],
+): Promise<RunToolSnapshot[]> {
+  const tools = [...capabilities];
   if (tools.length > RUN_ENVIRONMENT_SNAPSHOT_LIMITS.tools) {
     throw invalid('The tool catalog exceeds the environment snapshot limit.');
   }
-  const providerSchemas = new Map(
-    registry.schemas(enabledLevels).map((toolSchema) => [toolSchema.name, toolSchema]),
-  );
   return Promise.all(
     tools
       .sort((left, right) => left.name.localeCompare(right.name))
       .map(async (tool) => {
-        const providerSchema = providerSchemas.get(tool.name);
-        if (!providerSchema) throw invalid(`Tool schema is missing for ${tool.name}.`);
-        const withoutDigest: Omit<RunToolSnapshot, 'digest'> = {
-          name: tool.name,
-          label: tool.label,
-          description: providerSchema.description,
-          parameters: providerSchema.parameters,
-          level: tool.level,
-          effects: tool.effects,
-          recovery: tool.recovery ?? (tool.effects === 'read' ? 'retry-safe' : 'never-retry'),
-          resultTrust: tool.resultTrust,
-          resultProvenance: tool.resultProvenance,
-          execution: tool.executionBinding ?? localBinding(tool),
-        };
+        const withoutDigest: Omit<RunToolSnapshot, 'digest'> = tool;
         assertCanonicalLimit(
           withoutDigest,
           RUN_ENVIRONMENT_SNAPSHOT_LIMITS.toolSchemaBytes,
@@ -233,23 +227,47 @@ export async function bindToolRegistry(
   current: ToolRegistry,
   snapshot: RunEnvironmentSnapshot,
 ): Promise<ToolRegistry> {
-  const capturedCurrent = await captureToolCatalog(current, snapshot.enabledToolLevels);
+  const registrySnapshot = current.snapshot(snapshot.enabledToolLevels);
+  const capturedCurrent = await captureToolCapabilities(
+    registrySnapshot.entries.map((entry) => entry.capability),
+  );
   const currentByName = new Map(capturedCurrent.map((tool) => [tool.name, tool]));
+  const entriesByName = new Map(
+    registrySnapshot.entries.map((entry) => [entry.capability.name, entry]),
+  );
   const bound = new ToolRegistry();
   for (const persisted of snapshot.toolCatalog) {
+    const { digest: persistedDigest, ...persistedCapability } = persisted;
+    const rawDigest = await digestCanonical(
+      persistedCapability,
+      RUN_ENVIRONMENT_SNAPSHOT_LIMITS.toolSchemaBytes,
+    );
+    if (rawDigest !== persistedDigest) {
+      throw invalid(`Persisted tool capability is invalid for ${persisted.name}.`);
+    }
+    const normalizedPersisted = normalizePersistedToolCapability(persistedCapability);
+    const normalizedPersistedDigest = await digestCanonical(
+      normalizedPersisted,
+      RUN_ENVIRONMENT_SNAPSHOT_LIMITS.toolSchemaBytes,
+    );
     const live = currentByName.get(persisted.name);
-    if (!live || live.digest !== persisted.digest) {
+    const entry = entriesByName.get(persisted.name);
+    if (!live || !entry || live.digest !== normalizedPersistedDigest) {
       throw invalid(`Tool execution binding changed for ${persisted.name}.`);
     }
-    const implementation = current.get(persisted.name);
-    if (!implementation) throw invalid(`Tool implementation is missing for ${persisted.name}.`);
-    bound.register(implementation);
+    bound.register(entry.tool);
   }
   return bound;
 }
 
-function localBinding(tool: AnyAgentTool): ToolExecutionBinding {
-  return { kind: 'local', id: tool.name };
+function normalizePersistedToolCapability(
+  capability: Omit<RunToolSnapshot, 'digest'>,
+): ToolCapabilityDescriptor {
+  return {
+    ...structuredClone(capability),
+    resultTrust: capability.resultTrust ?? defaultToolResultTrust(capability.level),
+    resultProvenance: capability.resultProvenance ?? defaultToolResultProvenance(capability.level),
+  };
 }
 
 function invalid(message: string): RunEnvironmentSnapshotError {

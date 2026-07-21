@@ -1,8 +1,4 @@
-/**
- * CDP key dispatch: combo parsing + event sequences. press_key used to be a
- * fake (synthetic KeyboardEvent = no native behavior); these lock the trusted
- * CDP payload shape that actually submits forms / moves focus.
- */
+/** CDP key combinations and trusted input event payloads. */
 import { describe, expect, it } from 'vitest';
 import { keyEventSequence, parseKeyCombo } from '../../src/tools/cdp/keycodes';
 
