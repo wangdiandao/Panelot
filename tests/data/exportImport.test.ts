@@ -26,7 +26,7 @@ beforeEach(() => {
   db = new PanelotDB(`export-test-${Date.now()}-${n++}`);
 });
 
-describe('exportAll (docs/development.md §5)', () => {
+describe('exportAll (docs/development/index.md §5)', () => {
   it('strips every secret by default and only exports secrets as a passphrase backup', async () => {
     store.set('connections', [
       {

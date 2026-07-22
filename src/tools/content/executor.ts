@@ -1,11 +1,11 @@
 /**
- * Content-script tool executor (docs/05 §2-5) — runs in the page's isolated
+ * Content-script tool executor (docs/development/browser-tools.md §2-5) — runs in the page's isolated
  * world. Receives ContentScriptOp messages from the BrowserToolGateway,
  * validates ref freshness, performs the action, waits for stabilization,
  * returns an incremental snapshot.
  *
  * Waiting strategy follows browser-use's battle-tested defaults:
- * minWait 250ms → mutation-idle 500ms → 5s cap (docs/05 §4).
+ * minWait 250ms → mutation-idle 500ms → 5s cap (docs/development/browser-tools.md §4).
  */
 
 import { buildSnapshot, type LocatorHint, type SnapshotResult } from '../snapshot/engine';
@@ -31,7 +31,7 @@ import { parseContentToolCall, type BatchActionsParams, type ExecuteResult } fro
 export type { ExecuteResult } from './protocol';
 
 // ---------------------------------------------------------------------------
-// State (per tab, in-memory only — docs/02 §2.2 "not persisted")
+// State (per tab, in-memory only — docs/development/data-model.md §2.2 "not persisted")
 // ---------------------------------------------------------------------------
 
 let currentSnapshot: SnapshotResult | null = null;
@@ -63,7 +63,7 @@ const WAIT_DEFAULTS = {
 };
 
 // ---------------------------------------------------------------------------
-// Ref resolution — versioned, expiry-checked (docs/05 §1.1)
+// Ref resolution — versioned, expiry-checked (docs/development/browser-tools.md §1.1)
 // ---------------------------------------------------------------------------
 
 class StaleRefError extends Error {
@@ -292,7 +292,7 @@ function getRefViewportRect(ref: string): RefRect {
 }
 
 // ---------------------------------------------------------------------------
-// Stabilization (docs/05 §4)
+// Stabilization (docs/development/browser-tools.md §4)
 // ---------------------------------------------------------------------------
 
 async function stabilize(
@@ -327,7 +327,7 @@ const sleep = (ms: number, context: ActionExecutionContext = {}) =>
   waitWithContext(ms, context, 'execute');
 
 // ---------------------------------------------------------------------------
-// Visual feedback (docs/05 §5) — Shadow DOM isolated
+// Visual feedback (docs/development/browser-tools.md §5) — Shadow DOM isolated
 // ---------------------------------------------------------------------------
 
 let overlayHost: HTMLElement | null = null;
@@ -408,7 +408,7 @@ function clearRefAnnotations(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Manual-operation detection (docs/05 §5): trusted user events → auto-pause
+// Manual-operation detection (docs/development/browser-tools.md §5): trusted user events → auto-pause
 // ---------------------------------------------------------------------------
 
 let manualHandler: (() => void) | null = null;
@@ -440,7 +440,7 @@ function drainDialogReports(requestId: string): string {
   pendingDialogs.delete(requestId);
   if (reports.length === 0) return '';
   const lines = reports.map((d) => `- ${d.kind}("${d.message.slice(0, 200)}") → ${d.response}`);
-  return `\n[页面弹出了 ${lines.length} 个对话框，已按安全默认处理:\n${lines.join('\n')}]`;
+  return `\n[页面弹出了 ${lines.length} 个对话框，已按安全默认方式处理：\n${lines.join('\n')}]`;
 }
 
 export function watchManualOperation(onManual: () => void): void {
@@ -457,7 +457,7 @@ export function watchManualOperation(onManual: () => void): void {
 }
 
 // ---------------------------------------------------------------------------
-// Actions (docs/05 §3)
+// Actions (docs/development/browser-tools.md §3)
 // ---------------------------------------------------------------------------
 
 function dispatchInputEvents(el: HTMLElement): void {
@@ -804,7 +804,7 @@ async function doWaitFor(
 ): Promise<string> {
   if (params.timeMs !== undefined) {
     await sleep(Math.min(params.timeMs, 30_000), context);
-    return `已等待 ${params.timeMs}ms`;
+    return `已等待 ${params.timeMs} ms`;
   }
   const gone =
     typeof params.textGone === 'string'
@@ -903,7 +903,7 @@ function takeSnapshot(params: { maxTokens?: number }): string {
   });
   if (currentSnapshot.refMap.size === 0 && (document.body?.innerText ?? '').trim() === '') {
     // Explicit failure so the gateway can trigger the L2/AXTree fallback chain
-    // (docs/05 §1.4 — never return an empty tree silently).
+    // (docs/development/browser-tools.md §1.4 — never return an empty tree silently).
     throw new Error('EMPTY_TREE: 页面 DOM 为空或不可见（可能是 Canvas 应用/跨域 frame）。');
   }
   return currentSnapshot.yaml;
@@ -1009,7 +1009,7 @@ function domToMarkdown(root: HTMLElement): string {
 }
 
 // ---------------------------------------------------------------------------
-// batch_actions — sequential with change-interruption (docs/05 §3, browser-use)
+// batch_actions — sequential with change-interruption (docs/development/browser-tools.md §3, browser-use)
 // ---------------------------------------------------------------------------
 
 async function doBatch(
@@ -1195,7 +1195,7 @@ export async function executeContentTool(
         throw new Error('content script 不支持未知工具');
     }
 
-    // Write actions: stabilize, then return a fresh snapshot (docs/05 §1.3).
+    // Write actions: stabilize, then return a fresh snapshot (docs/development/browser-tools.md §1.3).
     let stabilized = true;
     if (WRITE_ACTIONS.has(tool)) {
       const { timedOut } = await stabilize(context);

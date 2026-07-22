@@ -1,5 +1,5 @@
 /**
- * MCP settings (docs/07 §5, docs/09 §3.4): server cards with state indicators,
+ * MCP settings (docs/development/mcp.md §5, docs/development/ui.md §3.4): server cards with state indicators,
  * paste-JSON import, add form, OAuth trigger. The manager lives in the
  * background SW; this page talks to storage + messages the SW for connect.
  * Built on shadcn/ui primitives; delete confirm uses AlertDialog.
@@ -352,7 +352,7 @@ export function McpPage() {
                               {permissionPlan.originReasons.map(({ origin, reason }) => (
                                 <li key={origin}>
                                   <code className="break-all">{origin}</code>
-                                  <span className="text-muted-foreground"> — {reason}</span>
+                                  <span className="text-muted-foreground">: {reason}</span>
                                 </li>
                               ))}
                             </ul>

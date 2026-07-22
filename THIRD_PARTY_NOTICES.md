@@ -4,4 +4,4 @@ Panelot is distributed under the MIT License and includes open-source dependenci
 
 Notable runtime projects include React, WXT, Dexie, Zod, Model Context Protocol SDK, Shiki, Mermaid, KaTeX, CodeMirror, Radix UI, Lucide, JSZip, and js-yaml. Their copyright notices and license texts remain governed by their upstream packages.
 
-Project and design references listed in `docs/11-references.md` are attribution for ideas and research, not bundled source code unless the dependency appears in `pnpm-lock.yaml`.
+Project and design references listed in `docs/development/references.md` are attribution for ideas and research, not bundled source code unless the dependency appears in `pnpm-lock.yaml`.

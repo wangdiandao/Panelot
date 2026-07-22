@@ -1,7 +1,7 @@
-# 02 — 数据模型与存储
+# 数据模型与存储
 
-> 文档入口：[文档目录](./README.md) · 关联：[01 架构](./01-architecture.md) · [04 Agent 引擎](./04-agent-engine.md)
-> 相关调研：OpenWebUI 和 Pi Agent 的会话树，以及 Codex rollout 的 SessionMeta 与重放式恢复。来源见 [11 参考项目](./11-references.md)。
+> 文档入口：[用户指南](../guide/index.md) · 关联：[架构](./architecture.md) · [Agent 引擎](./agent-engine.md)
+> 相关调研：OpenWebUI 和 Pi Agent 的会话树，以及 Codex rollout 的 SessionMeta 与重放式恢复。来源见 [参考项目](./references.md)。
 
 ---
 
@@ -21,7 +21,7 @@ class PanelotDB extends Dexie {
   threads!: Table<ThreadMeta, string>;
   nodes!: Table<ThreadNode, string>;
   attachments!: Table<Attachment, string>;
-  skills!: Table<SkillRecord, string>; // 见 08
+  skills!: Table<SkillRecord, string>; // 定义见 Skills 与 Plugins 文档
   memories!: Table<MemoryRecord, string>; // memory_write 工具
   runs!: Table<RunRecord, string>;
   commandReceipts!: Table<CommandReceipt, string>;
@@ -49,7 +49,7 @@ class PanelotDB extends Dexie {
 }
 ```
 
-> Provider 配置、权限规则、UI 偏好走 `chrome.storage.local`（体量小、需跨上下文同步事件），不入 Dexie。见 03/06。
+> Provider 配置、权限规则和 UI 偏好走 `chrome.storage.local`（体量小、需要跨上下文同步事件），不进入 Dexie。详见 [Provider](./providers.md) 与[权限](./permissions.md)。
 
 ### 2.1 threads —— 轻量索引表
 
@@ -69,7 +69,7 @@ interface ThreadMeta {
   preset?: string; // 默认 ModelPreset id
   parentThreadId?: string; // fork 来源（预留子代理）
   stats: { turns: number; totalTokens: number; costUsd: number };
-  scopeOrigins: string[]; // 已触达/批准过的 origin；用于敏感 payload 的第三方出域判断与审计（见 06）
+  scopeOrigins: string[]; // 已触达或批准过的 origin，用于敏感 payload 的第三方出域判断与审计；语义见权限文档
 }
 ```
 
@@ -104,7 +104,7 @@ type NodeType =
 - `childrenIds` **不存储**，由 `parentId` 索引反查派生（避免双向引用失同步——这是 OpenWebUI 教训的直接应用）。
 - `tool_call` / `tool_result` 分开两个节点：审批可能间隔任意长时间，且 result 的 `details`（截图等大对象）指向 attachments 表而非内联。
 - `interactions` 保存等待用户或外部条件的请求；响应和恢复 claim 都以事务提交，避免 Worker 重启后重复续跑。
-- **不落库的东西**：`item.delta` 流式增量、L1 快照的 selector_map（内存态，见 05）。
+- **不落库的内容**：`item.delta` 流式增量、L1 快照的 selector_map（内存态，详见[浏览器工具](./browser-tools.md)）。
 
 ### 2.3 attachments
 

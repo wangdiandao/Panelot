@@ -1,5 +1,5 @@
 /**
- * Central shortcut registry (docs/09 §6) — one typed table consumed by the
+ * Central shortcut registry (docs/development/ui.md §6) — one typed table consumed by the
  * ShortcutHelp overlay and (progressively) the actual handlers, so the cheat
  * sheet and the bindings can't drift apart (OpenWebUI src/lib/shortcuts.ts /
  * LobeChat HOTKEYS_REGISTRATION pattern).
@@ -43,7 +43,7 @@ export const SHORTCUT_REGISTRY: ShortcutDef[] = [
   { id: 'branch', keys: 'Ctrl/Cmd+↑↓', labelKey: 'keys.branch', scope: 'stream' },
   { id: 'copyLast', keys: 'Ctrl/Cmd+Shift+C', labelKey: 'keys.copyLast', scope: 'stream' },
   { id: 'focusComposer', keys: 'Shift+Esc', labelKey: 'keys.focusComposer', scope: 'stream' },
-  // Approval card — the fixed safety contract (docs/06 §4).
+  // Approval card — the fixed safety contract (docs/development/permissions.md §4).
   { id: 'approveOnce', keys: 'Y', labelKey: 'keys.approveOnce', scope: 'approval', reserved: true },
   {
     id: 'approveSession',

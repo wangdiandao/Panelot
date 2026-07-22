@@ -33,7 +33,7 @@ function workerSafeModulePreload(): Plugin {
   };
 }
 
-// See docs/06-permissions.md for the permission rationale. All host permissions are
+// See docs/development/permissions.md for the permission rationale. All host permissions are
 // requested dynamically at runtime (chrome.permissions.request).
 export default defineConfig({
   modules: ['@wxt-dev/module-react'],
@@ -99,7 +99,7 @@ export default defineConfig({
     },
     commands: {
       // Reserved command = "press the toolbar icon". With openPanelOnActionClick
-      // the browser opens/closes the side panel NATIVELY — no JS, no user-gesture
+      // the browser opens/closes the side panel natively — no JS, no user-gesture
       // pitfalls (sidePanel.open() silently fails after an awaited promise).
       _execute_action: {
         suggested_key: { default: 'Alt+P' },

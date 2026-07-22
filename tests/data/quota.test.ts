@@ -13,7 +13,7 @@ function bigBlob(mb: number): Blob {
   return new Blob([new Uint8Array(mb * 1024 * 1024)]);
 }
 
-describe('evictAttachmentsIfNeeded (docs/02 §6 — LRU, never the active thread)', () => {
+describe('evictAttachmentsIfNeeded (docs/development/data-model.md §6 — LRU, never the active thread)', () => {
   it('evicts oldest attachments over the 200MB budget', async () => {
     await db.nodes.add({
       id: 'node-a0',

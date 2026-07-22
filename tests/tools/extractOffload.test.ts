@@ -3,7 +3,7 @@
  * / browser-use's file_system): text over the threshold is stored as a
  * 'page_text' attachment; only a preview + id reach the model, keeping the full
  * body out of context. The attachment channel is UI-side and never re-fed to
- * the LLM (docs/02 §2.3).
+ * the LLM (docs/development/data-model.md §2.3).
  */
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';

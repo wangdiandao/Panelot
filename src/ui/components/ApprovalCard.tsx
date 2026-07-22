@@ -1,5 +1,5 @@
 /**
- * Approval card (docs/09 §4.3, docs/06 §4): full-parameter display, Y/S/A/N
+ * Approval card (docs/development/ui.md §4.3, docs/development/permissions.md §4): full-parameter display, Y/S/A/N
  * keyboard shortcuts, flag banners, queued display "1/3".
  * Rendered only inside extension pages, never injected into web pages.
  */

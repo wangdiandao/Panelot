@@ -1,6 +1,6 @@
-# 04 — Agent 引擎
+# Agent 引擎
 
-> 文档入口：[文档目录](./README.md) · 关联：[01 架构](./01-architecture.md) · [02 数据模型](./02-data-model.md) · [06 权限](./06-permissions.md) · [10 提示词](./10-prompts.md)
+> 文档入口：[用户指南](../guide/index.md) · 关联：[架构](./architecture.md) · [数据模型](./data-model.md) · [权限](./permissions.md) · [提示词](./prompts.md)
 > 相关调研：Pi Agent 的 loop 与 AgentTool 双通道，以及 Codex 的 steering、queueing、interrupt 和 turnKind。
 
 ---
@@ -25,7 +25,7 @@ async function runTurn(thread: Thread, input: UserInput, overrides?: TurnOverrid
     await materializeSteersAfterCurrentLeaf(cutoff);        // 只在安全边界推进持久化路径
     const messages = await buildSessionContext(thread.leafId);
 
-    const stream = provider.stream(messages, tools, signal);   // 03 章适配层
+    const stream = provider.stream(messages, tools, signal);   // Provider 适配层
     for await (const ev of stream) emitDelta(ev);              // 文本/推理增量转 item.delta
     const { message, toolCalls, usage } = await stream.final();
 
@@ -36,7 +36,7 @@ async function runTurn(thread: Thread, input: UserInput, overrides?: TurnOverrid
 
     for (const call of toolCalls) {
       prepareStableNode(tool_call);                   // 先构造稳定身份，尚不暴露半完成状态
-      const verdict = await gatekeeper.check(call, thread);      // 06 章
+      const verdict = await gatekeeper.check(call, thread);      // 权限裁决层
       if (verdict === 'ask') {
         transaction(tool_call + ApprovalRecord + Run.pendingTool);
         const decision = await requestApproval(call); // 双向 RPC，挂起等待
@@ -72,7 +72,7 @@ async function runTurn(thread: Thread, input: UserInput, overrides?: TurnOverrid
 | **排队 enqueue**   | `turn.enqueue`               | 当前轮跑完后作为**下一轮**执行                                                                                                                                                       | 队列有界（8 条），UI 显示 `queue.updated`                                                                                                      |
 | **打断 interrupt** | `turn.interrupt`             | 立即停止当前轮                                                                                                                                                                       | 总是允许                                                                                                                                       |
 
-UI 交互映射（见 09）：Agent 运行中输入框可继续打字，`Enter` = steer（不可插话时自动降级为 enqueue 并提示），`Shift+Alt+Enter` = 显式排队，`Esc` = interrupt。
+UI 交互映射见[界面](./ui.md)：Agent 运行中输入框可继续打字，`Enter` = steer（不可插话时自动降级为 enqueue 并提示），`Shift+Alt+Enter` = 显式排队，`Esc` = interrupt。
 
 Steer 的 ACK 表示数据已经持久化，不只是进入内存队列。`RunRepository` 会在同一 Dexie 事务中写入带 admission sequence 的 pending steer，并链接用户附件的 `nodeIds/runIds`，但不移动 Thread leaf；事务失败时整笔回滚。
 
@@ -89,11 +89,11 @@ Steer 的 ACK 表示数据已经持久化，不只是进入内存队列。`RunRe
 interface AgentTool<P = unknown, D = unknown> {
   name: string; // 'browser_click'
   label: string; // UI 显示："点击元素"
-  description: string; // 给 LLM（文案见 10 §3）
+  description: string; // 给 LLM，文案约束见提示词文档 §3
   parameters: RuntimeSchema<P>; // 运行时校验；注册时生成同源 JSON Schema 发给 LLM
   inputSchema?: object; // MCP 等远端工具的原始 JSON Schema，优先原样发给 Provider
   level: 'L0' | 'L1' | 'L2' | 'mcp' | 'builtin';
-  effects: 'read' | 'write'; // Gatekeeper 默认裁决的依据（06）
+  effects: 'read' | 'write'; // Gatekeeper 默认裁决的依据，语义见权限文档
   recovery?: 'retry-safe' | 'inspect-first' | 'never-retry';
   resolveTarget?(params: P): Promise<{ tabId?; frameId?; origin?; serverId? }>;
   execute(

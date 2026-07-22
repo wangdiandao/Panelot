@@ -1,6 +1,6 @@
-# 06 — 权限与安全
+# 权限与安全
 
-> 文档入口：[文档目录](./README.md) · 关联：[01 架构](./01-architecture.md) · [04 Agent 引擎](./04-agent-engine.md) · [05 浏览器工具](./05-browser-tools.md) · [10 提示词](./10-prompts.md)
+> 文档入口：[用户指南](../guide/index.md) · 关联：[架构](./architecture.md) · [Agent 引擎](./agent-engine.md) · [浏览器工具](./browser-tools.md) · [提示词](./prompts.md)
 > 相关调研：Codex 的审批策略和 agent-browser 的规则裁决。权限模式的实际枚举定义在 `src/messaging/protocol.ts`。
 
 ---
@@ -130,7 +130,7 @@ type ApprovalDecision =
 
 ## 6. Prompt Injection 边界
 
-防护分为提示词定界和 Gatekeeper 裁决；提示词层见 [10 §4](./10-prompts.md)：
+防护分为提示词定界和 Gatekeeper 裁决；提示词层见 [提示词 §4](./prompts.md)：
 
 | 层         | 机制                                                                                          | 兜底性质                                                         |
 | ---------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
@@ -142,7 +142,7 @@ type ApprovalDecision =
 
 Gatekeeper 不依赖模型正确识别恶意内容。即使模型被页面内容误导，敏感站点、规则和审批检查仍会独立执行。
 
-## 7. 设置页权限矩阵（UI 规格见 09 §6）
+## 7. 设置页权限矩阵（UI 规格见[界面](./ui.md) §6）
 
 - 视图：规则表（工具 × 站点 × 裁决 allow/ask/deny 三态 × 来源），支持手动添加（工具名 / 前缀通配 / `category:` 类别）与删除；
 - 支持默认 `permissionPolicy` 三档选择，以及用户自定义敏感站点模式；

@@ -89,13 +89,11 @@ export function createLoadSkillTool(
       }
       if (threadLoaded.has(params.name)) {
         return {
-          content: [
-            { type: 'text', text: `技能 "${params.name}" 已加载（本会话内无需重复加载）。` },
-          ],
+          content: [{ type: 'text', text: `Skill“${params.name}”已加载，本次会话无需重复加载。` }],
         };
       }
       const skill = await runtime.getEnabled(params.name);
-      if (!skill) return { content: [{ type: 'text', text: `未找到技能 "${params.name}"。` }] };
+      if (!skill) return { content: [{ type: 'text', text: `未找到 Skill“${params.name}”。` }] };
       threadLoaded.add(params.name);
       return {
         content: [{ type: 'text', text: `# Skill: ${params.name}\n\n${skill.body}` }],

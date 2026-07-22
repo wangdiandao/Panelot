@@ -315,7 +315,7 @@ function startBackground(
     });
   });
 
-  // Two-axis Gatekeeper (docs/06): the tool's level rides along so L2 forces
+  // Two-axis Gatekeeper (docs/development/permissions.md): the tool's level rides along so L2 forces
   // escalation and builtins are treated as origin-less.
   const gatekeeperService = new GatekeeperService(
     db,
@@ -393,7 +393,7 @@ function startBackground(
         }
       : skills;
     add(createLoadSkillTool(skillSource, getThreadId));
-    // MCP tools (mcp__{server}__{tool}) from connected servers (docs/07 §4).
+    // MCP tools (mcp__{server}__{tool}) from connected servers (docs/development/mcp.md §4).
     for (const tool of mcp.buildTools(getThreadId)) add(tool);
     return registry;
   };
@@ -474,10 +474,10 @@ function startBackground(
   };
   core.onApprovalDecision = (approvalId, threadId, tool, origin, decision) =>
     gatekeeperService.applyDecision(approvalId, threadId, tool, origin, decision);
-  // Composer permission switch → per-thread gatekeeper config (docs/06 §1).
+  // Composer permission switch → per-thread gatekeeper config (docs/development/permissions.md §1).
   core.onPermissionOverride = (threadId, config) =>
     gatekeeperService.setThreadConfig(threadId, config);
-  // "/skill-name …" activates the skill for the turn (docs/08 §4): the body
+  // "/skill-name …" activates the skill for the turn (docs/development/skills-plugins.md §4): the body
   // rides along as attached context on the user message.
   core.resolveSlashCommand = async (text) => {
     if (/^\/[^:\s]+:[^\s]+/.test(text.trim())) {
@@ -581,7 +581,7 @@ function startBackground(
     );
     return true;
   });
-  // MCP OAuth trigger from the settings page (docs/07 §3).
+  // MCP OAuth trigger from the settings page (docs/development/mcp.md §3).
   registerRuntimeMessageHandler((message: unknown, sender, sendResponse) => {
     if ((message as { type?: unknown })?.type !== THREAD_RUNTIME_STATE_RPC_TYPE) return false;
     const request = parseClearThreadRuntimeStateRequest(message);
@@ -677,8 +677,8 @@ function startBackground(
     })
     .catch(() => {});
 
-  // Manual operation → pause, but ONLY when a real human-vs-agent conflict
-  // exists (docs/05 §5): the agent has written to that tab this turn, or a
+  // Manual operation → pause, but only when a real human-vs-agent conflict
+  // exists (docs/development/browser-tools.md §5): the agent has written to that tab this turn, or a
   // pending or recovered approval is waiting on that exact tab. Read-only turns
   // never pause — the user scrolling their own page is not a conflict.
   gateway.onManualOperation = (tabId) => {
@@ -707,7 +707,7 @@ function startBackground(
   // promise before it (windows.getCurrent) drops the gesture token, so the
   // call silently fails.
 
-  // Keepalive for running turns with no UI connected (docs/01 §4): a 30s alarm
+  // Keepalive for running turns with no UI connected (docs/development/architecture.md §4): a 30s alarm
   // wakes the SW to keep long background tasks progressing across idle gaps.
   chrome.alarms.create('panelot-keepalive', { periodInMinutes: 0.5 });
   chrome.alarms.create('panelot-quota', { periodInMinutes: 15 });
@@ -717,7 +717,7 @@ function startBackground(
       return;
     }
     if (alarm.name === 'panelot-quota') {
-      // LRU-evict over-budget attachments, never touching a live thread (docs/02 §6).
+      // LRU-evict over-budget attachments, never touching a live thread (docs/development/data-model.md §6).
       const active = core.activeThreadIds()[0];
       void sendOffscreenWorkerCommand({
         type: 'panelot.offscreen.attachments.evict',

@@ -1,5 +1,5 @@
 /**
- * Full-page chat (docs/09 §3.1): thread sidebar + message stream. Layout
+ * Full-page chat (docs/development/ui.md §3.1): thread sidebar + message stream. Layout
  * follows OpenWebUI's resizable navigation pattern; conversation progress
  * stays inside each assistant message instead of a detached activity panel.
  */
@@ -100,7 +100,7 @@ export function App() {
         setThreads(list.filter((th) => !th.deleting && !th.archived && th.leafId !== null));
       });
 
-  // Mark the open thread as seen (unread indicator source, docs/09 §3.1).
+  // Mark the open thread as seen (unread indicator source, docs/development/ui.md §3.1).
   const markSeen = (threadId: string) => {
     const seenAt = Date.now();
     setSeen((current) => ({ ...current, [threadId]: seenAt }));
@@ -156,7 +156,7 @@ export function App() {
   const persistGlobal = (patch: { sidebarWidth?: number; sidebarCollapsed?: boolean }) =>
     void SettingsStore.global.patch(patch);
 
-  // Keyboard shortcuts (docs/09 §6): Ctrl/Cmd+N new, Ctrl/Cmd+, settings,
+  // Keyboard shortcuts (docs/development/ui.md §6): Ctrl/Cmd+N new, Ctrl/Cmd+, settings,
   // Ctrl/Cmd+K command palette, Ctrl/Cmd+Shift+S sidebar collapse.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -181,7 +181,7 @@ export function App() {
         e.preventDefault();
         setPaletteOpen((v) => !v);
       } else if (mod && e.key.toLowerCase() === 'e') {
-        // Ctrl/Cmd+E: back to the side panel form (docs/09 §6).
+        // Ctrl/Cmd+E: back to the side panel form (docs/development/ui.md §6).
         e.preventDefault();
         const windowId = browserWindowId.current;
         if (windowId !== undefined) void openSidePanelAndCloseFullPage(windowId).catch(() => {});

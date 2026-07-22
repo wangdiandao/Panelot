@@ -1,5 +1,5 @@
 /**
- * CodeMirror-based editor for SKILL.md (docs/08 §3): markdown highlighting,
+ * CodeMirror-based editor for SKILL.md (docs/development/skills-plugins.md §3): markdown highlighting,
  * follows the app theme (.dark class). Thin controlled wrapper — validation
  * stays in the caller.
  */

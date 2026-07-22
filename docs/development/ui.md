@@ -1,6 +1,6 @@
-# 09 — 界面
+# 界面
 
-> 文档入口：[文档目录](./README.md) · 关联：[01 架构](./01-architecture.md)（事件驱动渲染） · [06 权限](./06-permissions.md)（审批卡片语义）
+> 文档入口：[用户指南](../guide/index.md) · 关联：[架构](./architecture.md)（事件驱动渲染） · [权限](./permissions.md)（审批卡片语义）
 > 相关调研：OpenWebUI 的消息树、触发符和流式渲染，以及 Claude Code Desktop 和 Codex 的工具卡片布局。
 
 > 当前已有侧边栏、全屏页、共享消息流与输入框，以及十一项设置导航。队列编辑、恢复卡、Attachments、站点指令、ModelPreset、Plugin、MCP Prompt/Resource 与交互卡已接入。待审批、待输入或恢复通知可以打开对应会话；Skill `auto_suggest` 胶囊和完整的性能诊断界面仍未接入。
@@ -46,7 +46,7 @@
  │   │   │           └─ <SnapshotViewer>/<ScreenshotViewer>/<DiffViewer>   details 通道渲染
  │   │   ├─ <MarkdownRenderer>      最终回答常驻在折叠过程之外
  │   │   ├─ <CitationsPill>         本轮访问来源
- │   │   └─ <BranchSwitcher>        ‹ 2/3 ›（siblings 派生，见 02 §3.2）
+ │   │   └─ <BranchSwitcher>        ‹ 2/3 ›（siblings 派生，见数据模型文档 §3.2）
  │   ├─ <ApprovalCard>              审批 RPC 的 UI 端
  │   └─ <SystemNotice>              暂停/软提醒等浅色横条
  │   └─ <InteractionCard>           提问/接管/页面等待/定时/MCP Elicitation
@@ -161,11 +161,11 @@ flags 渲染: `sensitive_payload` / `escalation_l2` 显示告警；`cross_scope`
 
 `<TriggerMenu>` 统一调度（模糊搜索、↑↓ 选择）：
 
-| 触发 | 内容                                                                                                     |
-| ---- | -------------------------------------------------------------------------------------------------------- |
-| `@`  | 当前只列出打开的可脚本化标签页；选择后抽取该 tab 正文为 ContextBlock                                     |
-| `/`  | enabled Skill + MCP `/server:prompt`；带参数的 Skill/Prompt 弹结构化表单                                 |
-| `{{` | 动态变量自动补全：`{{PAGE_URL}} {{PAGE_TITLE}} {{SELECTION}} {{CLIPBOARD}} {{CURRENT_DATE}}`，提交时求值 |
+| 触发                  | 内容                                                                                                                      |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `@`                   | 当前只列出打开的可脚本化标签页；选择后抽取该 tab 正文为 ContextBlock                                                      |
+| `/`                   | enabled Skill + MCP `/server:prompt`；带参数的 Skill/Prompt 弹结构化表单                                                  |
+| <code v-pre>{{</code> | 动态变量自动补全：<code v-pre>{{PAGE_URL}} {{PAGE_TITLE}} {{SELECTION}} {{CLIPBOARD}} {{CURRENT_DATE}}</code>，提交时求值 |
 
 输入框的 `+` 菜单可附着当前页、其它 tab 或用户文件；`@` 可搜索 MCP Resource，`/` 可调用 MCP Prompt。用户文件只在 Thread 已由首条消息显式创建后开放持久化；初始会话选择上传时必须提示先发送消息，不打开文件选择器，也不创建隐形空 Thread。附件随后持久化为 user-provenance 记录，再随同一 submissionId 发送/排队；上传工具只接受当前 Thread 的用户来源附件。截图由 L2 screenshot 工具生成并作为不可信 page attachment。
 
@@ -173,32 +173,32 @@ flags 渲染: `sensitive_payload` / `escalation_l2` 显示告警；`cross_scope`
 
 快捷键以 `src/ui/shortcuts.ts` 中的 `SHORTCUT_REGISTRY` 为准；扩展页内按 `?` 可打开帮助。
 
-| 键                      | 作用                                    | 作用域                       |
-| ----------------------- | --------------------------------------- | ---------------------------- |
-| `Alt+P`                 | 开/关侧边栏                             | 全局(commands)               |
-| `Cmd/Ctrl+K`            | 命令面板（切会话/改模型/命令）          | 扩展页                       |
-| `Cmd/Ctrl+N`            | 新会话                                  | 扩展页                       |
-| `Cmd/Ctrl+,`            | 设置                                    | 扩展页                       |
-| `Cmd/Ctrl+E`            | 侧边栏 ⇄ 全屏页切换                     | 扩展页                       |
-| `Cmd/Ctrl+Shift+S`      | 折叠/展开会话列表                       | 扩展页                       |
-| `?`                     | 快捷键帮助                              | 扩展页                       |
-| `Enter` / `Shift+Enter` | 发送（运行中=插话）/ 换行               | 输入框                       |
-| `Shift+Alt+Enter`       | 排队（当前轮结束后执行）                | 输入框                       |
-| `Esc`                   | 停止当前 turn                           | 输入框                       |
-| `↑`                     | 召回上一条输入                          | 输入框（空时）               |
-| `@` / `/` / `{{`        | 引用 / 命令 / 变量触发菜单              | 输入框                       |
-| `Cmd/Ctrl+↑↓`           | 分支切换                                | 消息流                       |
-| `Cmd/Ctrl+Shift+C`      | 复制最后一条回复                        | 消息流                       |
-| `Shift+Esc`             | 焦点回输入框                            | 消息流                       |
-| `Y / S / A / N`         | 审批：一次 / 本轮会话 / 本站始终 / 拒绝 | 审批卡片（保留键，不可改绑） |
-| `Esc`                   | 拒绝并停止                              | 审批卡片（保留键）           |
+| 键                                | 作用                                    | 作用域                       |
+| --------------------------------- | --------------------------------------- | ---------------------------- |
+| `Alt+P`                           | 开/关侧边栏                             | 全局(commands)               |
+| `Cmd/Ctrl+K`                      | 命令面板（切会话/改模型/命令）          | 扩展页                       |
+| `Cmd/Ctrl+N`                      | 新会话                                  | 扩展页                       |
+| `Cmd/Ctrl+,`                      | 设置                                    | 扩展页                       |
+| `Cmd/Ctrl+E`                      | 侧边栏 ⇄ 全屏页切换                     | 扩展页                       |
+| `Cmd/Ctrl+Shift+S`                | 折叠/展开会话列表                       | 扩展页                       |
+| `?`                               | 快捷键帮助                              | 扩展页                       |
+| `Enter` / `Shift+Enter`           | 发送（运行中=插话）/ 换行               | 输入框                       |
+| `Shift+Alt+Enter`                 | 排队（当前轮结束后执行）                | 输入框                       |
+| `Esc`                             | 停止当前 turn                           | 输入框                       |
+| `↑`                               | 召回上一条输入                          | 输入框（空时）               |
+| `@` / `/` / <code v-pre>{{</code> | 引用 / 命令 / 变量触发菜单              | 输入框                       |
+| `Cmd/Ctrl+↑↓`                     | 分支切换                                | 消息流                       |
+| `Cmd/Ctrl+Shift+C`                | 复制最后一条回复                        | 消息流                       |
+| `Shift+Esc`                       | 焦点回输入框                            | 消息流                       |
+| `Y / S / A / N`                   | 审批：一次 / 本轮会话 / 本站始终 / 拒绝 | 审批卡片（保留键，不可改绑） |
+| `Esc`                             | 拒绝并停止                              | 审批卡片（保留键）           |
 
 ## 7. 空态 / 错误态 / 加载态
 
 - **空会话**：居中 logo + 最多 4 条建议；侧边栏用 URL 规则提供视频/PDF/GitHub/普通页面建议，当前没有合并 Skill auto_suggest；点击只预填输入框，不自动发送；
 - **Provider 未配置**：输入框占位 "先在设置中添加模型 →"，点击直达；
-- **错误态规范**：ProviderError 按 03 §7 归因显示人话（"API Key 无效，请检查 [设置]"），可重试的带 [重试] 按钮；网络断开顶部细横幅；
-- **加载态**：会话切换用骨架屏（3 条消息形状）；重连中输入框显示 "重新连接引擎…"（01 §3.4 握手期间）。
+- **错误态规范**：ProviderError 按 [Provider](./providers.md) §7 归因显示易懂文案（“API Key 无效，请检查 [设置]”）；可重试错误显示“重试”按钮，网络断开时在顶部显示细横幅；
+- **加载态**：会话切换用骨架屏（3 条消息形状）；[架构](./architecture.md) §3.4 握手期间，输入框显示“重新连接引擎…”。
 
 ## 8. i18n 与可达性
 

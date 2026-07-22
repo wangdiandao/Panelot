@@ -1,12 +1,12 @@
 /**
- * AnthropicAdapter — POST {baseUrl}/v1/messages (docs/03 §3.2).
+ * AnthropicAdapter — POST {baseUrl}/v1/messages (docs/development/providers.md §3.2).
  *
  * Event stream: message_start / content_block_start / content_block_delta
  * (text_delta | input_json_delta | thinking_delta) / content_block_stop /
  * message_delta / message_stop — aggregated by content block index.
  *
  * Prompt caching: cache_control ephemeral breakpoints on the tools definition
- * and system prompt (docs/03 §3.2 + docs/10 §1) — in agent loops each turn
+ * and system prompt (docs/development/providers.md §3.2 + docs/development/prompts.md §1) — in agent loops each turn
  * makes several calls, so cache hits dominate cost.
  */
 
@@ -151,7 +151,7 @@ export class AnthropicAdapter implements ProviderAdapter {
       'Content-Type': 'application/json',
       'x-api-key': apiKey,
       'anthropic-version': '2023-06-01',
-      // Required for direct calls from extension contexts (docs/03 §3.2).
+      // Required for direct calls from extension contexts (docs/development/providers.md §3.2).
       'anthropic-dangerous-direct-browser-access': 'true',
       ...this.connection.customHeaders,
     };
@@ -170,7 +170,7 @@ export class AnthropicAdapter implements ProviderAdapter {
       cache_control: { type: 'ephemeral' },
     };
     if (req.system) {
-      // Cache breakpoint at the end of the stable system layer (docs/10 §1).
+      // Cache breakpoint at the end of the stable system layer (docs/development/prompts.md §1).
       body.system = [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }];
     }
     if (req.tools.length > 0) {
@@ -188,7 +188,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     if (p.topP !== undefined) body.top_p = p.topP;
     if (p.stopSequences !== undefined) body.stop_sequences = p.stopSequences;
     if (p.reasoningEffort !== undefined) {
-      // Map reasoning effort to a thinking budget (docs/03 §1.4 leaves the
+      // Map reasoning effort to a thinking budget (docs/development/providers.md §1.4 leaves the
       // mapping to the adapter; unset → no thinking block).
       const budgets = { low: 2048, medium: 8192, high: 16384 } as const;
       const maxTokens = body.max_tokens as number;

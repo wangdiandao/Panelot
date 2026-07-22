@@ -1,5 +1,5 @@
 /**
- * Accessibility snapshot engine (docs/05 §1) — runs inside the content script.
+ * Accessibility snapshot engine (docs/development/browser-tools.md §1) — runs inside the content script.
  *
  * Output format follows Playwright MCP's ariaSnapshot (YAML indent tree of
  * `role "name" [attrs] [ref=<snapshot-ref>]`), with Chrome DevTools MCP's versioned-uid
@@ -7,7 +7,7 @@
  * whose prefix isn't the tab's CURRENT snapshot — killing state divergence at
  * the protocol level (nanobrowser/browser-use's chronic bug).
  *
- * Interactive detection is recall-first (docs/05 §1.2, nanobrowser's
+ * Interactive detection is recall-first (docs/development/browser-tools.md §1.2, nanobrowser's
  * missed-element lesson): any of four rules grants a ref; nested clickable
  * chains collapse to the innermost hit target.
  */
@@ -56,7 +56,7 @@ export interface LocatorHint {
 }
 
 // ---------------------------------------------------------------------------
-// Interactive detection (docs/05 §1.2)
+// Interactive detection (docs/development/browser-tools.md §1.2)
 // ---------------------------------------------------------------------------
 
 const INTERACTIVE_TAGS = new Set([
@@ -241,7 +241,7 @@ export function computeName(el: Element, win: Window): string {
   return text.length > 80 ? `${text.slice(0, 77)}…` : text;
 }
 
-/** ARIA state attributes rendered in brackets (docs/05 §1.1). */
+/** ARIA state attributes rendered in brackets (docs/development/browser-tools.md §1.1). */
 export function computeAttrs(el: Element): string[] {
   const attrs: string[] = [];
   const tag = el.tagName.toLowerCase();
@@ -476,7 +476,7 @@ export function buildSnapshot(win: Window, opts: BuildOptions): SnapshotResult {
 
   const roots = walk(doc.body ?? doc.documentElement);
 
-  // Serialize with token cap (docs/05 §1.3): drop non-interactive text first.
+  // Serialize with token cap (docs/development/browser-tools.md §1.3): drop non-interactive text first.
   const { yaml, truncated } = serialize(roots, opts.maxTokens ?? 3000);
 
   const header = `# Page Snapshot (s${documentToken}_${sid})\nURL: ${win.location.href}\nTitle: ${doc.title}\n\n`;
@@ -494,7 +494,7 @@ export function buildSnapshot(win: Window, opts: BuildOptions): SnapshotResult {
 }
 
 // ---------------------------------------------------------------------------
-// Serialization with budget (never silently truncate — docs/05 §1.3)
+// Serialization with budget (never silently truncate — docs/development/browser-tools.md §1.3)
 // ---------------------------------------------------------------------------
 
 function serialize(roots: SnapshotNode[], maxTokens: number): { yaml: string; truncated: number } {

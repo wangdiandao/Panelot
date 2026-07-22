@@ -6,6 +6,8 @@ node_modules/
 dist/
 .output/
 .wxt/
+docs/.vitepress/cache/
+docs/.vitepress/dist/
 stats.html
 stats-*.json
 *.tsbuildinfo

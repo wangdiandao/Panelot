@@ -1,5 +1,5 @@
 /**
- * Skills settings (docs/08 §3): list, enable/disable, import (paste/file/URL),
+ * Skills settings (docs/development/skills-plugins.md §3): list, enable/disable, import (paste/file/URL),
  * built-in CodeMirror editor with live frontmatter validation. Built on
  * shadcn/ui primitives; URL import uses a Dialog instead of window.prompt.
  */
@@ -174,7 +174,7 @@ export function SkillsPage() {
         {preview && (
           <Alert variant="success">
             <AlertDescription>
-              ✓ {preview.name} — {preview.description}
+              ✓ {preview.name}: {preview.description}
             </AlertDescription>
           </Alert>
         )}

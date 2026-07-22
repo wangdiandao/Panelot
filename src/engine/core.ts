@@ -1,6 +1,6 @@
 /**
  * EngineCore — thread management, turn scheduling, approval RPC bookkeeping,
- * snapshot building (docs/01, docs/04). This is the real implementation
+ * snapshot building (docs/development/architecture.md, docs/development/agent-engine.md). This is the real implementation
  * behind EngineHost.
  */
 
@@ -58,8 +58,8 @@ import {
 } from './runEnvironmentSnapshot';
 import type { SkillFrontmatter } from '../skills/parse';
 
-const APPROVAL_TIMEOUT_MS = 5 * 60_000; // docs/06 §4
-const ENQUEUE_CAPACITY = 8; // docs/04 §3
+const APPROVAL_TIMEOUT_MS = 5 * 60_000; // docs/development/permissions.md §4
+const ENQUEUE_CAPACITY = 8; // docs/development/agent-engine.md §3
 
 /** Resolves the provider/model/params for a thread (preset & overrides). */
 export interface ProviderResolver {
@@ -70,7 +70,7 @@ export interface ProviderResolver {
     provider: ProviderAdapter;
     model: string;
     params: GenParams;
-    /** $/Mtok, for cost accounting (docs/03 §1.2). */
+    /** $/Mtok, for cost accounting (docs/development/providers.md §1.2). */
     pricing?: { input: number; output: number; cacheRead?: number };
     modelCapabilities?: import('../providers/types').ModelCapabilities;
     connectionId?: string;
@@ -81,7 +81,7 @@ export interface ProviderResolver {
     activeSkills?: string[];
     promptVersion?: string;
   }>;
-  /** Task model for titles (docs/03 §1.5); falls back to the thread's main model. */
+  /** Task model for titles (docs/development/providers.md §1.5); falls back to the thread's main model. */
   resolveTaskModel?(
     fallbackThreadId: string,
   ): Promise<{ provider: ProviderAdapter; model: string }>;
@@ -186,7 +186,7 @@ export class RealEngineCore {
   private readonly recoveryToolTimeoutMs: number;
   /** Broadcast sink, wired by the host. */
   onBroadcast: (ev: AgentEvent) => void = () => {};
-  /** Called after an approval decision to apply its side effects (docs/06 §4). */
+  /** Called after an approval decision to apply its side effects (docs/development/permissions.md §4). */
   onApprovalDecision?: (
     approvalId: string,
     threadId: string,
@@ -194,7 +194,7 @@ export class RealEngineCore {
     targetOrigin: string,
     decision: ApprovalDecision,
   ) => Promise<void>;
-  /** Per-turn permission-policy override → gatekeeper thread config (docs/06 §1). */
+  /** Per-turn permission-policy override → gatekeeper thread config (docs/development/permissions.md §1). */
   onPermissionOverride?: (
     threadId: string,
     config: {
@@ -202,7 +202,7 @@ export class RealEngineCore {
     },
   ) => void;
   /**
-   * Slash-command hook (docs/08): "/skill-name …" resolves to a context block
+   * Slash-command hook (docs/development/skills-plugins.md): "/skill-name …" resolves to a context block
    * carrying the skill body, attached to the user message. Null = plain text.
    */
   resolveSlashCommand?: (text: string) => Promise<ContextBlock | null>;
@@ -268,7 +268,7 @@ export class RealEngineCore {
   }
 
   /**
-   * Cross-thread activity broadcast (docs/09 §3.1 sidebar indicators) — the
+   * Cross-thread activity broadcast (docs/development/ui.md §3.1 sidebar indicators) — the
    * event intentionally carries no top-level threadId so the host's
    * thread-scoped broadcast filter lets it reach every client.
    */
@@ -452,7 +452,7 @@ export class RealEngineCore {
       case 'turn.submit':
         return this.handleSubmit(op, emit, clientId, command);
       case 'turn.fork': {
-        // Branch-and-run (docs/02 §3.2): reposition leafId to the anchor's
+        // Branch-and-run (docs/development/data-model.md §3.2): reposition leafId to the anchor's
         // parent so the turn's user message appends as a SIBLING branch.
         // Busy threads reject rather than enqueue — a queued fork would
         // reposition the cursor under a moving tree.
@@ -527,7 +527,7 @@ export class RealEngineCore {
             type: 'error',
             submissionId: op.submissionId,
             code: 'turn_not_steerable',
-            message: 'this turn cannot be steered — enqueue instead',
+            message: 'This turn cannot be steered. Queue the message instead.',
             retryable: false,
           });
           return;
@@ -1121,7 +1121,7 @@ export class RealEngineCore {
         ),
       emit: (ev) => {
         if (ev.type === 'token.usage') {
-          // Cost from pricing ($/Mtok), if the resolver supplied it (docs/03 §1.2).
+          // Cost from pricing ($/Mtok), if the resolver supplied it (docs/development/providers.md §1.2).
           const pricing = resolved.pricing;
           const costUsd = pricing
             ? (ev.usage.input * pricing.input +
@@ -1130,7 +1130,7 @@ export class RealEngineCore {
               1_000_000
             : undefined;
           ev = { ...ev, costUsd };
-          // Accumulate into thread.stats for the session list (docs/02 §2.1).
+          // Accumulate into thread.stats for the session list (docs/development/data-model.md §2.1).
         }
         this.onBroadcast(ev);
       },
@@ -1951,7 +1951,7 @@ export class RealEngineCore {
   }
 
   // -------------------------------------------------------------------------
-  // External pause (manual operation detected — docs/05 §5)
+  // External pause (manual operation detected — docs/development/browser-tools.md §5)
   // -------------------------------------------------------------------------
 
   /** Interrupt whatever turn is running on the thread (auto-pause path). */
@@ -2041,7 +2041,7 @@ export class RealEngineCore {
   }
 
   // -------------------------------------------------------------------------
-  // Title generation (docs/03 §1.5, docs/10 §5.3) — fired at turn start from
+  // Title generation (docs/development/providers.md §1.5, docs/development/prompts.md §5.3) — fired at turn start from
   // the first user message, in parallel with the turn itself
   // -------------------------------------------------------------------------
 
@@ -2070,12 +2070,12 @@ export class RealEngineCore {
       const fallback = firstLine.slice(0, 40);
       await this.setTitle(threadId, fallback);
 
-      // Stage 2 — LLM title via the task model (docs/03 §1.5).
+      // Stage 2 — LLM title via the task model (docs/development/providers.md §1.5).
       const { provider, model } = this.providers.resolveTaskModel
         ? await this.providers.resolveTaskModel(threadId)
         : await this.providers.resolve(threadId);
       // maxTokens must leave room for reasoning models (DeepSeek etc.) that
-      // spend tokens on reasoning_content BEFORE any text — 30 tokens starved
+      // spend tokens on reasoning_content before any text — 30 tokens starved
       // the title to empty. Text output is still ~6 words; cost is negligible.
       const stream = provider.stream({
         messages: [
@@ -2109,7 +2109,7 @@ export class RealEngineCore {
   }
 
   // -------------------------------------------------------------------------
-  // Approval RPC (docs/06 §4)
+  // Approval RPC (docs/development/permissions.md §4)
   // -------------------------------------------------------------------------
 
   private async requestApproval(
@@ -2190,7 +2190,7 @@ export class RealEngineCore {
       };
       const timer = setTimeout(
         () => {
-          // Timeout → decline (docs/06 §4).
+          // Timeout → decline (docs/development/permissions.md §4).
           const decision: ApprovalDecision = {
             kind: 'decline',
             note: 'approval timed out after 5 minutes',
@@ -2373,7 +2373,7 @@ export class RealEngineCore {
   }
 
   // -------------------------------------------------------------------------
-  // Snapshot (docs/01 §3.4)
+  // Snapshot (docs/development/architecture.md §3.4)
   // -------------------------------------------------------------------------
 
   async getSnapshot(threadId: string): Promise<ThreadSnapshot | null> {
@@ -2411,7 +2411,7 @@ export class RealEngineCore {
     const queuedRuns = await this.runs.queuedForThread(threadId);
     const recoverableRuns = await this.runs.recoverableForThread(threadId);
 
-    // Interrupted-mid-turn detection (docs/01 §4, docs/04 §6.2): no live turn
+    // Interrupted-mid-turn detection (docs/development/architecture.md §4, docs/development/agent-engine.md §6.2): no live turn
     // but the checkpointed path ends inside a turn → SW was likely killed.
     // The UI offers "continue"; replay from the last checkpoint continues.
     let wasInterrupted = false;

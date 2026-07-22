@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { splitUnclosedFence } from '../../src/ui/components/Markdown';
 
-describe('splitUnclosedFence (docs/09 §4.1 rule 1)', () => {
+describe('splitUnclosedFence (docs/development/ui.md §4.1 rule 1)', () => {
   it('passes balanced content through untouched', () => {
     const md = 'text\n```js\ncode\n```\nmore';
     expect(splitUnclosedFence(md)).toEqual({ closed: md, openTail: null });

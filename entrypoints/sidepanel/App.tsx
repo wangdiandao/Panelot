@@ -1,5 +1,5 @@
 /**
- * Side panel (docs/09 §3.2): companion form — thread switcher, page-context
+ * Side panel (docs/development/ui.md §3.2): companion form — thread switcher, page-context
  * chip, shared ThreadView, expand-to-fullpage, in-app settings modal.
  * Built on shadcn/ui primitives; the thread switcher is a real DropdownMenu
  * (menu semantics, Esc, arrow keys, outside-click) instead of a bare div.
@@ -73,7 +73,7 @@ export function App() {
     return () => session.stop();
   }, [session]);
 
-  // Keyboard shortcuts (docs/09 §6): Ctrl/Cmd+K palette, Ctrl/Cmd+N new chat.
+  // Keyboard shortcuts (docs/development/ui.md §6): Ctrl/Cmd+K palette, Ctrl/Cmd+N new chat.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
@@ -84,7 +84,7 @@ export function App() {
         e.preventDefault();
         session.startDraft();
       } else if (mod && e.key.toLowerCase() === 'e') {
-        // Ctrl/Cmd+E: expand to the full-page form (docs/09 §6).
+        // Ctrl/Cmd+E: expand to the full-page form (docs/development/ui.md §6).
         e.preventDefault();
         const threadId = session.store.getState().threadId;
         void openFullPageChat(threadId ?? undefined);

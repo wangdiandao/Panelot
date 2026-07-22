@@ -1,5 +1,5 @@
 /**
- * Tool call card + collapsible group (docs/09 §4.2).
+ * Tool call card + collapsible group (docs/development/ui.md §4.2).
  * pending(⏳) → running(progress text) → ok(✓ + duration) | fail(✗ + error).
  * ≥3 consecutive cards collapse into a group header "N 步浏览器操作 ✓m ✗k";
  * a running group auto-expands its tail card.

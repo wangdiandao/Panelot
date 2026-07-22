@@ -1,7 +1,7 @@
 /**
- * BrowserToolGateway (docs/01 §5): engine-side router for browser tools.
+ * BrowserToolGateway (docs/development/architecture.md §5): engine-side router for browser tools.
  * L0 → chrome.tabs API directly; L1 → content script messaging with idempotent
- * injection + one retry; explicit tab routing + touched-tab audit (docs/05 §6).
+ * injection + one retry; explicit tab routing + touched-tab audit (docs/development/browser-tools.md §6).
  */
 
 import {
@@ -226,11 +226,11 @@ function installDialogInterception(): void {
     report('alert', String(message ?? ''), '已关闭');
   };
   window.confirm = (message?: unknown) => {
-    report('confirm', String(message ?? ''), '已自动取消(false)');
+    report('confirm', String(message ?? ''), '已自动取消（false）');
     return false;
   };
   window.prompt = (message?: unknown, _default?: string) => {
-    report('prompt', String(message ?? ''), '已自动取消(null)');
+    report('prompt', String(message ?? ''), '已自动取消（null）');
     return null;
   };
 }
@@ -278,7 +278,7 @@ export class BrowserToolGateway {
   /**
    * Browser-level control model (2026-07-06): the agent may target ANY tab —
    * the safety gates are write approvals + the sensitive-origin blacklist
-   * (docs/06), not tab membership. Per thread we keep:
+   * (docs/development/permissions.md), not tab membership. Per thread we keep:
    *  - fallback target: the submission-captured web tab used when a call omits
    *    tabId. It stays fixed during one turn; a legacy call without captured
    *    context resolves the most recently visible web tab once.
@@ -488,7 +488,7 @@ export class BrowserToolGateway {
     for (const threadId of new Set(changedThreads)) this.onTabsChanged(threadId);
   }
 
-  // ---- target & audit trail (docs/05 §6) -------------------------------------
+  // ---- target & audit trail (docs/development/browser-tools.md §6) -------------------------------------
 
   /** Tabs the agent has operated on this thread (audit display, not permission). */
   touchedTabs(threadId: string): number[] {
@@ -523,7 +523,7 @@ export class BrowserToolGateway {
   /**
    * Declare that the agent is about to dispatch trusted (CDP) input on a tab:
    * manual-operation reports from that tab are suppressed for `durationMs`.
-   * Call BEFORE the dispatch — the report races the dispatch's completion.
+   * Call before dispatch because the report races the dispatch's completion.
    */
   markAgentInput(tabId: number, durationMs = 1500): void {
     const expiresAt = Date.now() + durationMs;
@@ -663,7 +663,7 @@ export class BrowserToolGateway {
     const tab = webTabs[0];
     if (!tab)
       throw new Error(
-        '没有可操作的网页标签页（扩展自身页面不能作为操作目标）。请先用 tab_open 打开页面或激活一个网页标签页。',
+        '没有可操作的网页标签页，扩展自身页面不能作为操作目标。请先用 tab_open 打开页面，或激活一个网页标签页。',
       );
     // Unpinned: locked for this turn, released at turn end (see
     // releaseFloatingTarget) so the next turn follows the user again.
@@ -678,7 +678,7 @@ export class BrowserToolGateway {
     if (requestedTabId === undefined) return this.getTargetTab(threadId);
     const tab = await chrome.tabs.get(requestedTabId);
     if (!tab.url || !/^https?:/.test(tab.url)) {
-      throw new Error(`标签页 [${requestedTabId}] 不是可操作的 http(s) 网页。`);
+      throw new Error(`标签页 [${requestedTabId}] 不是可操作的 HTTP(S) 网页。`);
     }
     this.#markTouched(threadId, requestedTabId);
     return requestedTabId;
@@ -694,7 +694,7 @@ export class BrowserToolGateway {
     }
   }
 
-  // ---- L1 dispatch (docs/01 §5) ----------------------------------------------
+  // ---- L1 dispatch (docs/development/architecture.md §5) ----------------------------------------------
 
   /** L1 write tools: user input on the tab during these = a real conflict. */
   static #WRITE_CONTENT_TOOLS = new Set([
@@ -908,7 +908,7 @@ export class BrowserToolGateway {
       }
       // No response arrived (timeout / torn-down channel). The action may have
       // navigated the page — the content script gets destroyed mid-call, so
-      // the reply never comes. A real navigation SUCCEEDED; reporting it as an
+      // the reply never comes. A real navigation succeeded; reporting it as an
       // error teaches the model to retry (double-submit). Confirmed only by an
       // actual URL change.
       const nav = await this.#detectNavigation(tabId, urlBefore, signal, deadlineAt);
@@ -1140,7 +1140,7 @@ export class BrowserToolGateway {
   }
 
   /**
-   * Navigation is confirmed ONLY by an actual URL change (a same-URL timeout
+   * Navigation is confirmed only by an actual URL change (a same-URL timeout
    * is a genuine failure, not a navigation). Waits for load, re-injects, and
    * returns a neutral success result with a fresh snapshot.
    */
@@ -1248,7 +1248,7 @@ export class BrowserToolGateway {
   ): Promise<void> {
     new ActionDeadline(Number.POSITIVE_INFINITY, signal, deadlineAt).throwIfDone();
     // Host permission is requested per-origin when the user first targets a
-    // site (docs/06); activeTab covers the current tab in most flows.
+    // site (docs/development/permissions.md); activeTab covers the current tab in most flows.
     await chrome.scripting.executeScript({
       target: { tabId },
       files: ['page-executor.js'],

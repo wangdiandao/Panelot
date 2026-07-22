@@ -1,5 +1,5 @@
 /**
- * EmptyState — the zero-message conversation view (docs/09 §7, OB-3).
+ * EmptyState — the zero-message conversation view (docs/development/ui.md §7, OB-3).
  *
  * OpenWebUI Placeholder semantics adapted for an agent product:
  *  - time-of-day greeting + one-line capability hint;

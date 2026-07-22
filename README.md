@@ -6,8 +6,8 @@
 An AI agent extension for Chrome and Edge. Connect a model provider you already use, give the
 agent page context, and review browser actions as they happen.
 
-[简体中文](./README.zh-CN.md) · [Documentation](./docs/README.md) ·
-[Development guide](./docs/development.md) · [Changelog](./CHANGELOG.md)
+[简体中文](./README.zh-CN.md) · [Documentation](./docs/guide/index.md) ·
+[Development guide](./docs/development/index.md) · [Changelog](./CHANGELOG.md)
 
 </div>
 
@@ -68,7 +68,7 @@ profile or run code as the user. See the [privacy policy](./docs/privacy-policy.
 
 ## Documentation
 
-Start with the [documentation index](./docs/README.md). It separates current runtime contracts,
+Start with the [documentation index](./docs/guide/index.md). It separates current runtime contracts,
 developer operations, historical design research, and unverified experience targets. Source code
 and tests remain authoritative when a document and the implementation disagree.
 
@@ -91,7 +91,7 @@ pnpm budget
 
 Engine changes require reloading Panelot from `chrome://extensions`; refreshing a web page does not
 restart the MV3 service worker. Production archives use `pnpm zip` and `pnpm zip:edge`. The
-[development guide](./docs/development.md) covers repository layout, verification, and releases.
+[development guide](./docs/development/index.md) covers repository layout, verification, and releases.
 
 ## License
 

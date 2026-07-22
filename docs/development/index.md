@@ -1,8 +1,8 @@
 # 开发指南
 
-> 文档入口：[文档目录](./README.md) · 架构：[01 架构与消息协议](./01-architecture.md)
+> 文档入口：[用户指南](../guide/index.md) · 架构：[架构与消息协议](./architecture.md)
 >
-> 本文只写当前仓库中可由代码、配置或测试核对的开发流程。目标和测量边界见 [12 体验目标](./12-experience-targets.md)。
+> 本文只写当前仓库中可由代码、配置或测试核对的开发流程。目标和测量边界见 [体验目标](./experience-targets.md)。
 
 ## 1. 环境要求
 
@@ -32,6 +32,24 @@ pnpm dev
 
 页面热更新不等于 Service Worker 更新。修改 `entrypoints/background.ts`、`src/engine/`、`src/agent/`、`src/gatekeeper/` 或后台工具注册后，需要在 `chrome://extensions` 重新加载扩展。
 
+文档站使用 VitePress，并与扩展共用根 `package.json` 和 lockfile：
+
+```bash
+pnpm docs:dev
+pnpm docs:build
+pnpm docs:preview
+```
+
+`docs:build` 会执行完整渲染和内部链接校验；CI、Release 与 GitHub Pages 工作流都会运行它。
+
+### 文档写作约定
+
+- 先写可核对的事实，再写限制和操作结果；不要用宣传语代替能力说明。
+- 一句话只承载一个主要信息。步骤、并列条件和风险项确实需要扫描时再使用列表。
+- 用户文档使用界面中的名称，不暴露 Gatekeeper、L1/L2 等内部术语。开发文档保留准确的协议名、类型名和源码路径。
+- 不用“此外”“值得注意的是”一类填充短语，也不强凑三项结构或正反对照。删掉这些词后句意不变，就直接删掉。
+- 交叉引用使用有含义的链接文字，例如“[权限](./permissions.md) §5”，不要只写“见 06”。
+
 ## 3. 目录导航
 
 | 路径                                    | 职责                                                                                |
@@ -57,6 +75,9 @@ pnpm dev
 | `tests/`                                | Vitest 单测和无浏览器集成测试                                                       |
 | `e2e/`                                  | Playwright 真实 Chromium 测试；当前覆盖快照引擎和表单值回显                         |
 | `preview/`                              | 表现层 UI 的独立预览入口，不参与扩展生产构建                                        |
+| `docs/guide/`                           | 面向扩展用户的安装、配置、权限、数据与故障排查指南                                  |
+| `docs/development/`                     | 当前工程契约、开发流程、调研和待验证目标                                            |
+| `docs/.vitepress/`                      | 文档站配置、导航、主题和构建输出边界                                                |
 | `scripts/`                              | 可保留的仓库脚本；临时验证脚本放 `scratch/`                                         |
 
 ## 4. 调用链
@@ -200,6 +221,7 @@ Shiki 使用 core 单例与按需语言，Mermaid、KaTeX、CodeMirror 和设置
 - 跨上下文协议只在 `src/messaging/protocol.ts` 定义；UI、后台和测试直接引用同一类型。
 - UI 设计 token 的事实来源是 `src/ui/styles/global.css`；快捷键事实来源是 `src/ui/shortcuts.ts`。
 - 内核 prompt 的事实来源是 `src/prompts/kernel.ts`，文档只保留结构摘要。
+- 用户指南、开发文档和隐私政策由 `docs/.vitepress/config.mts` 统一组织；新增或移动页面时必须同步导航并通过 `pnpm docs:build` 的死链接检查。
 - 不写版本迭代或修复轮次注释，不保留注释掉的旧代码；临时脚本放 `scratch/`，任务结束清理临时报告和调试输出。
 
 仓库采用 MIT License，并维护 `CONTRIBUTING.md`、`SECURITY.md`、`CHANGELOG.md`、第三方归属与双语隐私政策。
@@ -218,4 +240,4 @@ pnpm budget
 pnpm zip:smoke -- dist/panelot-<version>-chrome.zip dist/panelot-<version>-edge.zip
 ```
 
-CI 对 push/PR 执行完整门禁。`v*` tag 在版本匹配、main 来源和成功 CI 校验后，分别为 Chrome/Edge ZIP 生成 CycloneDX SBOM，记录每个 ZIP 与 SBOM 的 SHA-256，再创建 GitHub Release；Chrome Web Store 与 Edge Add-ons 仍人工上传。隐私政策由 GitHub Pages 工作流发布。
+CI 对 push/PR 执行完整门禁。`v*` tag 在版本匹配、main 来源和成功 CI 校验后，分别为 Chrome/Edge ZIP 生成 CycloneDX SBOM，记录每个 ZIP 与 SBOM 的 SHA-256，再创建 GitHub Release；Chrome Web Store 与 Edge Add-ons 仍人工上传。用户指南、开发文档和隐私政策由 GitHub Pages 工作流发布。

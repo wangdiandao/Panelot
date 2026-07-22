@@ -1,9 +1,9 @@
 /**
  * Client-side engine session: connection lifecycle (auto-reconnect on SW
- * death), snapshot-based state, incremental event application (docs/01 §3.4).
+ * death), snapshot-based state, incremental event application (docs/development/architecture.md §3.4).
  *
  * UI state = replayed snapshot + live event overlay. The UI holds no truth of
- * its own (docs/01 §1).
+ * its own (docs/development/architecture.md §1).
  */
 
 import { create } from 'zustand';
@@ -83,7 +83,7 @@ export interface ThreadUiState {
     details?: ProviderErrorDetails;
   } | null;
   lastStopReason: StopReason | null;
-  /** Last submitted input, kept for the error-banner retry (docs/09 §7). */
+  /** Last submitted input, kept for the error-banner retry (docs/development/ui.md §7). */
   lastInput: UserInput | null;
   /** Tabs the agent has operated on — runtime audit and recovery state. */
   agentTabs: { tabId: number; title: string; url: string }[];
@@ -523,7 +523,7 @@ export class EngineSession {
     }
   }
 
-  /** Branch switch (docs/09 §2): engine moves leafId, then we re-subscribe. */
+  /** Branch switch (docs/development/ui.md §2): engine moves leafId, then we re-subscribe. */
   selectBranch(expectedThreadId: string, nodeId: string): boolean {
     const { threadId } = this.store.getState();
     if (!threadId || threadId !== expectedThreadId) return false;
@@ -535,7 +535,7 @@ export class EngineSession {
   }
 
   /**
-   * Branch-and-run (docs/02 §3.2): regenerate = fork at the assistant node
+   * Branch-and-run (docs/development/data-model.md §3.2): regenerate = fork at the assistant node
    * with its parent user text; edit-and-resend = fork at the user node with
    * the edited text. The new turn becomes a sibling; BranchSwitcher shows n/m.
    */

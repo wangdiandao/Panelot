@@ -1,5 +1,5 @@
 /**
- * detectTrigger contract (docs/09 §5): @ and / fire at line start or after
+ * detectTrigger contract (docs/development/ui.md §5): @ and / fire at line start or after
  * whitespace only (ChatGPT rule); {{ fires anywhere; caret-anchored.
  */
 import { describe, expect, it } from 'vitest';

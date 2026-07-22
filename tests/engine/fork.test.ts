@@ -1,5 +1,5 @@
 /**
- * turn.fork (docs/02 §3.2): branch-and-run. Regenerate and edit-and-resend
+ * turn.fork (docs/development/data-model.md §3.2): branch-and-run. Regenerate and edit-and-resend
  * append the new user message as a SIBLING of the anchor's branch — history
  * survives as branches, leafId lands on the new branch, and the snapshot's
  * branch counters reflect the siblings.

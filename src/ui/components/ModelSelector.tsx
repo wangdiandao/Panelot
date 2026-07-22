@@ -1,5 +1,5 @@
 /**
- * ModelSelector (docs/09 §2): switch model mid-conversation. Selection is a
+ * ModelSelector (docs/development/ui.md §2): switch model mid-conversation. Selection is a
  * sticky per-session TurnOverrides.model sent with each turn.submit.
  *
  * Two trigger variants (OpenWebUI parity where space allows):

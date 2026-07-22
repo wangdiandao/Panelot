@@ -1,9 +1,9 @@
 /**
- * Shared HTTP layer for both adapters: error normalization (docs/03 §7),
- * sticky-key failover (docs/03 §8), and retry with backoff.
+ * Shared HTTP layer for both adapters: error normalization (docs/development/providers.md §7),
+ * sticky-key failover (docs/development/providers.md §8), and retry with backoff.
  *
- * Retry happens ONLY at this per-LLM-call layer; tool execution errors are
- * the model's domain (docs/03 §7).
+ * Retry happens only at this per-LLM-call layer; tool execution errors are
+ * the model's domain (docs/development/providers.md §7).
  */
 
 import {
@@ -126,7 +126,7 @@ function createProviderFrameDetails(
     typeof upstreamCode === 'string' || typeof upstreamCode === 'number'
       ? sanitizeUpstreamText(String(upstreamCode)) || undefined
       : undefined;
-  const raw = sanitizeUpstreamText([code, message].filter(Boolean).join(' 路 '));
+  const raw = sanitizeUpstreamText([code, message].filter(Boolean).join(' · '));
   return {
     status,
     upstreamCode: code,
@@ -398,7 +398,7 @@ export function parseRetryAfter(value?: string | null, now = Date.now()): number
 }
 
 export interface RetryOptions {
-  /** Base delay 1s, ×2, cap 32s, max 4 attempts (docs/03 §7). */
+  /** Base delay 1s, ×2, cap 32s, max 4 attempts (docs/development/providers.md §7). */
   maxAttempts?: number;
   baseDelayMs?: number;
   capDelayMs?: number;

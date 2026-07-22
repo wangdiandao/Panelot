@@ -1,5 +1,5 @@
 /**
- * AgentTool — the single interface every tool implements (docs/04 §4).
+ * AgentTool — the single interface every tool implements (docs/development/agent-engine.md §4).
  *
  * Design borrowed from Pi Agent's AgentTool with the content/details dual
  * channel: `content` goes to the LLM (counted in context), `details` goes to
@@ -30,13 +30,13 @@ export interface AgentTool<P = unknown, D = unknown> {
   name: string;
   /** UI display label, e.g. "点击元素". */
   label: string;
-  /** For the LLM — one sentence of function + when to use + failure recovery (docs/10 §3). */
+  /** For the LLM — one sentence of function + when to use + failure recovery (docs/development/prompts.md §3). */
   description: string;
   parameters: RuntimeSchema<P>;
   /** Provider-facing schema is preserved when a remote tool supplies one. */
   inputSchema?: Record<string, unknown>;
   level: ToolLevel;
-  /** Basis for the Gatekeeper's default verdict (docs/06). */
+  /** Basis for the Gatekeeper's default verdict (docs/development/permissions.md). */
   effects: 'read' | 'write';
   recovery?: ToolRecoveryPolicy;
   resultTrust?: 'trusted' | 'untrusted';
@@ -312,7 +312,7 @@ export class ToolRegistry {
 
 /**
  * Validate raw LLM-provided params. On failure returns an error string that
- * goes back to the model as a failed tool_result (self-correction, docs/04 §4)
+ * goes back to the model as a failed tool_result (self-correction, docs/development/agent-engine.md §4)
  * — never thrown at the user.
  */
 export function validateParams<P>(

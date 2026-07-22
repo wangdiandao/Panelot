@@ -10,6 +10,5 @@
 - [ ] Default export contains no secrets; encrypted backup round-trip succeeds.
 - [ ] Plugin traversal, symlink, executable, file-count, and size rejection tests pass.
 - [ ] English and Chinese store descriptions, screenshots, permission rationale, and data disclosure are current.
-- [ ] Privacy Pages deployment is live at the submitted URL.
+- [ ] Documentation Pages deployment serves the privacy policy at the submitted URL.
 - [ ] Real OpenAI-compatible, Anthropic-compatible, and MCP compatibility matrix is signed off.
-

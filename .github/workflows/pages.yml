@@ -1,10 +1,12 @@
-name: Privacy Pages
+name: Documentation Pages
 
 on:
   push:
     branches: [main]
     paths:
-      - docs/privacy/**
+      - docs/**
+      - package.json
+      - pnpm-lock.yaml
       - .github/workflows/pages.yml
   workflow_dispatch:
 
@@ -19,6 +21,7 @@ concurrency:
 
 jobs:
   deploy:
+    timeout-minutes: 15
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -26,10 +29,20 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          fetch-depth: 0
           persist-credentials: false
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 9.12.3
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.12.0
+          cache: pnpm
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm docs:build
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
-          path: docs/privacy
+          path: docs/.vitepress/dist
       - id: deployment
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

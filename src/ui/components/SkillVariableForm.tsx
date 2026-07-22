@@ -1,5 +1,5 @@
 /**
- * Structured variable form for slash commands (docs/08 §4, OpenWebUI pattern):
+ * Structured variable form for slash commands (docs/development/skills-plugins.md §4, OpenWebUI pattern):
  * VariableDef { key, label, type, options?, default?, required? } → dialog →
  * submit composes "/cmd" user text with {{key}} placeholders resolved.
  */

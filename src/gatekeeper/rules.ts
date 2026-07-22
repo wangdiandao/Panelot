@@ -1,5 +1,5 @@
 /**
- * Permission rules & sensitive-origin blacklist (docs/06 §3).
+ * Permission rules & sensitive-origin blacklist (docs/development/permissions.md §3).
  *
  * Priority: deny > ask > allow; specific > wildcard; user_setting >
  * approval_persist > plugin_default. The three-verdict rule model and the
@@ -17,7 +17,7 @@ export interface PermissionRule {
   verdict: 'allow' | 'deny' | 'ask';
   source: 'user_setting' | 'approval_persist' | 'plugin_default';
   createdAt: number;
-  /** For approval_persist: which thread produced it (traceability, docs/06 §7). */
+  /** For approval_persist: which thread produced it (traceability, docs/development/permissions.md §7). */
   sourceThreadId?: string;
   /** Stable approval identity used to replay decision side effects without duplication. */
   sourceApprovalId?: string;
@@ -189,7 +189,7 @@ export function matchRules(
 }
 
 // ---------------------------------------------------------------------------
-// Sensitive-origin blacklist (docs/06 §3) — hard DENY, not overridable
+// Sensitive-origin blacklist (docs/development/permissions.md §3) — hard DENY, not overridable
 // ---------------------------------------------------------------------------
 
 /** Pre-seeded patterns: banks/payment/brokers/government/browser-internal. */
@@ -250,7 +250,7 @@ export function isSensitiveOrigin(patterns: readonly string[], origin: string): 
 }
 
 // ---------------------------------------------------------------------------
-// Sensitive-payload detection (docs/06 §2 step 4) — err toward asking
+// Sensitive-payload detection (docs/development/permissions.md §2 step 4) — err toward asking
 // ---------------------------------------------------------------------------
 
 function luhnValid(digits: string): boolean {

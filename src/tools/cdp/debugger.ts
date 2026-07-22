@@ -1,8 +1,8 @@
 /**
- * L2 CDP layer (docs/05 §2): on-demand chrome.debugger attach/detach at tab
+ * L2 CDP layer (docs/development/browser-tools.md §2): on-demand chrome.debugger attach/detach at tab
  * granularity, single-target serialization, 30s idle auto-detach. Contrast
  * with nanobrowser's always-attached model — Panelot minimizes the "being
- * debugged" banner time (docs/01 §5).
+ * debugged" banner time (docs/development/architecture.md §5).
  */
 
 import { keyEventSequence, parseKeyCombo } from './keycodes';
@@ -234,7 +234,7 @@ export class CdpManager {
   }
 
   /**
-   * Trusted key press (docs/05 §3): synthetic KeyboardEvents can't trigger
+   * Trusted key press (docs/development/browser-tools.md §3): synthetic KeyboardEvents can't trigger
    * native behavior (Enter-submit, Tab-focus, Escape-dismiss); CDP input can.
    * Accepts 'Enter', 'Control+a', 'Shift+Tab' style combos.
    */
@@ -333,7 +333,7 @@ export class CdpManager {
   }
 
   /**
-   * AXTree fallback (docs/05 §1.4): when the L1 DOM walk yields an empty tree,
+   * AXTree fallback (docs/development/browser-tools.md §1.4): when the L1 DOM walk yields an empty tree,
    * pull the full accessibility tree via CDP as a coarse perception layer.
    */
   async getAxTreeText(

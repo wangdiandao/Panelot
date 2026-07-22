@@ -1,5 +1,5 @@
 /**
- * MCP server config & JSON import (docs/07 §2).
+ * MCP server config & JSON import (docs/development/mcp.md §2).
  */
 
 import { normalizeEndpointUrl } from '../security/endpointUrl';
@@ -72,7 +72,7 @@ export type McpConnectionState =
 
 /**
  * Parse a pasted JSON snippet (Claude Code `mcpServers` or Cursor config).
- * Recognizes url / type: http|sse / headers.Authorization (docs/07 §2).
+ * Recognizes url / type: http|sse / headers.Authorization (docs/development/mcp.md §2).
  */
 export function parseMcpJson(
   json: string,

@@ -419,7 +419,7 @@ describe('navigation-aware dispatch (click → page change ≠ failure)', () => 
     await expect(gw.callContentTool('t1', 'click', { ref: 's0_1' })).rejects.toThrow(/快照已过期/);
   });
 
-  it('a reported tool error is NEVER reframed as navigation, even if the URL changed', async () => {
+  it('does not reframe a reported tool error as navigation even if the URL changed', async () => {
     // The dangerous case: the tool genuinely failed (response arrived ok:false)
     // AND some unrelated redirect changed the URL. Must stay an error, not a
     // false "navigation succeeded".

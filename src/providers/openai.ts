@@ -1,5 +1,5 @@
 /**
- * OpenAIAdapter — POST {baseUrl}/chat/completions (docs/03 §3.1).
+ * OpenAIAdapter — POST {baseUrl}/chat/completions (docs/development/providers.md §3.1).
  *
  * Handles the messy reality of "OpenAI-compatible" endpoints via QuirkFlags:
  * stream_options support, <think>-tag reasoning (DeepSeek et al.), max_tokens
@@ -115,7 +115,7 @@ export function toOpenAiMessages(
 }
 
 // ---------------------------------------------------------------------------
-// Tool-call delta aggregation (docs/03 §3.1)
+// Tool-call delta aggregation (docs/development/providers.md §3.1)
 // ---------------------------------------------------------------------------
 
 interface PartialToolCall {
@@ -155,7 +155,7 @@ export function aggregateToolCalls(partials: Map<number, PartialToolCall>): Fina
       try {
         call.params = p.args === '' ? {} : JSON.parse(p.args);
       } catch (e) {
-        // Parse failure → surfaced to the model as a tool error (docs/04 §2).
+        // Parse failure → surfaced to the model as a tool error (docs/development/agent-engine.md §2).
         call.parseError = `tool call arguments were not valid JSON: ${(e as Error).message}`;
         call.params = p.args;
       }
@@ -248,7 +248,7 @@ export class OpenAiAdapter implements ProviderAdapter {
       }));
       if (quirks?.noParallelToolCalls) body.parallel_tool_calls = false;
     }
-    // GenParams: unset fields never reach the payload (docs/03 §1.4).
+    // GenParams: unset fields never reach the payload (docs/development/providers.md §1.4).
     const p = req.params;
     if (p.temperature !== undefined) body.temperature = p.temperature;
     if (p.topP !== undefined) body.top_p = p.topP;
@@ -556,7 +556,7 @@ export class OpenAiAdapter implements ProviderAdapter {
 }
 
 // ---------------------------------------------------------------------------
-// Shared verify flow (docs/03 §6) — used by both adapters
+// Shared verify flow (docs/development/providers.md §6) — used by both adapters
 // ---------------------------------------------------------------------------
 
 export async function verifyConnection(

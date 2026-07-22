@@ -1,5 +1,5 @@
 /**
- * Message stream (docs/09 §2): renders persisted snapshot items + live
+ * Message stream (docs/development/ui.md §2): renders persisted snapshot items + live
  * streaming overlay. Virtualized with react-virtuoso (RL-2: 2000 nodes at
  * 60fps); followOutput replaces the hand-rolled auto-scroll while keeping
  * the same "stop following when the user scrolls up" contract.
@@ -331,7 +331,7 @@ export function MessageStream({
   const [atBottom, setAtBottom] = useState(true);
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
 
-  // Ctrl/Cmd+↑↓ operates on the last branchable message (docs/09 §6).
+  // Ctrl/Cmd+↑↓ operates on the last branchable message (docs/development/ui.md §6).
   const lastBranchNodeId = useMemo(() => {
     for (let i = rows.length - 1; i >= 0; i--) {
       const r = rows[i];
@@ -408,7 +408,7 @@ export function MessageStream({
         data={rows}
         computeItemKey={(_, row) => row.key}
         // Follow the tail while streaming unless the user scrolled up
-        // (docs/09 §4.1 rule 3) — virtuoso's followOutput models exactly this.
+        // (docs/development/ui.md §4.1 rule 3) — virtuoso's followOutput models exactly this.
         followOutput={(isAtBottom) => (isAtBottom ? 'auto' : false)}
         atBottomStateChange={setAtBottom}
         atBottomThreshold={40}

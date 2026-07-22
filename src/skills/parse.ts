@@ -1,5 +1,5 @@
 /**
- * SKILL.md parsing (docs/08 §1) — Claude Code compatible frontmatter with a
+ * SKILL.md parsing (docs/development/skills-plugins.md §1) — Claude Code compatible frontmatter with a
  * `panelot` extension namespace. Unknown frontmatter keys are preserved
  * (passthrough) so Claude Code skills import without loss.
  */
@@ -49,15 +49,15 @@ export interface ParsedSkill {
  */
 export function parseSkill(raw: string): ParsedSkill {
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(raw.trim());
-  if (!match) throw new Error('SKILL.md 缺少 YAML frontmatter（--- 包裹的头部）');
+  if (!match) throw new Error('SKILL.md 缺少由 --- 包裹的 YAML frontmatter');
 
   const frontmatter = match[1];
-  if (frontmatter === undefined) throw new Error('SKILL.md frontmatter 缂哄け');
+  if (frontmatter === undefined) throw new Error('SKILL.md 缺少 frontmatter 内容');
   const fm = parseSimpleYaml(frontmatter);
   const result = schema.safeParse(SkillFrontmatter, fm);
   if (!result.success) {
     const issues = result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
-    throw new Error(`SKILL.md frontmatter 无效: ${issues}`);
+    throw new Error(`SKILL.md frontmatter 无效：${issues}`);
   }
   return { frontmatter: result.data, body: (match[2] ?? '').trim() };
 }
@@ -91,5 +91,5 @@ export function parseSimpleYaml(text: string): Record<string, unknown> {
 }
 
 // ---------------------------------------------------------------------------
-// Site matching (docs/08 §2) via URLPattern where available.
+// Site matching (docs/development/skills-plugins.md §2) via URLPattern where available.
 // ---------------------------------------------------------------------------

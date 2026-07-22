@@ -1,5 +1,5 @@
 /**
- * The agent loop (docs/04 §2) — Pi Agent's minimal kernel wrapped in Codex's
+ * The agent loop (docs/development/agent-engine.md §2) — Pi Agent's minimal kernel wrapped in Codex's
  * safety shell. The loop itself stays small: iterate until the model stops
  * calling tools. Optional token budgets and repeated failures are explicit
  * terminal conditions; tool-call count is not. Complexity stays outside it.
@@ -132,7 +132,7 @@ export interface TurnEnv {
   ) => Promise<void>;
   materializeSteers?: (nodeIds: readonly string[]) => Promise<void>;
   initialPendingSteers?: readonly { nodeId: string; admissionSequence: number }[];
-  /** Optional hard token budget for the turn (docs/04 §1). */
+  /** Optional hard token budget for the turn (docs/development/agent-engine.md §1). */
   tokenBudget?: number;
 }
 
@@ -142,7 +142,7 @@ export interface TurnHandle {
   steerable: boolean;
   /** Aborts approvals and nested interactions together with the turn. */
   readonly signal: AbortSignal;
-  /** Durably accept a steer message for the next provider request (docs/04 §3). */
+  /** Durably accept a steer message for the next provider request (docs/development/agent-engine.md §3). */
   steer(input: UserInput): Promise<void>;
   interrupt(): void;
   done: Promise<StopReason>;
@@ -561,7 +561,7 @@ export function runTurn(
           break;
         }
 
-        // Token budget is the ONLY hard gate (docs/04 §1).
+        // Token budget is the only hard gate (docs/development/agent-engine.md §1).
         if (env.tokenBudget !== undefined && turnTokens > env.tokenBudget) {
           stopReason = 'budget_pause';
           break;
@@ -579,7 +579,7 @@ export function runTurn(
           if (consecutiveFailures >= CONSECUTIVE_FAILURE_STOP) {
             await scheduleForcedFinalization(
               { stopReason: 'error', prompt: FAILURE_FINALIZATION_NOTICE },
-              `连续 ${CONSECUTIVE_FAILURE_STOP} 次工具调用失败，已停止继续操作并生成结果说明。`,
+              `工具连续失败 ${CONSECUTIVE_FAILURE_STOP} 次。Panelot 已停止调用工具，将改为说明当前结果。`,
             );
             continue loop;
           }
@@ -697,7 +697,7 @@ export function runTurn(
             continue;
           }
 
-          // Gatekeeper — the single interception point (docs/06 §2).
+          // Gatekeeper — the single interception point (docs/development/permissions.md §2).
           const verdictResult = await env.gatekeeper.check(
             {
               toolName: call.name,
@@ -726,7 +726,7 @@ export function runTurn(
               const note =
                 decision.kind === 'decline' && decision.note ? ` User said: ${decision.note}` : '';
               await fail(
-                `The user declined this action.${note} Do not retry it verbatim — adapt or ask.`,
+                `The user declined this action.${note} Do not retry it unchanged. Adapt or ask.`,
                 false,
                 'streaming_model',
               );
@@ -1036,14 +1036,14 @@ export function runTurn(
                 continue;
               }
             }
-            // Tool errors go back to the model for self-correction (docs/04 §2).
+            // Tool errors go back to the model for self-correction (docs/development/agent-engine.md §2).
             await fail(`Tool failed: ${e instanceof Error ? e.message : String(e)}`);
           }
         }
         if (consecutiveFailures >= CONSECUTIVE_FAILURE_STOP) {
           await scheduleForcedFinalization(
             { stopReason: 'error', prompt: FAILURE_FINALIZATION_NOTICE },
-            `连续 ${CONSECUTIVE_FAILURE_STOP} 次工具调用失败，已停止继续操作并生成结果说明。`,
+            `工具连续失败 ${CONSECUTIVE_FAILURE_STOP} 次。Panelot 已停止调用工具，将改为说明当前结果。`,
           );
         }
       }
@@ -1060,7 +1060,7 @@ export function runTurn(
       });
     }
     // turn.complete fires only after all writes above have resolved — every
-    // appendNode is awaited, so reaching this line IS the ack (docs/04 §2).
+    // appendNode is awaited, so reaching this line IS the ack (docs/development/agent-engine.md §2).
     if (steerMaterializationFailed) stopReason = 'interrupted';
     let terminalState: RunState =
       stopReason === 'end' || stopReason === 'max_tokens' || stopReason === 'content_filter'

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { assembleSystemPrompt, fenceUntrusted } from '../../src/prompts/assemble';
 import { KERNEL_PROMPT } from '../../src/prompts/kernel';
 
-describe('assembleSystemPrompt (docs/10 §1 layering)', () => {
+describe('assembleSystemPrompt (docs/development/prompts.md §1 layering)', () => {
   it('kernel-only when nothing else is configured', () => {
     expect(assembleSystemPrompt()).toBe(KERNEL_PROMPT);
   });
@@ -50,7 +50,7 @@ describe('assembleSystemPrompt (docs/10 §1 layering)', () => {
     expect(KERNEL_PROMPT).toContain('MCP resources are referenced context, not tools');
     expect(KERNEL_PROMPT).toContain('[Panelot context: ...]');
     expect(KERNEL_PROMPT).toMatch(/does\s+not replace the submission default/);
-    expect(KERNEL_PROMPT).toContain('tabs_list always covers every browser window');
+    expect(KERNEL_PROMPT).toContain('tabs_list covers every browser window');
   });
 
   it('defines a strict native tool-call formatting contract', () => {
@@ -69,7 +69,7 @@ describe('assembleSystemPrompt (docs/10 §1 layering)', () => {
   });
 });
 
-describe('fenceUntrusted (docs/10 §4)', () => {
+describe('fenceUntrusted (docs/development/prompts.md §4)', () => {
   it('wraps content with origin/tool attribution and a random nonce', () => {
     const fenced = fenceUntrusted('page text', 'https://example.com', 'read_page');
     expect(fenced).toMatch(

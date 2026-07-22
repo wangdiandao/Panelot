@@ -1,6 +1,6 @@
 /**
  * Settings search: bilingual keyword arrays route human vocabulary to the
- * right tab (OpenWebUI settings-search pattern, docs/09 §3.4).
+ * right tab (OpenWebUI settings-search pattern, docs/development/ui.md §3.4).
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { setLang } from '../../src/ui/i18n';

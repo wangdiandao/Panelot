@@ -1,6 +1,6 @@
 /**
  * Settings-backed ProviderResolver: thread → preset → connection → adapter
- * (docs/03 §1.3-1.5). Also resolves the task model for titles.
+ * (docs/development/providers.md §1.3-1.5). Also resolves the task model for titles.
  */
 
 import { PanelotDB } from '../db/schema';
@@ -30,7 +30,7 @@ export class SettingsProviderResolver implements ProviderResolver {
   /**
    * Default model for a connection without a manual model list: fetch it
    * from the endpoint (the manual list is a fallback for endpoints WITHOUT
-   * /models, not a requirement — docs/03 §1.2).
+   * /models, not a requirement — docs/development/providers.md §1.2).
    */
   private async endpointDefaultModel(conn: Connection): Promise<string | undefined> {
     const cached = this.modelListCache.get(conn.id);
@@ -192,12 +192,12 @@ export class SettingsProviderResolver implements ProviderResolver {
         // first model — manual list first, then live GET /models.
         const connections = await SettingsStore.connections.get();
         const conn = connections.find((c) => c.enabled);
-        if (!conn) throw new Error('no provider configured — add one in settings');
+        if (!conn) throw new Error('No provider is configured. Add one in Settings.');
         connectionId = conn.id;
         const firstModel = conn.modelIds?.[0] ?? (await this.endpointDefaultModel(conn));
         if (!firstModel)
           throw new Error(
-            'no model available on the configured connection — the endpoint has no /models list; add model ids manually in settings',
+            'No model is available on the configured connection. The endpoint has no /models list; add model IDs manually in Settings.',
           );
         modelId = firstModel;
       } else {
@@ -234,7 +234,7 @@ export class SettingsProviderResolver implements ProviderResolver {
     };
   }
 
-  /** Task model (docs/03 §1.5) — falls back to the thread's main model. */
+  /** Task model (docs/development/providers.md §1.5) — falls back to the thread's main model. */
   async resolveTaskModel(fallbackThreadId: string): Promise<TaskModelRef> {
     const settings = await SettingsStore.global.get();
     if (settings.taskModel) {

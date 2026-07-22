@@ -6,7 +6,7 @@ import { transformSync } from 'esbuild';
 
 /**
  * Real-browser validation of the snapshot engine + content-script actions
- * (docs/05). We inject the compiled engine functions into a real page and
+ * (docs/development/browser-tools.md). We inject the compiled engine functions into a real page and
  * assert the perception/interaction contract against a live DOM — the layer
  * happy-dom can only approximate.
  */

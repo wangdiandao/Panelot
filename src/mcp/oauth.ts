@@ -1,5 +1,5 @@
 /**
- * OAuth 2.1 for remote MCP (docs/07 §3): discovery, dynamic client
+ * OAuth 2.1 for remote MCP (docs/development/mcp.md §3): discovery, dynamic client
  * registration, PKCE, launchWebAuthFlow, token exchange & refresh.
  *
  * redirect_uri is fixed to https://<extension-id>.chromiumapp.org/mcp-oauth.
@@ -82,7 +82,7 @@ function parseAuthServerMetadata(value: unknown, expectedIssuer: string): AuthSe
     throw new Error('OAuth 元数据缺少 issuer、authorization_endpoint 或 token_endpoint');
   }
   if (raw.issuer !== expectedIssuer) {
-    throw new Error(`OAuth metadata issuer 不匹配: 期望 ${expectedIssuer}，实际 ${raw.issuer}`);
+    throw new Error(`OAuth metadata issuer 不匹配：期望 ${expectedIssuer}，实际 ${raw.issuer}`);
   }
   if (raw.registration_endpoint !== undefined && typeof raw.registration_endpoint !== 'string') {
     throw new Error('OAuth registration_endpoint 格式无效');
@@ -126,7 +126,7 @@ function parseAuthServerMetadata(value: unknown, expectedIssuer: string): AuthSe
 function validateIssuer(raw: string, label: string): string {
   const value = raw.trim();
   const issuer = validateEndpointUrl(value, { label });
-  if (issuer.search) throw new Error(`${label}不能包含 query`);
+  if (issuer.search) throw new Error(`${label} 不能包含 query`);
   return value;
 }
 
@@ -189,12 +189,12 @@ export async function discoverAuthServer(
       options.permissionGuard,
     );
   } catch (error) {
-    throw new Error(`OAuth 保护资源元数据缺失或无效: ${(error as Error).message}`);
+    throw new Error(`OAuth 保护资源元数据缺失或无效：${(error as Error).message}`);
   }
 
   const discoveredResource = canonicalMcpResource(discovered.resource);
   if (discoveredResource !== resource) {
-    throw new Error(`OAuth PRM resource 不匹配: 期望 ${resource}，实际 ${discoveredResource}`);
+    throw new Error(`OAuth PRM resource 不匹配：期望 ${resource}，实际 ${discoveredResource}`);
   }
   const authorizationServers = discovered.authorization_servers;
   if (!authorizationServers?.length) {
@@ -209,7 +209,7 @@ export async function discoverAuthServer(
     scopes,
   });
   if (!rawMetadata) {
-    throw new Error(`OAuth 授权服务器元数据缺失: ${issuer}`);
+    throw new Error(`OAuth 授权服务器元数据缺失：${issuer}`);
   }
   const metadata = parseAuthServerMetadata(rawMetadata, issuer);
   return {
@@ -333,10 +333,10 @@ async function tryMetadata(
   if (!response.ok) {
     await response.body?.cancel();
     if (response.status >= 400 && response.status < 500) return undefined;
-    throw new Error(`OAuth metadata 请求失败: ${response.status} @ ${url}`);
+    throw new Error(`OAuth metadata 请求失败：${response.status} @ ${url}`);
   }
   const value = (await response.json()) as unknown;
-  if (!value || typeof value !== 'object') throw new Error(`OAuth metadata 格式无效: ${url}`);
+  if (!value || typeof value !== 'object') throw new Error(`OAuth metadata 格式无效：${url}`);
   return value as Record<string, unknown>;
 }
 
@@ -400,7 +400,7 @@ export async function registerClient(
       ...(scopes?.length ? { scope: scopes.join(' ') } : {}),
     }),
   });
-  if (!res.ok) throw new Error(`动态客户端注册失败: ${res.status}`);
+  if (!res.ok) throw new Error(`动态客户端注册失败：${res.status}`);
   const json: unknown = await res.json();
   if (!json || typeof json !== 'object' || Array.isArray(json)) {
     throw new Error('OAuth dynamic client registration response must be an object');
@@ -453,7 +453,7 @@ export async function authorize(
   const params = returned.searchParams;
   if (params.get('state') !== state) throw new Error('OAuth state 不匹配（可能的 CSRF）');
   const code = params.get('code');
-  if (!code) throw new Error(`授权失败: ${params.get('error') ?? '无 code'}`);
+  if (!code) throw new Error(`授权失败：${params.get('error') ?? '未返回 code'}`);
 
   return exchangeCode(meta, clientId, code, verifier, resource, permissionGuard);
 }
@@ -485,7 +485,7 @@ async function exchangeCode(
       resource,
     }),
   });
-  if (!res.ok) throw new Error(`token 交换失败: ${res.status}`);
+  if (!res.ok) throw new Error(`token 交换失败：${res.status}`);
   return toTokens(await res.json());
 }
 
@@ -515,7 +515,7 @@ export async function refreshTokens(
       resource,
     }),
   });
-  if (!res.ok) throw new Error(`token 刷新失败: ${res.status}`);
+  if (!res.ok) throw new Error(`token 刷新失败：${res.status}`);
   const tokens = toTokens(await res.json());
   return tokens.refresh ? tokens : { ...tokens, refresh };
 }

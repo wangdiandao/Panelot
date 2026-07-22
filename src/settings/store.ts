@@ -1,6 +1,6 @@
 /**
  * Settings storage — chrome.storage.local wrappers for provider config,
- * presets, permission rules, UI preferences (docs/02 note: small config lives
+ * presets, permission rules, UI preferences (docs/development/data-model.md note: small config lives
  * in chrome.storage for cross-context change events, not Dexie).
  *
  * In test environments (no chrome global) an in-memory fallback is used.
@@ -13,18 +13,18 @@ import { normalizeModelPreset, upsertModelPreset, type LegacyModelPreset } from 
 import { normalizePermissionPolicy } from './permissionPolicy';
 
 export interface GlobalSettings {
-  /** Task model for titles/suggestions (docs/03 §1.5). */
+  /** Task model for titles/suggestions (docs/development/providers.md §1.5). */
   taskModel?: { connectionId: string; modelId: string };
   /** Global default chat model — used when a thread has no preset/override. */
   defaultModel?: { connectionId: string; modelId: string };
   userGlobalPrompt?: string;
   language?: 'zh-CN' | 'en';
   theme?: 'system' | 'light' | 'dark';
-  /** Default browser permission policy (docs/06 §1). */
+  /** Default browser permission policy (docs/development/permissions.md §1). */
   defaultPermissionPolicy?: PermissionPolicy;
   /** Optional hard token budget per turn. */
   turnTokenBudget?: number;
-  /** Full-page thread sidebar width in px (user-resizable, docs/09 §3.1). */
+  /** Full-page thread sidebar width in px (user-resizable, docs/development/ui.md §3.1). */
   sidebarWidth?: number;
   /** Full-page thread sidebar collapsed to the icon rail. */
   sidebarCollapsed?: boolean;
@@ -210,12 +210,12 @@ export const SettingsStore = {
     get: () => storageGet<string | null>('last_side_panel_thread', null),
     set: (threadId: string) => storageSet('last_side_panel_thread', threadId),
   },
-  /** Per-thread param overrides layer onto preset params (docs/03 §1.4). */
+  /** Per-thread param overrides layer onto preset params (docs/development/providers.md §1.4). */
   threadParams: {
     get: (threadId: string) => storageGet<GenParams>(`thread_params:${threadId}`, {}),
     set: (threadId: string, v: GenParams) => storageSet(`thread_params:${threadId}`, v),
   },
-  /** Site-level instructions (docs/08 §6). */
+  /** Site-level instructions (docs/development/skills-plugins.md §6). */
   sitePrompts: {
     get: () => storageGet<{ pattern: string; prompt: string }[]>('site_prompts', []),
     set: (v: { pattern: string; prompt: string }[]) => storageSet('site_prompts', v),

@@ -1,7 +1,7 @@
 /**
  * SettingsPanel — the settings surface shared by the in-app modal and the
  * standalone options page. Left vertical tab nav + section content
- * (docs/09 §3.4), built on shadcn/ui Tabs (Radix: real tablist semantics,
+ * (docs/development/ui.md §3.4), built on shadcn/ui Tabs (Radix: real tablist semantics,
  * arrow-key navigation). Interaction pattern follows OpenWebUI's settings
  * dialog: vertical tabs + grouped forms + immediate persistence.
  */

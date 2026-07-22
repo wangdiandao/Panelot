@@ -54,7 +54,7 @@ describe('appendNode', () => {
   });
 });
 
-describe('branching (docs/02 §3.2)', () => {
+describe('branching (docs/development/data-model.md §3.2)', () => {
   it('edit-and-resend creates a sibling and moves the cursor', async () => {
     const { thread, b, c } = await seedThread();
     // Edit message C → sibling of C under parent B.
@@ -93,7 +93,7 @@ describe('branching (docs/02 §3.2)', () => {
   });
 });
 
-describe('tombstone deletion (docs/02 §3.3)', () => {
+describe('tombstone deletion (docs/development/data-model.md §3.3)', () => {
   it('skips tombstones in path traversal (grandchild relinks to grandparent)', async () => {
     const { thread, a, b, c } = await seedThread();
     await tree.tombstone(thread.id, b.id);
@@ -117,7 +117,7 @@ describe('tombstone deletion (docs/02 §3.3)', () => {
   });
 });
 
-describe('integrity validation (docs/02 §3.4)', () => {
+describe('integrity validation (docs/development/data-model.md §3.4)', () => {
   it('validates a healthy leaf without repair', async () => {
     const { thread, c } = await seedThread();
     const result = await tree.validateLeaf(thread.id);

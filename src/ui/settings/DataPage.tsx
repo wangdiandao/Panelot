@@ -1,6 +1,7 @@
 /**
- * Data settings (docs/development.md §5; docs/09-ui.md §3.4): full JSON export/import (keys stripped by
- * default), storage usage display, quota warning. Built on shadcn/ui primitives.
+ * Data settings (docs/development/index.md §5; docs/development/ui.md §3.4): full JSON
+ * export/import (keys stripped by default), storage usage display, quota warning. Built on
+ * shadcn/ui primitives.
  */
 
 import { useEffect, useState } from 'react';

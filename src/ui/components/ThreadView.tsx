@@ -1,7 +1,7 @@
 /**
  * ThreadView — the shared conversation core used by both the side panel and
- * the full-page chat (docs/09 §2). Banners use shadcn/ui Alert; after an
- * approval decision keyboard focus returns to the composer (docs/09 §8).
+ * the full-page chat (docs/development/ui.md §2). Banners use shadcn/ui Alert; after an
+ * approval decision keyboard focus returns to the composer (docs/development/ui.md §8).
  */
 
 import { useSyncExternalStore, useState, useCallback, useRef, useEffect } from 'react';
@@ -50,7 +50,7 @@ const attachmentRepository = new AttachmentRepository(new PanelotDB());
 
 interface Props {
   session: EngineSession;
-  /** Provider configured? Gates the input (docs/09 §7). */
+  /** Provider configured? Gates the input (docs/development/ui.md §7). */
   providerConfigured: boolean;
   onOpenSettings?: () => void;
   /** Re-check provider config (after onboarding saves a connection). */
@@ -66,7 +66,7 @@ interface Props {
    * keeps it here (no room in a 360px header).
    */
   modelSelectorInComposer?: boolean;
-  /** Hosting surface — the empty state adapts (docs/09 §7). */
+  /** Hosting surface — the empty state adapts (docs/development/ui.md §7). */
   surface?: 'page' | 'panel';
   /** Active tab URL for page-type-aware empty-state suggestions (panel). */
   pageUrl?: string;
@@ -340,7 +340,7 @@ export function ThreadView({
       {state.reloadRequired ? (
         <div className="min-h-0 flex-1" />
       ) : ((reconnecting && showDisconnected) || state.loading) && state.items.length === 0 ? (
-        /* Thread switch / reconnect: 3-message skeleton (docs/09 §7). */
+        /* Thread switch / reconnect: 3-message skeleton (docs/development/ui.md §7). */
         <div className="flex min-w-0 flex-1 flex-col gap-6 px-3 py-6 sm:px-4">
           <div className="flex justify-end">
             <Skeleton className="h-10 w-3/5 rounded-2xl" />

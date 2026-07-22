@@ -1,8 +1,8 @@
 /**
- * L2 tool definitions (docs/05 §3): screenshot, click_xy/drag (vision
+ * L2 tool definitions (docs/development/browser-tools.md §3): screenshot, click_xy/drag (vision
  * coordinate mode), upload_file, press_keys_raw. All are level:'L2' so the
  * Gatekeeper attaches the escalation_l2 flag and the user confirms the
- * "being debugged" banner (docs/06 §5).
+ * "being debugged" banner (docs/development/permissions.md §5).
  */
 
 import { schema } from '../agent/schema';
@@ -61,7 +61,7 @@ export function createL2Tools(
         integer: true,
         min: 0,
         description:
-          'Target tab id from tabs_list; omitted = the web tab captured when the user submitted',
+          'Target tab id from tabs_list. When omitted, use the web tab captured at submission.',
       }),
     ),
   };
@@ -93,7 +93,7 @@ export function createL2Tools(
       name: 'screenshot',
       label: '截图',
       description:
-        'Capture a screenshot (viewport, full page, or an element region). Use when the accessibility snapshot is insufficient — e.g. canvas apps or visual verification. Requires a vision-capable model to interpret.',
+        'Capture the viewport, full page, or an element region. Use it for canvas apps, visual verification, or other cases where the accessibility snapshot is insufficient. A vision-capable model is required to interpret the image.',
       parameters: schema.object({
         ...tabIdParameter,
         target: schema.optional(
@@ -205,7 +205,7 @@ export function createL2Tools(
       name: 'click_xy',
       label: '坐标点击',
       description:
-        'Click at pixel coordinates (vision coordinate mode). Use only when no ref is available (canvas). Coordinates are CSS pixels relative to the viewport.',
+        'Click at pixel coordinates in vision coordinate mode. Use it only when no ref is available, such as on a canvas. Coordinates are CSS pixels relative to the viewport.',
       parameters: schema.object({
         ...tabIdParameter,
         x: schema.number(),
@@ -514,7 +514,7 @@ export function createL2Tools(
       name: 'upload_file',
       label: '上传文件',
       description:
-        'Set a file on a file input (element+ref from the latest snapshot) from a user-provided attachment id. Only attachments the user explicitly provided can be uploaded (≤8MB).',
+        'Set a file input identified by element and ref from the latest snapshot. The file comes from a user-provided attachment id; only explicitly provided attachments up to 8 MB can be uploaded.',
       parameters: schema.object({
         ...tabIdParameter,
         element: schema.string(),

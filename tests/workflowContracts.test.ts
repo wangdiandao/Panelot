@@ -117,7 +117,7 @@ describe('repository delivery contracts', () => {
     expect(read('README.md')).toContain(`Node.js \`${supportedNodeRange}\``);
     expect(read('README.zh-CN.md')).toContain(`Node.js **\`${supportedNodeRange}\`**`);
     expect(read('CONTRIBUTING.md')).toContain(`Node.js \`${supportedNodeRange}\``);
-    const developmentGuide = read('docs/development.md');
+    const developmentGuide = read('docs/development/index.md');
     expect(developmentGuide.replaceAll('\\|', '|')).toContain(`\`${supportedNodeRange}\``);
     expect(developmentGuide).toContain('GitHub Actions 固定使用 `22.12.0`');
 
@@ -125,9 +125,12 @@ describe('repository delivery contracts', () => {
     expect(scripts.scripts.compile).toContain('tsconfig.entrypoints.json');
     expect(scripts.scripts.compile).toContain('tsconfig.e2e.json');
     expect(scripts.scripts.compile).toContain('tsconfig.preview.json');
+    expect(scripts.scripts['docs:build']).toBe('vitepress build docs');
     expect(scripts.scripts['format:check']).toContain('preview');
     expect(read('.github/workflows/ci.yml')).toContain('- run: pnpm compile');
+    expect(read('.github/workflows/ci.yml')).toContain('- run: pnpm docs:build');
     expect(read('.github/workflows/release.yml')).toContain('- run: pnpm compile');
+    expect(read('.github/workflows/release.yml')).toContain('- run: pnpm docs:build');
   });
 
   it('keeps coding rules enforceable and exceptions narrowly scoped', () => {

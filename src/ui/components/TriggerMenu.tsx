@@ -1,5 +1,5 @@
 /**
- * TriggerMenu (docs/09 §5): unified @ / slash / {{variable}} suggestion menu
+ * TriggerMenu (docs/development/ui.md §5): unified @ / slash / {{variable}} suggestion menu
  * anchored above the composer. Interaction follows ChatGPT's slash menu: the
  * trigger fires at line start or after whitespace; ↑↓ selects, Enter/Tab
  * confirms, Esc closes without disturbing the input. Focus STAYS in the

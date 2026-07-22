@@ -1,11 +1,11 @@
 /**
- * EngineHost — connection management, handshake, bounded op queues (docs/01 §3).
+ * EngineHost — connection management, handshake, bounded op queues (docs/development/architecture.md §3).
  *
  * This is the transport-facing shell of the engine. It owns:
  *  - client connections and per-thread subscription fan-out
  *  - the initialize handshake (protocol version + snapshot)
  *  - per-thread bounded Op queues with explicit rejection backpressure
- *  - 16ms delta coalescing before postMessage (docs/01 §3.5)
+ *  - 16ms delta coalescing before postMessage (docs/development/architecture.md §3.5)
  *
  * The actual agent behavior lives behind `EngineCore`, so the shell is
  * testable in isolation with a stub core.
@@ -30,7 +30,7 @@ export interface EngineCore {
   activeThreadIds?(): readonly string[];
 }
 
-const QUEUE_CAPACITY = 32; // docs/01 §3.5
+const QUEUE_CAPACITY = 32; // docs/development/architecture.md §3.5
 const DELTA_COALESCE_MS = 16;
 const STARTUP_RECOVERY_TIMEOUT_MS = 30_000;
 
@@ -498,7 +498,7 @@ export class EngineHost {
     this.broadcast(ev);
   }
 
-  // ---- delta coalescing (docs/01 §3.5) --------------------------------------
+  // ---- delta coalescing (docs/development/architecture.md §3.5) --------------------------------------
 
   #postToClient(client: Client, ev: AgentEvent): void {
     if (

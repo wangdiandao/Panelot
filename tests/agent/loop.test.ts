@@ -128,7 +128,7 @@ const eventTypes = () => events.map((e) => e.type);
 
 // ---------------------------------------------------------------------------
 
-describe('agent loop (docs/04 §2)', () => {
+describe('agent loop (docs/development/agent-engine.md §2)', () => {
   it('suspends for an interactive tool without executing its placeholder', async () => {
     const execute = vi.fn();
     tools.register({
@@ -493,7 +493,9 @@ describe('agent loop (docs/04 §2)', () => {
         hit: req.messages.some(
           (m) =>
             m.role === 'user' &&
-            m.content.some((c) => c.type === 'text' && c.text.includes('ALL failed')),
+            m.content.some(
+              (c) => c.type === 'text' && c.text.includes('last 3 tool calls all failed'),
+            ),
         ),
       }))
       .filter((r) => r.hit);
@@ -507,7 +509,7 @@ describe('agent loop (docs/04 §2)', () => {
     const ctx = await buildSessionContext(tree, thread.id, meta!.leafId!);
     const notice = ctx.path.find((n) => n.type === 'system_notice');
     expect(notice).toBeDefined();
-    expect((notice!.payload as { text: string }).text).toMatch(/连续 5 次/);
+    expect((notice!.payload as { text: string }).text).toMatch(/连续失败 5 次/);
     expect(ctx.messages.at(-1)?.content[0]).toMatchObject({
       type: 'text',
       text: 'Could not complete because the element stayed unavailable.',
@@ -1233,7 +1235,7 @@ describe('gatekeeper integration', () => {
   });
 });
 
-describe('steering & interrupt (docs/04 §3)', () => {
+describe('steering & interrupt (docs/development/agent-engine.md §3)', () => {
   it('steer input is appended after the current LLM call and enters the next request', async () => {
     tools.register(makeEchoTool());
     const thread = await tree.createThread({});
@@ -1375,7 +1377,7 @@ describe('steering & interrupt (docs/04 §3)', () => {
   });
 });
 
-describe('unbounded tool execution & token budget (docs/04 §1)', () => {
+describe('unbounded tool execution & token budget (docs/development/agent-engine.md §1)', () => {
   it('does not cap tool calls by step count', async () => {
     tools.register(makeEchoTool());
     const thread = await tree.createThread({});
@@ -1422,7 +1424,7 @@ describe('unbounded tool execution & token budget (docs/04 §1)', () => {
   });
 });
 
-describe('recovery invariants (docs/04 §5.3)', () => {
+describe('recovery invariants (docs/development/agent-engine.md §5.3)', () => {
   it('resumes from the persisted leaf without appending the user input twice', async () => {
     const thread = await tree.createThread({});
     provider.queue({ streamText: ['partial'] }, { streamText: ['continued'] });

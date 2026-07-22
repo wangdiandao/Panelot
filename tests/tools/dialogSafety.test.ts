@@ -153,8 +153,8 @@ describe('page dialog safety boundary', () => {
 
     expect(document.body.dataset.confirmed).toBe('false');
     expect(result.resultText).toContain('confirm("Delete this item?")');
-    expect(result.resultText).toContain('已自动取消(false)');
-    expect(result.resultText).not.toContain('已自动确认(true)');
+    expect(result.resultText).toContain('已自动取消（false）');
+    expect(result.resultText).not.toContain('已自动确认（true）');
     expect(result.evidence).toMatchObject({
       effectState: 'observed',
       outcome: 'uncertain',

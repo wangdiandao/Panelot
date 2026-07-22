@@ -1,5 +1,5 @@
 /**
- * buildSessionContext (docs/02 §5) — THE traversal algorithm.
+ * buildSessionContext (docs/development/data-model.md §5) — THE traversal algorithm.
  *
  * The same function serves three consumers: LLM request assembly (engine),
  * ThreadSnapshot (UI reconnect), and conversation export. No consumer may
@@ -22,7 +22,7 @@ import type {
   UserMessagePayload,
 } from './types';
 
-/** Provider-neutral message format consumed by the adapters (docs/03 §2). */
+/** Provider-neutral message format consumed by the adapters (docs/development/providers.md §2). */
 export type UnifiedMessage =
   | { role: 'user'; content: ContentBlock[] }
   | { role: 'assistant'; content: ContentBlock[]; toolCalls?: UnifiedToolCall[] }

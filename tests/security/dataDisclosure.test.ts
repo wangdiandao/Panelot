@@ -24,15 +24,18 @@ describe('store data disclosure contract', () => {
     );
   });
 
-  it('does not present MCP annotations or attachment delivery as approvals', () => {
+  it('treats MCP annotations as metadata and distinguishes file metadata from uploads', () => {
     expect(disclosure).toContain(
       'Server-supplied annotations such as `readOnlyHint` are treated only as untrusted descriptive metadata and do not by themselves bypass approval.',
     );
     expect(disclosure).toContain(
-      'An attachment selected for a conversation is sent to the selected model as part of that request without a separate browser-tool approval.',
+      'the selected model receives its name, MIME type, size, and attachment identifier so it can reference the file through browser tools; the file bytes are not sent as a normal model attachment.',
     );
-    expect(disclosure).not.toContain(
-      'uploaded only when the user explicitly selected the file and approved',
+    expect(disclosure).toContain(
+      'Uploading those bytes to a website is a browser write and follows the active approval policy and rules.',
+    );
+    expect(disclosure).toContain(
+      '所选模型只会收到文件名、MIME 类型、大小和附件标识，以便通过浏览器工具引用该文件；文件字节不会作为普通模型附件发送。',
     );
   });
 

@@ -57,7 +57,7 @@ export async function validatePortableExport(input: unknown): Promise<{
     ],
     'IMPORT_ROOT',
   );
-  if (root.version !== 2) throw new Error(`不支持的导出版本: ${String(root.version)}`);
+  if (root.version !== 2) throw new Error(`不支持的导出版本：${String(root.version)}`);
   const validated = validateDomain(root, bytes, 'sanitized');
   await validateSkillRawConsistency(validated.skills);
   validateEncryptedBackup(root.encryptedSecrets);

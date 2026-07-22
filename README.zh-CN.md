@@ -6,8 +6,8 @@
 一款运行在 Chrome 和 Edge 中的 AI Agent 扩展。连接你正在使用的模型服务，把网页或文件交给
 Agent，并在浏览器操作发生时查看和审批。
 
-[English](./README.md) · [文档目录](./docs/README.md) ·
-[开发指南](./docs/development.md) · [更新记录](./CHANGELOG.md)
+[English](./README.md) · [文档目录](./docs/guide/index.md) ·
+[开发指南](./docs/development/index.md) · [更新记录](./CHANGELOG.md)
 
 </div>
 
@@ -60,7 +60,7 @@ Panelot 不提供账户、应用后端、云同步、广告或遥测。你选入
 
 ## 文档
 
-[文档目录](./docs/README.md) 区分了当前运行时契约、开发流程、历史设计调研和尚未验证的体验目标。
+[文档目录](./docs/guide/index.md) 区分了用户指南、当前运行时契约、开发流程、历史设计调研和尚未验证的体验目标。
 如果文档与实现不一致，以源码和测试为准。
 
 ## 开发
@@ -82,7 +82,7 @@ pnpm budget
 
 修改引擎代码后，需要到 `chrome://extensions` 重载 Panelot；刷新网页不会重启 MV3 Service Worker。
 发布压缩包使用 `pnpm zip` 和 `pnpm zip:edge`。目录结构、验证与发布流程见
-[开发指南](./docs/development.md)。
+[开发指南](./docs/development/index.md)。
 
 ## 许可证
 

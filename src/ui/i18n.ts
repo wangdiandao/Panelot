@@ -1,7 +1,7 @@
 /**
- * Minimal i18n (docs/09 §8): zh-CN / en string tables, browser-language
- * default. Kept dependency-free — the UI is small enough that a keyed lookup
- * with interpolation covers it.
+ * Minimal i18n (docs/development/ui.md §8): zh-CN / en string tables with a
+ * browser-language default. A dependency-free keyed lookup with interpolation
+ * is enough for this UI.
  */
 
 import { useSyncExternalStore } from 'react';
@@ -72,11 +72,11 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   },
   'input.steered': {
     'zh-CN': '已插话，将在下次模型调用前生效',
-    en: 'Steered — applies before the next model call',
+    en: 'Message added before the next model call',
   },
   'input.queuedInstead': {
     'zh-CN': '当前轮不可插话，已加入队列',
-    en: 'Turn not steerable — queued instead',
+    en: 'This turn cannot be steered. The message was queued instead.',
   },
   'input.variableExpansionFailed': {
     'zh-CN': '动态变量读取失败，本条消息未发送',
@@ -146,16 +146,16 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   'interaction.jsonInput': { 'zh-CN': '结构化响应 JSON', en: 'Structured response JSON' },
   'approval.decline': { 'zh-CN': '拒绝', en: 'Decline' },
   'approval.crossScope': {
-    'zh-CN': '越出任务作用域 — 该操作的目标不在本任务已触达的站点内',
-    en: 'Outside task scope — target site was not touched by this task yet',
+    'zh-CN': '越出任务范围：本任务尚未访问目标站点',
+    en: 'Outside task scope: this task has not accessed the target site',
   },
   'approval.sensitive': {
-    'zh-CN': '检测到敏感内容外发 — 参数中含疑似凭据/卡号/邮箱',
-    en: 'Sensitive payload — params contain what looks like credentials/card numbers/emails',
+    'zh-CN': '检测到敏感信息外发：参数可能包含凭据、卡号或邮箱地址',
+    en: 'Sensitive data detected: parameters may contain credentials, card numbers, or email addresses',
   },
   'approval.escalation': {
-    'zh-CN': '将升级为调试模式 — 页面顶部会出现「正在调试此浏览器」横幅',
-    en: 'Escalates to debugger mode — Chrome will show its debugging banner',
+    'zh-CN': '需要使用调试模式：Chrome 会显示“正在调试此浏览器”横幅',
+    en: 'Debugger mode required: Chrome will show its debugging banner',
   },
   'approval.request': { 'zh-CN': '审批请求：{label}', en: 'Approval request: {label}' },
 
@@ -196,7 +196,7 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
     en: 'The provider did not return the complete content. Revise the request and try again; the original request is not replayed automatically.',
   },
 
-  // Provider error attribution (docs/03 §7)
+  // Provider error attribution (docs/development/providers.md §7)
   'error.auth': {
     'zh-CN': '身份验证失败',
     en: 'Authentication failed',
@@ -414,7 +414,7 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   'settings.providers.defaultModel': { 'zh-CN': '默认模型', en: 'Default model' },
   'settings.providers.defaultModelHint': {
     'zh-CN': '必须选择一个可用模型；对话选择“默认模型”时使用它。',
-    en: 'Choose an available model; chats set to “Default model” use it.',
+    en: 'Choose an available model. Chats set to “Default model” will use it.',
   },
   'settings.providers.defaultSet': { 'zh-CN': '默认模型已设置', en: 'Default model set' },
   'settings.providers.saved': { 'zh-CN': '连接已保存', en: 'Connection saved' },
@@ -572,7 +572,7 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   },
   'settings.permissions.emptyRules': {
     'zh-CN': '审批时选择“本站始终”会创建规则，也可在下方手动添加。',
-    en: 'Choosing “Always on this site” during approval creates a rule, or add one manually below.',
+    en: 'Choose “Always on this site” during approval to create a rule, or add one below.',
   },
   'settings.permissions.tool': { 'zh-CN': '工具', en: 'Tool' },
   'settings.permissions.site': { 'zh-CN': '站点', en: 'Site' },
@@ -752,8 +752,8 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
     en: 'Confirm Plugin upgrade',
   },
   'settings.plugins.preview.description': {
-    'zh-CN': '请核对来源、内容和提示词资产。只有再次确认才会写入本机数据库。',
-    en: 'Review the source, contents, and prompt assets. Nothing is written until you confirm again.',
+    'zh-CN': '请核对来源、内容和提示词资产。再次确认后，Panelot 才会写入本机数据库。',
+    en: 'Review the source, contents, and prompt assets. Panelot writes to the local database only after you confirm again.',
   },
   'settings.plugins.preview.source': { 'zh-CN': '来源', en: 'Source' },
   'settings.plugins.preview.resolvedSource': {
@@ -882,8 +882,8 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
     en: 'An uncommitted import was detected and the previous settings were restored.',
   },
   'settings.data.commitRecovered': {
-    'zh-CN': '检测到已提交的导入，恢复收尾已完成。',
-    en: 'A committed import was detected and recovery cleanup completed.',
+    'zh-CN': '检测到已提交的导入，清理工作已经完成。',
+    en: 'A committed import was detected. Recovery cleanup is complete.',
   },
 
   'settings.mcp.importJson': { 'zh-CN': '粘贴 JSON 导入', en: 'Import pasted JSON' },
@@ -1008,7 +1008,7 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   'settings.sites.createTitle': { 'zh-CN': '创建站点指令', en: 'Create site instruction' },
   'settings.sites.patternHint': {
     'zh-CN': '模式按主机名边界匹配，不会匹配任意后缀。',
-    en: 'Patterns match hostname boundaries, never arbitrary suffixes.',
+    en: 'Patterns match complete hostname labels, not arbitrary suffixes.',
   },
   'settings.sites.hostname': { 'zh-CN': '主机名模式', en: 'Hostname pattern' },
   'settings.sites.hostnameHint': {
@@ -1027,7 +1027,7 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   'settings.presets.taskModel': { 'zh-CN': '后台任务模型', en: 'Task model' },
   'settings.presets.taskModelHint': {
     'zh-CN': '用于标题等低成本后台任务；留空则跟随默认模型。',
-    en: 'Used for titles and other low-cost background tasks. Empty follows the default model.',
+    en: 'Used for titles and other low-cost background tasks. Leave it empty to use the default model.',
   },
   'settings.presets.taskModelSet': { 'zh-CN': '后台任务模型：{model}', en: 'Task model: {model}' },
   'settings.presets.taskModelDefault': {
@@ -1099,13 +1099,13 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   },
   'perm.balanced': { 'zh-CN': '操作询问', en: 'Ask before acting' },
   'perm.balancedHint': {
-    'zh-CN': '自由读取；点击/输入等写操作先询问（默认）',
-    en: 'Reads freely; clicks/typing ask first (default)',
+    'zh-CN': '读取无需确认；点击、输入等写操作先询问（默认）',
+    en: 'Reads do not require approval. Writes such as clicks and typing ask first (default)',
   },
   'perm.auto': { 'zh-CN': '自动操作', en: 'Act automatically' },
   'perm.autoHint': {
-    'zh-CN': '自动执行操作；敏感站点与敏感信息仍会拦截',
-    en: 'Acts autonomously; sensitive sites & payloads still guarded',
+    'zh-CN': '写操作无需逐次确认；敏感站点和敏感信息规则仍然生效',
+    en: 'Writes run without per-action approval. Sensitive-site and sensitive-data rules still apply',
   },
 
   // Model selector

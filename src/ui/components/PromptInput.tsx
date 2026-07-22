@@ -1,9 +1,9 @@
 /**
- * Prompt input (docs/09 §2/§4.4): running-state Enter=steer / Esc=stop,
+ * Prompt input (docs/development/ui.md §2/§4.4): running-state Enter=steer / Esc=stop,
  * Shift+Alt+Enter=explicit enqueue, context chips, send/stop toggle,
  * @ / slash / {{variable}} TriggerMenu, model selector.
  *
- * Keyboard arbitration (docs/09 §5): when the TriggerMenu is open it consumes
+ * Keyboard arbitration (docs/development/ui.md §5): when the TriggerMenu is open it consumes
  * ArrowUp/ArrowDown/Enter/Tab/Esc FIRST; only unconsumed keys reach the
  * send/steer/enqueue/stop state machine below, which is otherwise unchanged
  * (the crown-jewel contract). An IME double-guard (isComposing + keyCode 229,

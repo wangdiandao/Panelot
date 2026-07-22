@@ -20,7 +20,7 @@ beforeEach(() => {
 const snap = (html: string, id = 1) =>
   buildSnapshot(setBody(html), { snapshotId: id, documentToken: 'doc' });
 
-describe('interactive detection (docs/05 §1.2 — recall first)', () => {
+describe('interactive detection (docs/development/browser-tools.md §1.2 — recall first)', () => {
   it('grants refs to semantic controls', () => {
     const result = snap(`
       <button>提交</button>
@@ -67,7 +67,7 @@ describe('interactive detection (docs/05 §1.2 — recall first)', () => {
   });
 });
 
-describe('roles, names, ARIA states (docs/05 §1.1)', () => {
+describe('roles, names, ARIA states (docs/development/browser-tools.md §1.1)', () => {
   it('computes roles from tags and input types', () => {
     setBody(`<input type="checkbox" id="c"><h2 id="h">标题</h2><a id="a" href="#">x</a>`);
     expect(computeRole(document.getElementById('c')!)).toBe('checkbox');
@@ -110,7 +110,7 @@ describe('roles, names, ARIA states (docs/05 §1.1)', () => {
   });
 });
 
-describe('ref versioning (docs/05 §1.1 — expiry at the protocol level)', () => {
+describe('ref versioning (docs/development/browser-tools.md §1.1 — expiry at the protocol level)', () => {
   it('embeds the snapshot id in every ref', () => {
     const result = snap(`<button>a</button>`, 7);
     expect([...result.refMap.keys()][0]).toMatch(/^sdoc_7_\d+$/);
@@ -130,7 +130,7 @@ describe('ref versioning (docs/05 §1.1 — expiry at the protocol level)', () =
   });
 });
 
-describe('volume control (docs/05 §1.3 — never silently truncate)', () => {
+describe('volume control (docs/development/browser-tools.md §1.3 — never silently truncate)', () => {
   it('drops non-interactive text under budget pressure and reports the count', () => {
     const longText = Array.from(
       { length: 200 },

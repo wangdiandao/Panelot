@@ -1,7 +1,7 @@
 /**
- * Persistent data model (docs/02).
+ * Persistent data model (docs/development/data-model.md).
  *
- * The conversation is a tree and ONLY a tree: nodes carry `parentId`,
+ * The conversation is a tree and only a tree: nodes carry `parentId`,
  * `childrenIds` is never stored (derived by index lookup), and the thread's
  * `leafId` is the cursor into the active branch. Nodes are append-only —
  * deletion is a tombstone flag, physical removal only happens with whole-
@@ -25,7 +25,7 @@ import type {
 } from '../messaging/protocol';
 
 // ---------------------------------------------------------------------------
-// threads — light index table (docs/02 §2.1)
+// threads — light index table (docs/development/data-model.md §2.1)
 // ---------------------------------------------------------------------------
 
 export interface ThreadMeta {
@@ -45,14 +45,14 @@ export interface ThreadMeta {
   /** Fork origin (reserved for subagents). */
   parentThreadId?: string;
   stats: { turns: number; totalTokens: number; costUsd: number };
-  /** Origins this task has touched — cross-scope detection input (docs/06 §2). */
+  /** Origins this task has touched — cross-scope detection input (docs/development/permissions.md §2). */
   scopeOrigins: string[];
   /** Set before physical deletion so a half-deleted thread is never replayed. */
   deleting?: boolean;
 }
 
 // ---------------------------------------------------------------------------
-// nodes — the conversation tree (docs/02 §2.2)
+// nodes — the conversation tree (docs/development/data-model.md §2.2)
 // ---------------------------------------------------------------------------
 
 export type NodeType =
@@ -113,13 +113,13 @@ export interface InteractionResponsePayload {
   respondedAt: number;
 }
 
-/** One per turn start — restores the environment on replay (docs/02 §2.2). */
+/** One per turn start — restores the environment on replay (docs/development/data-model.md §2.2). */
 export interface TurnContextPayload {
   turnId: string;
   model: { connectionId: string; modelId: string };
   permissionPolicy: PermissionPolicy;
   activeSkills: string[];
-  /** Kernel prompt version for attribution (docs/10 §8). */
+  /** Kernel prompt version for attribution (docs/development/prompts.md §8). */
   promptVersion?: string;
   browserContext?: SubmissionBrowserContext;
 }
@@ -150,14 +150,14 @@ export interface ThreadNode {
   ts: number;
   type: NodeType;
   payload: NodePayload;
-  /** Tombstone (docs/02 §3.3): skipped in traversal, children relink to grandparent. */
+  /** Tombstone (docs/development/data-model.md §3.3): skipped in traversal, children relink to grandparent. */
   deleted?: boolean;
   /** Set when the attachment backing this node was quota-evicted. */
   evicted?: boolean;
 }
 
 // ---------------------------------------------------------------------------
-// attachments (docs/02 §2.3)
+// attachments (docs/development/data-model.md §2.3)
 // ---------------------------------------------------------------------------
 
 export interface Attachment {

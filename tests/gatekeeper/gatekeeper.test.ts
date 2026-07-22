@@ -162,7 +162,7 @@ describe('sensitive origins & payloads', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Blacklist-only model (owner decision 2026-07-04): reads are NEVER gated;
+// Blacklist-only model (owner decision 2026-07-04): reads are never gated;
 // writes go through blacklist → sensitive payload → rules → policy.
 // No origin whitelist, no cross-scope forced ask.
 // ---------------------------------------------------------------------------
@@ -509,7 +509,7 @@ describe('auto tier: the safety floor survives auto-approval', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Injection attack regression set (docs/10 §8, docs/06 §6) — the hard gates
+// Injection attack regression set (docs/development/prompts.md §8, docs/development/permissions.md §6) — the hard gates
 // must hold even when the model is fully compromised.
 // ---------------------------------------------------------------------------
 
@@ -551,7 +551,7 @@ describe('injection attack samples — hard gates hold when the model is deceive
   });
 
   it('样本4: 诱导 run_javascript → 默认 deny 规则拦截', () => {
-    // run_javascript ships with a default deny rule (docs/05 §3).
+    // run_javascript ships with a default deny rule (docs/development/browser-tools.md §3).
     const v = checkGate(
       {
         toolName: 'run_javascript',

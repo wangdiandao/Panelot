@@ -1,6 +1,6 @@
-# 07 — 远端 MCP
+# 远端 MCP
 
-> 文档入口：[文档目录](./README.md) · 关联：[04 Agent 引擎](./04-agent-engine.md) · [06 权限](./06-permissions.md) · [09 界面](./09-ui.md)
+> 文档入口：[用户指南](../guide/index.md) · 关联：[Agent 引擎](./agent-engine.md) · [权限](./permissions.md) · [界面](./ui.md)
 
 ---
 
@@ -96,7 +96,7 @@ sequenceDiagram
 | Resources                        | 已接入 `@` 搜索与读取                                | `resources/list` 形成候选；选择后 `readResource`，内容随机定界且标记 MCP provenance                                                                                                                                                                                                          |
 | notifications/tools/list_changed | 已监听                                               | offscreen Client 用刷新代次提交 catalog 并通知 background 重建工具注册表；并发刷新只有最新一代可提交，某一类别临时失败时保留该类别最后一次有效目录，不把网络抖动解释为服务器删除全部能力                                                                                                     |
 
-工具调用默认超时 60s；Run interrupt/abort 会沿 AgentTool → background worker client → offscreen SDK 的同一 `operationId` 取消请求。offscreen worker 会用短期、有界且按连接定界的取消记录覆盖 cancel 先于 call admission 到达的并发窗口；排队等待 Elicitation 上下文的调用若先被取消，也不会在前序调用结束后重新派发。结果按 05 §7 同样的体积规范截断。
+工具调用默认超时 60s；Run interrupt/abort 会沿 AgentTool → background worker client → offscreen SDK 的同一 `operationId` 取消请求。offscreen worker 会用短期、有界且按连接定界的取消记录覆盖 cancel 先于 call admission 到达的并发窗口；排队等待 Elicitation 上下文的调用若先被取消，也不会在前序调用结束后重新派发。结果按[浏览器工具](./browser-tools.md) §7 的体积规范截断。
 
 ## 5. 健康与调试
 

@@ -135,7 +135,7 @@ describe('createProviderFrameError', () => {
   });
 });
 
-describe('normalizeHttpError (docs/03 §7)', () => {
+describe('normalizeHttpError (docs/development/providers.md §7)', () => {
   it.each([
     [401, 'auth'],
     [403, 'auth'],
@@ -446,7 +446,7 @@ describe('normalizeHttpError (docs/03 §7)', () => {
   });
 });
 
-describe('key failover (docs/03 §8, sticky + failover)', () => {
+describe('key failover (docs/development/providers.md §8, sticky + failover)', () => {
   it('stays sticky on success', async () => {
     const keys = createKeyRing(['k1', 'k2']);
     const attempt = vi.fn().mockResolvedValue('ok');
@@ -467,7 +467,7 @@ describe('key failover (docs/03 §8, sticky + failover)', () => {
     expect(attempt).toHaveBeenCalledTimes(2);
   });
 
-  it('throws auth error when ALL keys fail (user must fix)', async () => {
+  it('throws an auth error when all keys fail and the user must fix the connection', async () => {
     const keys = createKeyRing(['a', 'b']);
     const attempt = vi.fn().mockRejectedValue(new ProviderError('auth', '401'));
     await expect(withRetry(keys, attempt, { sleep: noSleep })).rejects.toMatchObject({

@@ -141,7 +141,7 @@ describe('extract (borrowed from browser-use extract + browsercluster GNE)', () 
   });
 });
 
-describe('stale-ref rejection (docs/05 §1.1 — protocol-level expiry)', () => {
+describe('stale-ref rejection (docs/development/browser-tools.md §1.1 — protocol-level expiry)', () => {
   it('rejects refs from an older snapshot with a re-read instruction', async () => {
     document.body.innerHTML = '<button>点我</button>';
     const yaml1 = await readPage();
@@ -450,7 +450,7 @@ describe('click / type / select', () => {
   }, 15_000);
 });
 
-describe('wait_for (docs/05 §3 three modes)', () => {
+describe('wait_for (docs/development/browser-tools.md §3 three modes)', () => {
   it('resolves when text appears', async () => {
     vi.useFakeTimers();
     try {
@@ -489,14 +489,14 @@ describe('wait_for (docs/05 §3 three modes)', () => {
     try {
       const pending = executeContentTool('wait_for', { timeMs: 150 });
       await vi.advanceTimersByTimeAsync(150);
-      await expect(pending).resolves.toMatchObject({ resultText: '已等待 150ms' });
+      await expect(pending).resolves.toMatchObject({ resultText: '已等待 150 ms' });
     } finally {
       vi.useRealTimers();
     }
   });
 });
 
-describe('batch_actions (docs/05 §3 — change interruption)', () => {
+describe('batch_actions (docs/development/browser-tools.md §3 — change interruption)', () => {
   it('executes actions in order against a form', async () => {
     document.body.innerHTML = `
       <form>
@@ -589,7 +589,7 @@ describe('batch_actions (docs/05 §3 — change interruption)', () => {
   }, 20_000);
 });
 
-describe('empty-tree explicit failure (docs/05 §1.4 — no silent empty)', () => {
+describe('empty-tree explicit failure (docs/development/browser-tools.md §1.4 — no silent empty)', () => {
   it('throws EMPTY_TREE for a blank page so the fallback chain can trigger', async () => {
     document.body.innerHTML = '';
     await expect(executeContentTool('read_page', {})).rejects.toThrow(/EMPTY_TREE/);

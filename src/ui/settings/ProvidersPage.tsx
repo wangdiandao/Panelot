@@ -1,5 +1,5 @@
 /**
- * Providers settings (docs/09 §3.4): connection cards → edit form with
+ * Providers settings (docs/development/ui.md §3.4): connection cards → edit form with
  * template picker, multi-key textarea, custom headers, quirks, inline Verify
  * with structured results. Built on shadcn/ui primitives.
  */
@@ -90,11 +90,11 @@ const VERIFY_KIND: Record<NonNullable<VerifyResult['failure']>, string> = {
 
 function failureText(failure: NonNullable<VerifyResult['failure']>): string {
   if (failure === 'invalid_key')
-    return `${t('error.reason.invalid_key')} — ${t('error.guidance.invalid_key')}`;
-  if (failure === 'unreachable') return `${t('error.network')} — ${t('error.guidance.network')}`;
+    return `${t('error.reason.invalid_key')}: ${t('error.guidance.invalid_key')}`;
+  if (failure === 'unreachable') return `${t('error.network')}: ${t('error.guidance.network')}`;
   if (failure === 'needs_host_permission')
-    return `${t('settings.providers.needsHostPermission')} — ${t('settings.providers.needsHostPermissionHint')}`;
-  return `${t('error.protocol')} — ${t('error.guidance.protocol')}`;
+    return `${t('settings.providers.needsHostPermission')}: ${t('settings.providers.needsHostPermissionHint')}`;
+  return `${t('error.protocol')}: ${t('error.guidance.protocol')}`;
 }
 
 export function providerErrorFromVerifyResult(

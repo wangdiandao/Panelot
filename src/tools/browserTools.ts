@@ -1,6 +1,6 @@
 /**
- * L0 + L1 browser tool definitions (docs/05 §3). zod schemas are the single
- * source of truth; descriptions follow docs/10 §3 — one sentence of function,
+ * L0 + L1 browser tool definitions (docs/development/browser-tools.md §3). zod schemas are the single
+ * source of truth; descriptions follow docs/development/prompts.md §3 — one sentence of function,
  * when to use, what to do on failure.
  */
 
@@ -329,7 +329,7 @@ export function createL0Tools(
       name: 'tab_close',
       label: '关闭标签页',
       description:
-        "Close a tab by id (from tabs_list). Closing a background tab does not change what the user sees — the result states whether the user's visible tab changed.",
+        "Close a tab by id from tabs_list. Closing a background tab does not change what the user sees. The result states whether the user's visible tab changed.",
       parameters: schema.object({ tabId: schema.number({ integer: true, min: 0 }) }),
       level: 'L0',
       effects: 'write',
@@ -374,7 +374,7 @@ export function createL0Tools(
       name: 'navigate',
       label: '导航',
       description:
-        'Navigate a tab to a URL. Pass tabId from tabs_list to operate it in the background. Returns a fresh snapshot; old refs are void.',
+        'Navigate a tab to a URL. Pass tabId from tabs_list to operate it in the background. The result includes a fresh snapshot, and old refs become invalid.',
       parameters: schema.object({
         tabId: schema.optional(schema.number({ integer: true, min: 0 })),
         url: schema.string({ url: true }),
@@ -477,7 +477,7 @@ export function createL0Tools(
 // ---------------------------------------------------------------------------
 
 export interface L1Deps {
-  /** AXTree fallback for the perception degradation chain (docs/05 §1.4). */
+  /** AXTree fallback for the perception degradation chain (docs/development/browser-tools.md §1.4). */
   axTreeFallback?: (tabId: number, signal?: AbortSignal, deadlineAt?: number) => Promise<string>;
   getTabId?: (threadId: string) => Promise<number>;
   /** Trusted CDP key dispatch — synthetic events can't trigger native behavior. */
@@ -495,7 +495,7 @@ export interface L1Deps {
  * Window the FULL extracted markdown for the model's context: return one
  * EXTRACT_WINDOW_CHARS slice starting at fromChar. When the full body exceeds
  * one window and a db is available, the COMPLETE text is offloaded to a
- * 'page_text' attachment (UI-side, never re-fed to the LLM — docs/02 §2.3), so
+ * 'page_text' attachment (UI-side, never re-fed to the LLM — docs/development/data-model.md §2.3), so
  * the attachment genuinely holds the whole page while the model pages through
  * it with fromChar.
  */
@@ -551,7 +551,7 @@ export function createL1Tools(
         integer: true,
         min: 0,
         description:
-          'Target tab id from tabs_list; omitted = the web tab captured when the user submitted',
+          'Target tab id from tabs_list. When omitted, use the web tab captured at submission.',
       }),
     ),
   };
@@ -605,7 +605,7 @@ export function createL1Tools(
         : await gateway.callContentTool(threadId, tool, contentParams, tabId, signal, deadlineAt);
       return tabbedContentResult(result, tabId);
     } catch (e) {
-      // Perception degradation: L1 empty tree → CDP AXTree (docs/05 §1.4).
+      // Perception degradation: L1 empty tree → CDP AXTree (docs/development/browser-tools.md §1.4).
       if (
         tool === 'read_page' &&
         /EMPTY_TREE/.test((e as Error).message) &&
@@ -653,7 +653,7 @@ export function createL1Tools(
       name: 'read_page',
       label: '读取页面',
       description:
-        "Returns a snapshot of the page: each interactive element appears as `role \"name\" [ref=<snapshot-ref>]`. Copy the opaque ref exactly; call this before your first interaction with a page and whenever refs go stale. mode:'article' extracts readable text for content reading; 'snapshot' (default) is for interaction.",
+        "Read a page and return a snapshot where each interactive element appears as `role \"name\" [ref=<snapshot-ref>]`. Copy the opaque ref exactly. Call this before the first interaction and whenever refs become stale. Use mode:'article' for readable text and 'snapshot' (default) for interaction.",
       parameters: schema.object({
         ...tabIdParameter,
         ...contentToolParameterShapes.read_page,
@@ -666,7 +666,7 @@ export function createL1Tools(
       name: 'find_in_page',
       label: '页内查找',
       description:
-        'Find elements/text in the current snapshot by query. Cheaper than a full read_page for targeted lookups. Returns matching snapshot lines with refs.',
+        'Find elements or text in the current snapshot by query. Use it instead of a full read_page for targeted lookups. The result includes matching snapshot lines and refs.',
       parameters: schema.object({
         ...tabIdParameter,
         ...contentToolParameterShapes.find_in_page,
@@ -679,7 +679,7 @@ export function createL1Tools(
       name: 'extract',
       label: '提取正文',
       description:
-        "Extract the page (or a ref'd subtree via scope) as clean Markdown with links preserved — cheaper and more readable than a full read_page snapshot for reading content or collecting URLs. Long pages truncate; pass fromChar to continue from where it stopped. Oversized results are saved to an attachment and summarized.",
+        "Extract the page, or a ref'd subtree selected by scope, as readable Markdown with links preserved. Use it instead of a full read_page snapshot when reading content or collecting URLs. Long pages truncate; pass fromChar to continue. Oversized results are saved to an attachment and summarized.",
       parameters: schema.object({
         ...tabIdParameter,
         ...contentToolParameterShapes.extract,
@@ -740,7 +740,7 @@ export function createL1Tools(
       name: 'click',
       label: '点击元素',
       description:
-        'Click an element. element: human-readable description shown to the user for approval; ref: from the LATEST snapshot. Fails if the ref is stale — re-run read_page and retry with a fresh ref. If the click navigates, the result says so — do NOT retry a click that navigated.',
+        'Click an element. element is the description shown to the user for approval; ref must come from the latest snapshot. If the ref is stale, run read_page again and retry with a fresh ref. If the click navigates, do not retry it.',
       parameters: schema.object({
         ...tabIdParameter,
         ...contentToolParameterShapes.click,
@@ -754,7 +754,7 @@ export function createL1Tools(
       name: 'type',
       label: '输入文本',
       description:
-        'Set a field value and dispatch input events. Use submit:true to press Enter after (may navigate — the result says so). mode:"append" keeps existing text. If the field ignores the input, retry with slowly:true.',
+        'Set a field value and dispatch input events. Use submit:true to press Enter afterward; the result reports any navigation. mode:"append" keeps existing text. If the field ignores the input, retry with slowly:true.',
       parameters: schema.object({
         ...tabIdParameter,
         ...contentToolParameterShapes.type,
@@ -768,7 +768,7 @@ export function createL1Tools(
       name: 'select_option',
       label: '选择下拉项',
       description:
-        'Select option(s) in a <select> by value or visible text. On mismatch the error lists available options.',
+        'Select one or more options in a <select> by value or visible text. If nothing matches, the error lists the available options.',
       parameters: schema.object({
         ...tabIdParameter,
         ...contentToolParameterShapes.select_option,
@@ -782,7 +782,7 @@ export function createL1Tools(
       name: 'press_key',
       label: '按键',
       description:
-        "Press a key or combo with TRUSTED input (triggers native behavior: Enter submits, Tab moves focus, Escape dismisses). e.g. 'Enter', 'Escape', 'Control+a', 'Shift+Tab'. Optional ref focuses that element first. May trigger navigation — the result will say so.",
+        "Press a key or key combination with trusted input. Native behavior applies: Enter submits, Tab moves focus, and Escape dismisses. Examples: 'Enter', 'Escape', 'Control+a', 'Shift+Tab'. An optional ref focuses that element first. The result reports any navigation.",
       parameters: schema.object({
         ...tabIdParameter,
         ...contentToolParameterShapes.press_key,
@@ -861,7 +861,7 @@ export function createL1Tools(
       name: 'scroll',
       label: '滚动',
       description:
-        "Scroll the page or a container (target ref). amount: 'page' (default), 'end', or pixels. New content may appear after scrolling — re-read if needed.",
+        "Scroll the page or a container selected by target ref. amount accepts 'page' (default), 'end', or a pixel count. New content may appear after scrolling; run read_page again if needed.",
       parameters: schema.object({
         ...tabIdParameter,
         ...contentToolParameterShapes.scroll,
@@ -874,7 +874,7 @@ export function createL1Tools(
       name: 'hover',
       label: '悬停',
       description:
-        'Hover over an element to reveal menus/tooltips. Follow with read_page to see what appeared.',
+        'Hover over an element to reveal a menu or tooltip. Follow with read_page to inspect what appeared.',
       parameters: schema.object({
         ...tabIdParameter,
         ...contentToolParameterShapes.hover,
@@ -901,7 +901,7 @@ export function createL1Tools(
       name: 'run_javascript',
       label: '执行 JavaScript',
       description:
-        "Run JavaScript in the page's MAIN world (full access to the page's own variables/functions) and return the JSON-serialized result. Powerful and risky — DENIED by default; the user must enable it in settings. Prefer the structured tools (click/type/extract) whenever possible.",
+        "Run JavaScript in the page's MAIN world with access to the page's variables and functions, then return a JSON-serialized result. This tool is risky and denied by default; the user must enable it in Settings. Prefer structured tools such as click, type, or extract.",
       parameters: schema.object({ ...tabIdParameter, code: schema.string() }),
       level: 'L1',
       effects: 'write',
@@ -939,7 +939,7 @@ export function createL1Tools(
                 } catch {
                   return {
                     ok: true,
-                    value: `[不可序列化: ${Object.prototype.toString.call(value)}]`,
+                    value: `[不可序列化：${Object.prototype.toString.call(value)}]`,
                   };
                 }
               } catch (e) {
@@ -974,13 +974,13 @@ export function createL1Tools(
           // it switches to structured tools rather than retrying.
           if (/EvalError|unsafe-eval|Content Security Policy|CSP/i.test(r.error ?? '')) {
             throw new Error(
-              '该页面的内容安全策略(CSP)禁止动态执行脚本，run_javascript 在此页不可用。请改用结构化工具（read_page/click/type 等）。',
+              '该页面的内容安全策略（CSP）禁止动态执行脚本，run_javascript 在此页不可用。请改用 read_page、click、type 等结构化工具。',
             );
           }
-          throw new Error(`页面脚本抛出异常: ${r.error}`);
+          throw new Error(`页面脚本抛出异常：${r.error}`);
         }
         return {
-          content: [{ type: 'text' as const, text: `[tabId=${tabId}] 执行结果: ${r.value}` }],
+          content: [{ type: 'text' as const, text: `[tabId=${tabId}] 执行结果：${r.value}` }],
         };
       },
     },
@@ -988,7 +988,7 @@ export function createL1Tools(
       name: 'batch_actions',
       label: '批量操作',
       description:
-        'Up to 4 click/type/select_option actions executed in order; stops early if the page changes significantly. Prefer this for multi-field forms — one approval, one round-trip.',
+        'Run up to 4 click, type, or select_option actions in order. Stop early if the page changes significantly. Use this for multi-field forms to keep the batch to one approval and one round trip.',
       parameters: schema.object({
         ...tabIdParameter,
         ...batchActionParameters,

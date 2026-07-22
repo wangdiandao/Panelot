@@ -4,6 +4,17 @@ All notable changes to Panelot are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Added a VitePress documentation site for user guides, development references, and the privacy
+  policy, with local search and GitHub Pages deployment.
+
+### Changed
+
+- Reorganized engineering documentation under stable semantic paths and clarified that
+  user-uploaded file bytes are sent only to an approved target website, not as ordinary model
+  attachments.
+
 ## [0.4.4] - 2026-07-21
 
 ### Changed

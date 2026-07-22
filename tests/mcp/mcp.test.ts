@@ -5,7 +5,7 @@ import { McpClient } from '../../src/mcp/client';
 
 afterEach(() => vi.restoreAllMocks());
 
-describe('parseMcpJson (docs/07 §2 — Claude Code / Cursor import)', () => {
+describe('parseMcpJson (docs/development/mcp.md §2 — Claude Code / Cursor import)', () => {
   it('parses the Claude Code mcpServers shape with a bearer header', () => {
     const json = JSON.stringify({
       mcpServers: {

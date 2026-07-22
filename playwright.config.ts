@@ -1,7 +1,7 @@
 import { defineConfig } from '@playwright/test';
 
 /**
- * e2e config (docs/12 §8): drives real Chromium against local fixture pages.
+ * e2e config (docs/development/experience-targets.md §8): drives real Chromium against local fixture pages.
  * The snapshot engine and content-script actions run in a real DOM here —
  * coverage that happy-dom unit tests can't provide.
  */

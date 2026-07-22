@@ -1,5 +1,5 @@
 /**
- * Layout tokens shared across components (docs/09 §2). Only dimensions that
+ * Layout tokens shared across components (docs/development/ui.md §2). Only dimensions that
  * two files must agree on live here (pattern from LobeChat's layoutTokens);
  * single-consumer sizes stay as Tailwind classes at the point of use.
  */
@@ -11,7 +11,7 @@ export const SIDEBAR_DEFAULT = 256;
 /** Collapsed icon-rail width. */
 export const SIDEBAR_RAIL = 48;
 
-/** Center conversation column cap (docs/09 §3.1). */
+/** Center conversation column cap (docs/development/ui.md §3.1). */
 export const STREAM_MAX_W = 768;
 
 /** CSS custom property carrying the live sidebar width on <html>. */

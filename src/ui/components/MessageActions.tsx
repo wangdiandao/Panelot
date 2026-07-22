@@ -1,5 +1,5 @@
 /**
- * MessageActions — the per-message icon row (docs/09 §2).
+ * MessageActions — the per-message icon row (docs/development/ui.md §2).
  *
  * Reveal recipe from LibreChat HoverButtons (three correctness rules most
  * chat UIs miss): hidden only on hover-capable devices, revealed by hover OR

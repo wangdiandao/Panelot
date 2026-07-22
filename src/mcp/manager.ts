@@ -1,5 +1,5 @@
 /**
- * McpManager (docs/07 §1/§4): owns clients, bridges capabilities into the
+ * McpManager (docs/development/mcp.md §1/§4): owns clients, bridges capabilities into the
  * agent (tools→AgentTool, prompts→slash commands, resources→@refs), manages
  * auth (bearer/OAuth with refresh), and connection state.
  */
@@ -67,7 +67,7 @@ export function permissionRequiredFromError(
 }
 
 /** json-schema-to-zod would be ideal; a pragmatic passthrough keeps the bridge small.
- *  The raw JSON Schema is forwarded to the provider unchanged (docs/07 §4). */
+ *  The raw JSON Schema is forwarded to the provider unchanged (docs/development/mcp.md §4). */
 function schemaToZod(_inputSchema: Record<string, unknown>): RuntimeSchema {
   // We validate loosely here (real validation is server-side); the provider
   // receives the raw JSON Schema via AgentTool.inputSchema, so runtime only
@@ -193,7 +193,9 @@ export class McpManager {
       const permissionRequired = permissionRequiredFromError(e);
       this.setState(id, {
         status: 'error',
-        reason: permissionRequired ? '需要额外主机权限' : attributeError((e as Error).message),
+        reason: permissionRequired
+          ? '需要额外的站点访问权限'
+          : attributeError((e as Error).message),
         permissionRequired,
       });
       throw e;
@@ -225,7 +227,7 @@ export class McpManager {
     }
   }
 
-  /** Ensure lazy-connect servers are up before first use (docs/07 §2). */
+  /** Ensure lazy-connect servers are up before first use (docs/development/mcp.md §2). */
   async ensureConnected(mode: 'startup' | 'use' = 'use'): Promise<void> {
     const servers = await this.listServers();
     await Promise.all(
@@ -460,7 +462,7 @@ export class McpManager {
     );
     const target = new URL(normalizeEndpointUrl(value, { label: 'MCP worker 请求 URL' }));
     if (target.origin !== configured.origin) {
-      throw new Error(`MCP worker 拒绝跨源请求: ${target.origin}`);
+      throw new Error(`MCP worker 拒绝跨源请求：${target.origin}`);
     }
     const stage = await this.preparePermissionStage(id, undefined, {
       stage: 'resource',
@@ -623,7 +625,7 @@ export class McpManager {
   private setPermissionRequiredState(id: string, permissionRequired: McpOAuthPermissionRequired) {
     this.setState(id, {
       status: 'error',
-      reason: '需要额外主机权限',
+      reason: '需要额外的站点访问权限',
       permissionRequired,
     });
   }
@@ -650,7 +652,7 @@ export class McpManager {
     await saveMcpServers(servers);
   }
 
-  // ---- capability bridging (docs/07 §4) --------------------------------------
+  // ---- capability bridging (docs/development/mcp.md §4) --------------------------------------
 
   /** tools → AgentTool[], name = mcp__{serverId}__{tool}. */
   buildTools(getThreadId?: () => string): AnyAgentTool[] {
@@ -712,7 +714,7 @@ export class McpManager {
     return out;
   }
 
-  /** prompts → slash-command descriptors (docs/07 §4). */
+  /** prompts → slash-command descriptors (docs/development/mcp.md §4). */
   listPromptCommands(): {
     command: string;
     serverId: string;
@@ -959,12 +961,12 @@ function mergeOriginReasons(
 function endpointReason(context: OAuthFetchPermissionContext): string {
   if (context.stage === 'registration') return '动态注册 Panelot OAuth 客户端';
   if (context.stage === 'token') return '交换或刷新 MCP OAuth token';
-  return '访问 MCP OAuth endpoint';
+  return '访问 MCP OAuth 端点';
 }
 
 function attributeError(message: string): string {
-  if (/401|unauthor/i.test(message)) return '需要授权 (401)';
-  if (/CORS|host permission/i.test(message)) return 'CORS/权限问题 — 检查 host 权限';
+  if (/401|unauthor/i.test(message)) return '需要授权（401）';
+  if (/CORS|host permission/i.test(message)) return 'CORS 或站点访问权限异常：请检查站点访问权限';
   if (/protocol|version/i.test(message)) return '协议版本不符';
   if (/fetch|network|Failed to fetch/i.test(message)) return '网络不可达';
   return redactDiagnostic(message);

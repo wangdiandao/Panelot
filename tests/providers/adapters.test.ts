@@ -1203,7 +1203,7 @@ describe('provider response-format diagnostics', () => {
   });
 });
 
-describe('mergeParams (docs/03 §1.4)', () => {
+describe('mergeParams (docs/development/providers.md §1.4)', () => {
   it('merges two layers with overrides winning and undefined skipped', () => {
     expect(
       mergeParams({ temperature: 0.7, maxTokens: 1000 }, { temperature: 0.2, topP: undefined }),

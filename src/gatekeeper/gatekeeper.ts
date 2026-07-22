@@ -1,5 +1,5 @@
 /**
- * Gatekeeper — the single interception point (docs/06 §2). Every tool call
+ * Gatekeeper — the single interception point (docs/development/permissions.md §2). Every tool call
  * (L0-L2, MCP, builtin) passes check(); no tool carries its own approval
  * logic.
  *
@@ -48,11 +48,11 @@ export interface GatekeeperContext {
   threadId: string;
   targetOrigin: string;
   permissionPolicy: PermissionPolicy;
-  /** Origins this task has already touched (docs/02 §2.1). */
+  /** Origins this task has already touched (docs/development/data-model.md §2.1). */
   scopeOrigins: string[];
   rules: PermissionRule[];
   sensitivePatterns: readonly string[];
-  /** Session-scoped grants from acceptForSession (storage.session, docs/06 §4). */
+  /** Session-scoped grants from acceptForSession (storage.session, docs/development/permissions.md §4). */
   sessionGrants: ReadonlySet<string>;
   /** Tools that don't target a page origin (for example builtin fetch or memory). */
   originless?: boolean;
@@ -124,8 +124,8 @@ export function checkGate(call: GatekeeperCall, ctx: GatekeeperContext): Gatekee
     return {
       verdict: 'deny',
       reason: destination
-        ? `目标地址 ${origin} 在敏感站点黑名单中（银行/支付/政务等），Panelot 不主动前往这类站点执行操作。`
-        : `目标站点 ${origin} 在敏感站点黑名单中（银行/支付/政务等），Panelot 不在这类站点执行写操作。读取不受限制。`,
+        ? `目标地址 ${origin} 在敏感站点黑名单中（银行、支付、政务等）。Panelot 不会导航到这类站点并执行操作。`
+        : `目标站点 ${origin} 在敏感站点黑名单中（银行、支付、政务等）。Panelot 不会在这类站点执行写操作；读取不受限制。`,
     };
   }
 
@@ -163,7 +163,7 @@ export function checkGate(call: GatekeeperCall, ctx: GatekeeperContext): Gatekee
   if (rule?.verdict === 'deny') {
     return {
       verdict: 'deny',
-      reason: `被权限规则拒绝（${rule.tool} @ ${rule.origin}，来源: ${rule.source}）。`,
+      reason: `权限规则拒绝了此操作（${rule.tool} @ ${rule.origin}，来源：${rule.source}）。`,
     };
   }
   if (rule?.verdict === 'ask') {

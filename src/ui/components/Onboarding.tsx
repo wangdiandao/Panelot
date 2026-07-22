@@ -1,5 +1,5 @@
 /**
- * Onboarding (docs/09 §3.3, OB-1 "first answer ≤2min"): three-step flow shown
+ * Onboarding (docs/development/ui.md §3.3, OB-1 "first answer ≤2min"): three-step flow shown
  * in the empty conversation when no provider is configured.
  *   ① pick the interface type + base URL + key, inline Verify (green on success)
  *   ② choose the default permission policy

@@ -1,5 +1,5 @@
 /**
- * Storage quota monitoring & attachment LRU eviction (docs/02 §2.3/§6).
+ * Storage quota monitoring & attachment LRU eviction (docs/development/data-model.md §2.3/§6).
  * Screenshots/snapshots have a 200MB budget; over-budget evicts oldest by
  * createdAt and marks the owning node `evicted`. Eviction never touches the
  * active thread.

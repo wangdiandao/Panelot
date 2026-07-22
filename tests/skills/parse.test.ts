@@ -6,7 +6,7 @@ import {
   skillMatchesUrl,
 } from '../../src/skills/parse';
 
-describe('parseSkill (docs/08 §1)', () => {
+describe('parseSkill (docs/development/skills-plugins.md §1)', () => {
   it('parses Claude Code compatible frontmatter with panelot extensions', () => {
     const raw = `---
 name: xhs-publisher
@@ -91,7 +91,7 @@ nested:
   });
 });
 
-describe('skillMatchesUrl (docs/08 §2)', () => {
+describe('skillMatchesUrl (docs/development/skills-plugins.md §2)', () => {
   it('matches subdomain wildcards and exact hosts', () => {
     expect(skillMatchesUrl(['*.xiaohongshu.com'], 'https://creator.xiaohongshu.com/x')).toBe(true);
     expect(skillMatchesUrl(['*.xiaohongshu.com'], 'https://xiaohongshu.com')).toBe(true);

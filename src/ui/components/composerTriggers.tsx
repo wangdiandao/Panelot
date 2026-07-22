@@ -1,5 +1,5 @@
 /**
- * Data sources for the TriggerMenu (docs/09 §5):
+ * Data sources for the TriggerMenu (docs/development/ui.md §5):
  *   @  → open tabs
  *   /  → built-in commands + all enabled Skills (activated on send)
  *   {{ → dynamic variables, evaluated at submit time
@@ -22,7 +22,7 @@ export const DYNAMIC_VARIABLES = [
   'CURRENT_DATE',
 ] as const;
 
-/** Evaluate {{VAR}} placeholders at submit time (docs/09 §5). */
+/** Evaluate {{VAR}} placeholders at submit time (docs/development/ui.md §5). */
 export async function evaluateVariables(
   text: string,
   browserContext?: SubmissionBrowserContext,

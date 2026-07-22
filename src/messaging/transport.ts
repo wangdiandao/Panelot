@@ -1,5 +1,5 @@
 /**
- * Transport abstraction (docs/04 §7).
+ * Transport abstraction (docs/development/agent-engine.md §7).
  *
  * The UI talks to the engine exclusively through `EngineTransport`;
  * the engine accepts clients exclusively through `EngineConnection`.

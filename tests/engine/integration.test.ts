@@ -1,6 +1,6 @@
 /**
  * Full-stack engine regression: DirectTransport → EngineHost → RealEngineCore
- * → mock provider → Dexie. No browser required (docs/04 §7).
+ * → mock provider → Dexie. No browser required (docs/development/agent-engine.md §7).
  */
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -3080,7 +3080,7 @@ describe('engine integration (Op → events → DB)', () => {
     expect((await sharedDb.runs.get(run.id))?.state).toBe('completed');
   });
 
-  it('thread.selectBranch moves leafId to the sibling branch (docs/09 §2)', async () => {
+  it('thread.selectBranch moves leafId to the sibling branch (docs/development/ui.md §2)', async () => {
     const { core, host } = buildEngine();
     const client = connect(host);
     const threadId = await initThread(client);

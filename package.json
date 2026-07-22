@@ -11,6 +11,9 @@
   "scripts": {
     "dev": "wxt",
     "dev:edge": "wxt -b edge",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs",
     "build": "wxt build",
     "build:edge": "wxt build -b edge",
     "zip": "wxt zip",
@@ -19,8 +22,8 @@
     "protocol:check": "node scripts/check-protocol-manifests.mjs",
     "protocol:write": "node scripts/check-protocol-manifests.mjs --write",
     "lint": "eslint . --max-warnings 0",
-    "format": "prettier --write \"{e2e,entrypoints,preview,src,tests,scripts}/**/*.{ts,tsx,js,mjs,json}\" \"*.{ts,js,mjs,json}\"",
-    "format:check": "prettier --check \"{e2e,entrypoints,preview,src,tests,scripts}/**/*.{ts,tsx,js,mjs,json}\" \"*.{ts,js,mjs,json}\"",
+    "format": "prettier --write \"{e2e,entrypoints,preview,src,tests,scripts}/**/*.{ts,tsx,js,mjs,json}\" \"docs/.vitepress/**/*.{ts,mts,js,mjs,json,css}\" \"*.{ts,js,mjs,json}\"",
+    "format:check": "prettier --check \"{e2e,entrypoints,preview,src,tests,scripts}/**/*.{ts,tsx,js,mjs,json}\" \"docs/.vitepress/**/*.{ts,mts,js,mjs,json,css}\" \"*.{ts,js,mjs,json}\"",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
@@ -86,6 +89,7 @@
     "typescript": "^6.0.3",
     "typescript-eslint": "8.63.0",
     "vite": "^8.1.3",
+    "vitepress": "^1.6.4",
     "vitest": "4.1.9"
   },
   "optionalDependencies": {

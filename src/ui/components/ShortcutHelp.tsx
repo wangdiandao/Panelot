@@ -1,5 +1,5 @@
 /**
- * Keyboard shortcut reference (docs/09 §6): opened with `?` when focus is
+ * Keyboard shortcut reference (docs/development/ui.md §6): opened with `?` when focus is
  * outside an input. Rendered FROM the central registry (src/ui/shortcuts.ts)
  * so the sheet can never drift from the actual bindings.
  */

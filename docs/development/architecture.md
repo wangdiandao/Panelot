@@ -1,7 +1,7 @@
-# 01 — 架构与消息协议
+# 架构与消息协议
 
-> 文档入口：[文档目录](./README.md) · 关联：[02 数据模型](./02-data-model.md) · [04 Agent 引擎](./04-agent-engine.md) · [06 权限](./06-permissions.md)
-> 相关调研：Codex CLI 的 SQ/EQ 双队列与 app-server JSON-RPC 协议、Pi Agent 的 transport 抽象。来源见 [11 参考项目](./11-references.md)。
+> 文档入口：[用户指南](../guide/index.md) · 关联：[数据模型](./data-model.md) · [Agent 引擎](./agent-engine.md) · [权限](./permissions.md)
+> 相关调研：Codex CLI 的 SQ/EQ 双队列与 app-server JSON-RPC 协议、Pi Agent 的 transport 抽象。来源见 [参考项目](./references.md)。
 
 ---
 
@@ -17,11 +17,11 @@
 │  ┌──────────────────────────────────────────────┴─────────────┐  │
 │  │ Background Service Worker —— 引擎宿主                        │  │
 │  │   RealEngineCore + EngineHost（Thread/Turn/Port）              │  │
-│  │   GatekeeperService（权限拦截，见 06）                         │  │
-│  │   SettingsProviderResolver（LLM 适配，见 03）                  │  │
-│  │   BrowserToolGateway（L1/L2 路由，见 05）                      │  │
-│  │   McpManager ↔ offscreen SDK worker（远端 MCP，见 07）          │  │
-│  │   ThreadTree + PanelotDB（IndexedDB 落库，见 02）              │  │
+│  │   GatekeeperService（权限拦截）                                │  │
+│  │   SettingsProviderResolver（LLM 适配）                         │  │
+│  │   BrowserToolGateway（L1/L2 路由）                             │  │
+│  │   McpManager ↔ offscreen SDK worker（远端 MCP）                 │  │
+│  │   ThreadTree + PanelotDB（IndexedDB 落库）                     │  │
 │  └───────┬──────────────────────────┬─────────────────────────┘  │
 │          │ chrome.tabs.sendMessage  │ chrome.debugger            │
 │  ┌───────┴───────────┐      ┌───────┴────────────┐               │
@@ -43,11 +43,11 @@
 
 | 原语       | 含义                                                             | 生命周期                                                                                        |
 | ---------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| **Thread** | 一个会话（含分支树，见 02）                                      | 创建 → 活跃/空闲 → 归档/删除；当前不维护带 30 分钟 TTL 的 Thread 内存缓存，元数据和节点按需读库 |
+| **Thread** | 一个会话（含分支树，详见[数据模型](./data-model.md)）            | 创建 → 活跃/空闲 → 归档/删除；当前不维护带 30 分钟 TTL 的 Thread 内存缓存，元数据和节点按需读库 |
 | **Turn**   | 一轮完整交换：一条用户输入 → 若干 LLM 调用与工具执行 → 停止      | `turn:start` → n 个 Item → `turn:complete`；是中断（interrupt）与插话（steer）的作用单位        |
 | **Item**   | 轮内的原子产出：一条助手消息、一次工具调用、一次审批、一个推理块 | 统一三段式 `item:start` → `item:delta`* → `item:complete`                                       |
 
-Item 类型（`ItemKind`）：`user_message` / `assistant_message` / `reasoning` / `tool_call` / `approval` / `system_notice`。（协议 Item 与落库 NodeType 是两层概念：Node 还包含 `tool_result` / `approval_decision` / `turn_context` 等只落库不走事件流的类型，见 02 §2.2。）
+Item 类型（`ItemKind`）：`user_message` / `assistant_message` / `reasoning` / `tool_call` / `approval` / `system_notice`。协议 Item 与落库 NodeType 是两层概念：Node 还包含 `tool_result` / `approval_decision` / `turn_context` 等只落库、不走事件流的类型，详见[数据模型](./data-model.md) §2.2。
 
 ## 3. Port 消息协议
 
@@ -73,7 +73,7 @@ type Op =
       clientId: string;
       subscribe?: { threadId: string };
     } // 可选：连接即订阅某 Thread
-  | { type: 'thread.create'; submissionId: string; preset?: string; folderId?: string } // preset = ModelPreset id（见 03）
+  | { type: 'thread.create'; submissionId: string; preset?: string; folderId?: string } // preset = ModelPreset id，定义见 Provider 文档
   | { type: 'thread.subscribe'; submissionId: string; threadId: string }
   | { type: 'thread.delete'; submissionId: string; threadId: string }
   | { type: 'thread.fork'; submissionId: string; threadId: string; atNodeId: string }
@@ -126,7 +126,7 @@ type Op =
       submissionId: string;
       approvalId: string;
       decision: ApprovalDecision;
-    } // 见 06 章
+    } // 决策语义见权限文档
   | {
       type: 'interaction.response';
       submissionId: string;
@@ -137,7 +137,7 @@ type Op =
 
 interface TurnOverrides {
   model?: { connectionId: string; modelId: string };
-  permissionPolicy?: PermissionPolicy; // 见 06
+  permissionPolicy?: PermissionPolicy; // 定义见权限文档
 }
 ```
 
@@ -211,7 +211,7 @@ type AgentEvent =
       threadId: string;
       itemId: string;
       result?: { ok: boolean; details?: unknown };
-    } // details = 工具的 UI 富信息通道（见 04）
+    } // details = 工具的 UI 富信息通道，定义见 Agent 引擎文档
 
   // —— 引擎发起的双向 RPC ——
   | {
@@ -220,7 +220,7 @@ type AgentEvent =
       turnId: string;
       approvalId: string;
       request: ApprovalRequestPayload;
-    } // 完整参数展示，见 06
+    } // 完整参数展示，定义见权限文档
   | {
       type: 'interaction.request';
       threadId: string;
@@ -228,7 +228,7 @@ type AgentEvent =
       interactionId: string;
       request: InteractionRequestPayload;
     } // 提问、用户接管、页面等待、定时恢复或 MCP Elicitation
-  // L1→L2 升级确认走同一事件，flags 带 'escalation_l2'（06 §5）
+  // L1→L2 升级确认走同一事件，flags 带 'escalation_l2'；语义见权限文档 §5
 
   // —— 广播类 ——
   | { type: 'thread.deleted'; threadId: string }
@@ -289,16 +289,16 @@ sequenceDiagram
 
 ## 5. 工具执行双通道路由
 
-`BrowserToolGateway` 对 Agent loop 暴露统一的 `AgentTool` 接口（见 04），内部路由：
+`BrowserToolGateway` 对 Agent loop 暴露统一的 `AgentTool` 接口，定义见[Agent 引擎](./agent-engine.md)。内部路由如下：
 
 ```
 tool_call
-  → Gatekeeper 裁决（06）
+  → Gatekeeper 裁决（权限文档）
   → 路由：
      ├─ L0/L1 → chrome.tabs.sendMessage(tabId, {tool, params}) → content script 执行 → 结果回传
      │          content script 未注入时先 chrome.scripting.executeScript 注入（幂等）
-     ├─ L2   → CdpManager 串行 attach/switch → chrome.debugger.sendCommand；是否审批由 06 的策略/规则裁决
-     ├─ MCP  → McpManager.callTool（07）
+     ├─ L2   → CdpManager 串行 attach/switch → chrome.debugger.sendCommand；是否审批由权限策略与规则裁决
+     ├─ MCP  → McpManager.callTool（MCP 文档）
      └─ 内置 → 引擎内直接执行（fetch_url / memory 等）
 ```
 
@@ -309,4 +309,4 @@ tool_call
 
 - `protocol` 或 schema hash 不匹配时，EngineHost 返回 `fatal.reload_required` 并断开；该最小控制信封对版本保持可解析，host 回显请求方 `protocol`，使旧 UI 能进入 `reloadRequired` 并停止重连。`initialized` 与其余已知事件仍按当前 schema 严格校验；未知 AgentEvent 可忽略，但已知事件字段缺失、类型错误或枚举越界会转成 `protocol_mismatch`，不得降级为兼容路径。
 - 多窗口 Side Panel：各窗口独立选择 Thread（`chrome.sidePanel` 本身 per-window），同一 Thread 被多处订阅时靠事件广播保持一致，无须额外绑定机制。
-- L1→L2 升级确认合并进 `approval.request`（flag `escalation_l2`，见 06 §5），不设独立的 `escalation.request` 事件——同一张审批卡片、同一套决策语义，UI 只多渲染一条横幅提示。
+- L1→L2 升级确认合并进 `approval.request`（flag `escalation_l2`，详见[权限](./permissions.md) §5），不设独立的 `escalation.request` 事件。同一张审批卡片沿用同一套决策语义，UI 只增加一条横幅提示。

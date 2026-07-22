@@ -1,5 +1,5 @@
 /**
- * Data export/import (docs/development.md §5): full JSON export (keys stripped by default),
+ * Data export/import (docs/development/index.md §5): full JSON export (keys stripped by default),
  * import validation/materialization, and single-thread Markdown export. All local; no cloud.
  */
 
@@ -93,7 +93,7 @@ export async function validateImportBundle(
   return validated;
 }
 
-/** Single conversation → Markdown (docs/development.md §5). */
+/** Single conversation → Markdown (docs/development/index.md §5). */
 function sanitizeConnections(value: unknown): unknown {
   if (!Array.isArray(value)) return value;
   return (value as Connection[]).map((connection) => ({

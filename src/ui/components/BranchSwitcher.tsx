@@ -1,5 +1,5 @@
 /**
- * BranchSwitcher (docs/09 §2, CH-6): renders "‹ n/m ›" beside a message that
+ * BranchSwitcher (docs/development/ui.md §2, CH-6): renders "‹ n/m ›" beside a message that
  * has siblings; clicking (or Ctrl/Cmd+↑↓ globally) moves the thread's leafId
  * to the adjacent sibling via thread.selectBranch. Pure local tree query —
  * the sibling list comes from Dexie, not the LLM.
@@ -24,7 +24,7 @@ interface Props {
 
 async function siblingAt(threadId: string, nodeId: string, offset: number): Promise<string | null> {
   // Logical siblings: turn.fork branches hang under their own turn_context
-  // node, so physical-sibling queries would miss them (docs/02 §3.2).
+  // node, so physical-sibling queries would miss them (docs/development/data-model.md §3.2).
   const siblings = await tree.getLogicalSiblings(threadId, nodeId);
   const idx = siblings.findIndex((s) => s.id === nodeId);
   if (idx === -1) return null;
@@ -67,7 +67,7 @@ export function BranchSwitcher({ threadId, nodeId, branch, onSelectBranch }: Pro
 }
 
 /**
- * Global Ctrl/Cmd+↑↓ branch switching (docs/09 §6): operates on the LAST
+ * Global Ctrl/Cmd+↑↓ branch switching (docs/development/ui.md §6): operates on the LAST
  * branchable message in the current path.
  */
 export function useBranchShortcuts(

@@ -10,7 +10,7 @@ import type { Connection } from '../../src/providers/types';
 
 afterEach(() => vi.restoreAllMocks());
 
-describe('normalizeBaseUrl (docs/03 §4)', () => {
+describe('normalizeBaseUrl (docs/development/providers.md §4)', () => {
   it('strips trailing slashes', () => {
     expect(normalizeBaseUrl('https://api.x.com/v1///', 'openai').url).toBe('https://api.x.com/v1');
   });
@@ -53,7 +53,7 @@ describe('normalizeBaseUrl (docs/03 §4)', () => {
 });
 
 describe('templates & capabilities', () => {
-  it('ships the ten templates from docs/03 §4', () => {
+  it('ships the ten templates from docs/development/providers.md §4', () => {
     expect(CONNECTION_TEMPLATES).toHaveLength(10);
     expect(CONNECTION_TEMPLATES.filter((t) => t.keyless).map((t) => t.name)).toEqual([
       'Ollama (local)',
@@ -69,7 +69,7 @@ describe('templates & capabilities', () => {
   });
 });
 
-describe('fetchAllModels (docs/03 §6 — concurrent, isolated failures)', () => {
+describe('fetchAllModels (docs/development/providers.md §6 — concurrent, isolated failures)', () => {
   const conn = (id: string, overrides?: Partial<Connection>): Connection => ({
     id,
     name: id,

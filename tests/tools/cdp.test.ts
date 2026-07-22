@@ -88,7 +88,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('CdpManager (docs/05 §2 — on-demand, single-target, idle detach)', () => {
+describe('CdpManager (docs/development/browser-tools.md §2 — on-demand, single-target, idle detach)', () => {
   it('attaches once per tab and reuses within the idle window', async () => {
     const cdp = new CdpManager();
     await cdp.withTab(1, async () => {});

@@ -1,5 +1,5 @@
 /**
- * Command palette (docs/09 §6, Cmd/Ctrl+K): actions + full-text thread search
+ * Command palette (docs/development/ui.md §6, Cmd/Ctrl+K): actions + full-text thread search
  * (titles AND message bodies via threadSearch.ts, OpenWebUI SearchModal
  * semantics) with highlighted snippets and debounced queries. Built on
  * shadcn CommandDialog (cmdk); we disable cmdk's own filter and do our own

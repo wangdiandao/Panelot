@@ -31,7 +31,7 @@ export function createBrowserDataTools(): AnyAgentTool[] {
       name: 'history_search',
       label: '搜索浏览历史',
       description:
-        'Search browser history by title or URL, optionally within a time range; use it to find a page the user explicitly refers to, not to profile browsing behavior.',
+        'Search browser history by title or URL, optionally within a time range. Use it to find a page the user explicitly refers to, not to profile browsing behavior.',
       parameters: schema.object({
         query: schema.optional(schema.string()),
         startTime: schema.optional(
@@ -134,7 +134,7 @@ export function createBrowserDataTools(): AnyAgentTool[] {
       name: 'session_restore',
       label: '恢复关闭项',
       description:
-        'Restore one recently closed tab or window by session id; this changes the visible browser session and requires write approval.',
+        'Restore one recently closed tab or window by session id. This changes the visible browser session and requires write approval.',
       parameters: schema.object({ sessionId: schema.string({ min: 1 }) }),
       level: 'L0',
       effects: 'write',
@@ -179,7 +179,7 @@ export function createBrowserDataTools(): AnyAgentTool[] {
       name: 'tabs_group',
       label: '整理标签页',
       description:
-        'Group existing tabs by id, optionally into an existing group; this reorganizes the browser and requires write approval.',
+        'Group existing tabs by id, optionally into an existing group. This reorganizes the browser and requires write approval.',
       parameters: schema.object({
         tabIds: schema.array(schema.number({ integer: true, min: 0 }), { min: 1 }),
         groupId: schema.optional(schema.number({ integer: true, min: 0 })),
@@ -199,7 +199,7 @@ export function createBrowserDataTools(): AnyAgentTool[] {
       name: 'tab_group_update',
       label: '更新标签组',
       description:
-        'Rename, recolor, or collapse a tab group; this changes browser organization and requires write approval.',
+        'Rename, recolor, or collapse a tab group. This changes browser organization and requires write approval.',
       parameters: schema.object({
         groupId: schema.number({ integer: true, min: 0 }),
         title: schema.optional(schema.string({ max: 100 })),

@@ -2,7 +2,7 @@
  * Single source of truth for all cross-context message types.
  *
  * The engine (background SW) and every UI entrypoint import this file;
- * copying any of these definitions elsewhere is forbidden (docs/01 §3.1).
+ * copying any of these definitions elsewhere is forbidden (docs/development/architecture.md §3.1).
  *
  * Forward compatibility: `AgentEvent` is an open union — UIs MUST ignore
  * unknown `type` values without erroring, so the engine can ship new events
@@ -18,7 +18,7 @@ export const ENGINE_SCHEMA_HASH =
   'f90beca3a27549f7b59649cd38792cda76fb041ed12ecd85e23dcd35312c220e' as const;
 export const CONTENT_SCRIPT_PROTOCOL = 'panelot/content-v1' as const;
 export const CONTENT_SCRIPT_SCHEMA_HASH =
-  'a599d8c67987c8e5baee9f65d15b26e11245747b873d6ecaa5d10d508664f841' as const;
+  '936ac400c83589590f5416f69f16ab73ac022d2284f3eb7dacaed1bc015acde0' as const;
 export { DATA_IMPORT_RPC_TYPE } from '../data/maintenanceRpcProtocol';
 
 // ---------------------------------------------------------------------------
@@ -47,7 +47,7 @@ export interface ContextBlock {
   kind: 'page' | 'selection' | 'screenshot' | 'tab' | 'mcp_resource' | 'file' | 'skill';
   /** Human label shown on the chip, e.g. the page title. */
   label: string;
-  /** Origin the content came from — drives untrusted-content fencing (docs/10 §4). */
+  /** Origin the content came from — drives untrusted-content fencing (docs/development/prompts.md §4). */
   origin?: string;
   trust?: 'trusted' | 'untrusted';
   provenance?: 'user' | 'page' | 'mcp' | 'tool' | 'import' | 'plugin';
@@ -73,7 +73,7 @@ export interface Usage {
 }
 
 // ---------------------------------------------------------------------------
-// Permissions (docs/06 §1) — semantics are defined HERE and in docs/06 only.
+// Permissions (docs/development/permissions.md §1) — semantics are defined HERE and in docs/development/permissions.md only.
 // ---------------------------------------------------------------------------
 
 /**
@@ -102,7 +102,7 @@ export type ApprovalFlag =
 export interface ApprovalRequestPayload {
   tool: string;
   label: string;
-  /** Complete tool params — the UI must render them in full (docs/06 §4). */
+  /** Complete tool params — the UI must render them in full (docs/development/permissions.md §4). */
   params: unknown;
   targetOrigin: string;
   flags: ApprovalFlag[];
@@ -148,7 +148,7 @@ export type InteractionResponse =
   | { kind: 'timeout'; value?: unknown };
 
 // ---------------------------------------------------------------------------
-// Thread / Turn / Item primitives (docs/01 §2)
+// Thread / Turn / Item primitives (docs/development/architecture.md §2)
 // ---------------------------------------------------------------------------
 
 export type ItemKind =
@@ -201,7 +201,7 @@ export interface ItemMeta {
 export type ToolLevel = 'L0' | 'L1' | 'L2' | 'mcp' | 'builtin';
 
 // ---------------------------------------------------------------------------
-// Turn overrides (per-turn model/permission override, docs/01 §3.2)
+// Turn overrides (per-turn model/permission override, docs/development/architecture.md §3.2)
 // ---------------------------------------------------------------------------
 
 export interface TurnOverrides {
@@ -212,7 +212,7 @@ export interface TurnOverrides {
 }
 
 // ---------------------------------------------------------------------------
-// Thread snapshot (reconnect recovery, docs/01 §3.4)
+// Thread snapshot (reconnect recovery, docs/development/architecture.md §3.4)
 // ---------------------------------------------------------------------------
 
 /** Rendered form of a node for UI consumption (derived via buildSessionContext). */
@@ -314,7 +314,7 @@ export interface RunRecoveryState {
 }
 
 // ---------------------------------------------------------------------------
-// Op — client → engine (docs/01 §3.2)
+// Op — client → engine (docs/development/architecture.md §3.2)
 // ---------------------------------------------------------------------------
 
 export type Op =
@@ -347,7 +347,7 @@ export type Op =
     }
   | {
       /**
-       * Branch-and-run (docs/02 §3.2 forkAt): append `input` as a SIBLING of
+       * Branch-and-run (docs/development/data-model.md §3.2 forkAt): append `input` as a SIBLING of
        * `siblingOfNodeId` and start a turn from there. Regenerate = fork at
        * the assistant message with its parent user text; edit-and-resend =
        * fork at the user message with the edited text.
@@ -407,7 +407,7 @@ export type Op =
   | { type: 'ping'; submissionId: string };
 
 // ---------------------------------------------------------------------------
-// AgentEvent — engine → client (docs/01 §3.3)
+// AgentEvent — engine → client (docs/development/architecture.md §3.3)
 // ---------------------------------------------------------------------------
 
 export type ErrorCode =
@@ -493,7 +493,7 @@ export type AgentEvent =
         code: ErrorCode;
         message: string;
         retryable: boolean;
-        /** Provider error taxonomy for human-readable attribution (docs/03 §7). */
+        /** Provider error taxonomy for human-readable attribution (docs/development/providers.md §7). */
         errorKind?: ProviderErrorKind;
         providerDetails?: ProviderErrorDetails;
       }
@@ -571,14 +571,14 @@ export type AgentEvent =
       }
     | { type: 'run.recovery_required'; threadId: string; run: RunRecoveryState }
     | {
-        /** Agent touched-tab audit trail changed (docs/05 §6). */
+        /** Agent touched-tab audit trail changed (docs/development/browser-tools.md §6). */
         type: 'tabs.updated';
         threadId: string;
         tabs: { tabId: number; title: string; url: string }[];
       }
     | {
         /**
-         * Cross-thread activity signal for the sidebar (docs/09 §3.1 row
+         * Cross-thread activity signal for the sidebar (docs/development/ui.md §3.1 row
          * indicators). Deliberately has NO top-level threadId — the host's
          * broadcast filter is thread-scoped, and this event must reach clients
          * subscribed to OTHER threads (the whole point).
@@ -594,7 +594,7 @@ export type AgentEvent =
   ) & { stream?: ThreadStreamCursor };
 
 // ---------------------------------------------------------------------------
-// Content-script protocol (engine ⇄ content script, docs/01 §5)
+// Content-script protocol (engine ⇄ content script, docs/development/architecture.md §5)
 // ---------------------------------------------------------------------------
 
 export interface ContentScriptExecuteOp {

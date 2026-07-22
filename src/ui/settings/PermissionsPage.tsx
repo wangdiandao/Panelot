@@ -1,5 +1,5 @@
 /**
- * Browser permissions settings (docs/06 §7, docs/09 §3.4): default permission
+ * Browser permissions settings (docs/development/permissions.md §7, docs/development/ui.md §3.4): default permission
  * policy + rule table (tool × site × verdict × source, three-verdict
  * allow/ask/deny with manual add) + sensitive-origin blacklist block.
  * Built on shadcn/ui primitives.

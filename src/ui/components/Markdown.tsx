@@ -1,5 +1,5 @@
 /**
- * Markdown renderer (docs/09 §4.1).
+ * Markdown renderer (docs/development/ui.md §4.1).
  *
  * Streaming rules (OpenWebUI lessons):
  *  1. Unclosed code fences render as plain <pre> until the fence closes —

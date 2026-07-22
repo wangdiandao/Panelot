@@ -1,5 +1,5 @@
 /**
- * L0 tab tools — view-state honesty (docs/05 §6): the agent's working tab and
+ * L0 tab tools — view-state honesty (docs/development/browser-tools.md §6): the agent's working tab and
  * the user's visible tab are different things. Tool results must state
  * explicitly whether the USER's view changed, so the model never offers to
  * "switch back" after an operation that didn't touch the user's screen.

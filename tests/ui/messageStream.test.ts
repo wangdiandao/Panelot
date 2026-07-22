@@ -169,7 +169,7 @@ const assistantMsg = (text: string, reasoning?: string) =>
 const toolCall = (toolName: string, params: unknown = {}) =>
   item('tool_call', { itemId: `t${seq}`, toolName, params, level: 'L1' });
 
-describe('buildRows historical fold (docs/09 §4.2)', () => {
+describe('buildRows historical fold (docs/development/ui.md §4.2)', () => {
   it('marks tool segments before the last user message as historical', () => {
     const rows = buildRows(
       [

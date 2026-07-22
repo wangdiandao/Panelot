@@ -1,8 +1,8 @@
 /**
- * Provider configuration model (docs/03 §1).
+ * Provider configuration model (docs/development/providers.md §1).
  *
  * Connection abstraction follows OpenWebUI's protocol-first design ("openai"
- * vs "anthropic" wire protocol is the ONLY fork point), while fixing its known
+ * vs "anthropic" wire protocol is the only fork point), while fixing its known
  * gaps: customHeaders, multiple keys with failover, concurrent model fetch.
  */
 
@@ -13,7 +13,7 @@ import type { UnifiedMessage } from '../db/sessionContext';
 // Connection — one API endpoint
 // ---------------------------------------------------------------------------
 
-/** Per-connection compatibility switches (docs/03 §5). */
+/** Per-connection compatibility switches (docs/development/providers.md §5). */
 export interface QuirkFlags {
   /** Endpoint rejects stream_options.include_usage. */
   noStreamOptions?: boolean;
@@ -31,9 +31,9 @@ export interface Connection {
   name: string;
   /** Wire protocol — the only fork point. */
   kind: 'openai' | 'anthropic';
-  /** Normalized before storage (docs/03 §4). */
+  /** Normalized before storage (docs/development/providers.md §4). */
   baseUrl: string;
-  /** Multiple keys: sticky primary + failover on 401/429 (docs/03 §8). */
+  /** Multiple keys: sticky primary + failover on 401/429 (docs/development/providers.md §8). */
   apiKeys: string[];
   customHeaders?: Record<string, string>;
   /** Display prefix to disambiguate same-named models across connections. */
@@ -67,7 +67,7 @@ export interface ModelEntry {
 }
 
 // ---------------------------------------------------------------------------
-// ModelPreset — a named agent (docs/03 §1.3)
+// ModelPreset — a named agent (docs/development/providers.md §1.3)
 // ---------------------------------------------------------------------------
 
 export interface GenParams {
@@ -84,7 +84,7 @@ export interface ModelPreset {
   icon?: string;
   base: { connectionId: string; modelId: string };
   systemPrompt?: string;
-  /** Overrides only — unset fields are never sent (docs/03 §1.4). */
+  /** Overrides only — unset fields are never sent (docs/development/providers.md §1.4). */
   params?: GenParams;
   enabledToolLevels?: ('L0' | 'L1' | 'L2' | 'mcp')[];
   defaultPermissionPolicy?: import('../messaging/protocol').PermissionPolicy;
@@ -94,7 +94,7 @@ export interface ModelPreset {
 
 /**
  * Two-layer merge; undefined fields never reach the request payload
- * (docs/03 §1.4 rule 1).
+ * (docs/development/providers.md §1.4 rule 1).
  */
 export function mergeParams(preset?: GenParams, overrides?: GenParams): GenParams {
   const merged: GenParams = {};
@@ -108,7 +108,7 @@ export function mergeParams(preset?: GenParams, overrides?: GenParams): GenParam
 }
 
 // ---------------------------------------------------------------------------
-// Adapter interface (docs/03 §2)
+// Adapter interface (docs/development/providers.md §2)
 // ---------------------------------------------------------------------------
 
 /** JSON Schema for a tool, generated from AgentTool.parameters. */
@@ -160,7 +160,7 @@ export interface ProviderAdapter {
 }
 
 // ---------------------------------------------------------------------------
-// Errors & verify (docs/03 §6-7)
+// Errors & verify (docs/development/providers.md §6-7)
 // ---------------------------------------------------------------------------
 
 export type ProviderErrorKind =
@@ -218,7 +218,7 @@ export interface VerifyResult {
   streaming: boolean;
   toolUse: boolean;
   models?: string[];
-  /** Human-oriented failure attribution (docs/03 §6). */
+  /** Human-oriented failure attribution (docs/development/providers.md §6). */
   failure?: 'invalid_key' | 'unreachable' | 'needs_host_permission' | 'protocol_mismatch';
   detail?: string;
   details?: ProviderErrorDetails;

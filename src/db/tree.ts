@@ -1,9 +1,9 @@
 /**
- * Conversation-tree operations (docs/02 §3).
+ * Conversation-tree operations (docs/development/data-model.md §3).
  *
  * Modeling follows OpenWebUI's message tree ({nodes, leafId} with parentId
  * links and sibling-based branching) while deliberately avoiding its dual-
- * storage pitfall (issue #15189): the tree is the ONLY representation —
+ * storage pitfall (issue #15189): the tree is the only representation —
  * no parallel flat array, no stored childrenIds.
  */
 
@@ -44,7 +44,7 @@ export function createThreadMeta(partial: Partial<ThreadMeta> = {}, now = Date.n
   };
 }
 
-/** Max parent-chain hops = total node count — guards against cycles (docs/02 §3.4). */
+/** Max parent-chain hops = total node count — guards against cycles (docs/development/data-model.md §3.4). */
 class TraversalGuard {
   private hops = 0;
   constructor(private limit: number) {}
@@ -74,7 +74,7 @@ export class ThreadTree {
 
   async getThread(threadId: string): Promise<ThreadMeta | undefined> {
     const meta = await this.db.threads.get(threadId);
-    // A thread mid-deletion must never be replayed (docs/02 §6).
+    // A thread mid-deletion must never be replayed (docs/development/data-model.md §6).
     if (meta?.deleting) return undefined;
     return meta;
   }
@@ -138,7 +138,7 @@ export class ThreadTree {
   }
 
   // -------------------------------------------------------------------------
-  // Append (docs/02 §3.1)
+  // Append (docs/development/data-model.md §3.1)
   // -------------------------------------------------------------------------
 
   async appendNode(threadId: string, input: AppendNodeInput): Promise<ThreadNode> {
@@ -182,7 +182,7 @@ export class ThreadTree {
   }
 
   // -------------------------------------------------------------------------
-  // Branching (docs/02 §3.2)
+  // Branching (docs/development/data-model.md §3.2)
   // -------------------------------------------------------------------------
 
   /**
@@ -229,7 +229,7 @@ export class ThreadTree {
   }
 
   /**
-   * Logical siblings for branch UI (docs/02 §3.2): turn_context nodes are
+   * Logical siblings for branch UI (docs/development/data-model.md §3.2): turn_context nodes are
    * invisible structure — every turn prepends one, and a fork's turn_context
    * lands as the physical sibling of the forked message. The branch set of a
    * message node is therefore the LOGICAL children of its nearest
@@ -295,7 +295,7 @@ export class ThreadTree {
   /**
    * Branch switching: move leafId to the target sibling's deepest default
    * descendant — at each level descend into the child with the highest seq
-   * (docs/02 §3.2).
+   * (docs/development/data-model.md §3.2).
    */
   async switchToSibling(threadId: string, targetSiblingId: string): Promise<string> {
     const target = await this.db.nodes.get(targetSiblingId);
@@ -321,7 +321,7 @@ export class ThreadTree {
   }
 
   // -------------------------------------------------------------------------
-  // Tombstone deletion (docs/02 §3.3)
+  // Tombstone deletion (docs/development/data-model.md §3.3)
   // -------------------------------------------------------------------------
 
   async tombstone(threadId: string, nodeId: string): Promise<void> {
@@ -353,7 +353,7 @@ export class ThreadTree {
   }
 
   // -------------------------------------------------------------------------
-  // Path traversal & integrity (docs/02 §3.4)
+  // Path traversal & integrity (docs/development/data-model.md §3.4)
   // -------------------------------------------------------------------------
 
   /**
@@ -395,8 +395,8 @@ export class ThreadTree {
 
   /**
    * Load-time integrity check: leafId must trace to root. On failure fall
-   * back to the reachable node with the highest seq (docs/02 §3.4) so the
-   * renderer NEVER dead-loops on bad data.
+   * back to the reachable node with the highest seq (docs/development/data-model.md §3.4) so the
+   * renderer never dead-loops on bad data.
    */
   async validateLeaf(threadId: string): Promise<{ leafId: string | null; repaired: boolean }> {
     const thread = await this.db.threads.get(threadId);

@@ -1,5 +1,5 @@
 /**
- * Layered system-prompt assembly + untrusted-content fencing (docs/10 §1/§4/§6).
+ * Layered system-prompt assembly + untrusted-content fencing (docs/development/prompts.md §1/§4/§6).
  *
  * Layer order (stability descending, cache breakpoint after layer 2 is applied
  * by the Anthropic adapter via cache_control on `system`):
@@ -17,7 +17,7 @@ export interface SkillIndexEntry {
 
 export interface AssembleOptions {
   userGlobalPrompt?: string;
-  /** Site-level prompts matching submission-default or explicitly referenced tabs (docs/08 §6). */
+  /** Site-level prompts matching submission-default or explicitly referenced tabs (docs/development/skills-plugins.md §6). */
   sitePrompts?: { pattern: string; prompt: string }[];
   skillsIndex?: SkillIndexEntry[];
   activeSkills?: { name: string; body: string }[];
@@ -77,7 +77,7 @@ export function assembleSystemPrompt(opts: AssembleOptions = {}): string {
 }
 
 // ---------------------------------------------------------------------------
-// Untrusted content fencing (docs/10 §4)
+// Untrusted content fencing (docs/development/prompts.md §4)
 // ---------------------------------------------------------------------------
 
 /**

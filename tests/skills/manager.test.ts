@@ -16,7 +16,7 @@ beforeEach(() => {
 const skill = (name: string, opts?: { sites?: string; suggest?: boolean }) =>
   `---\nname: ${name}\ndescription: ${name} 的说明\n${opts?.sites ? `panelot:\n  sites: [${opts.sites}]\n  auto_suggest: ${opts.suggest ?? false}\n` : ''}---\n${name} 的正文指令`;
 
-describe('SkillManager storage & disclosure (docs/08 §2)', () => {
+describe('SkillManager storage & disclosure (docs/development/skills-plugins.md §2)', () => {
   it('imports and lists skills; re-import updates in place', async () => {
     await manager.importFromText(skill('alpha'));
     await manager.importFromText(skill('alpha'), 'imported', undefined, { conflict: 'overwrite' });
@@ -50,7 +50,7 @@ describe('SkillManager storage & disclosure (docs/08 §2)', () => {
   });
 });
 
-describe('resolveCommand (slash-command activation, docs/08 §4)', () => {
+describe('resolveCommand (slash-command activation, docs/development/skills-plugins.md §4)', () => {
   it('matches "/name args" to the enabled skill by name', async () => {
     await manager.importFromText(skill('xhs-writer'));
     const hit = await manager.resolveCommand('/xhs-writer 写一篇笔记');

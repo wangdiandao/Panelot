@@ -1,5 +1,5 @@
 /**
- * On-demand page executor (docs/01 §5, docs/05). It is built as an unlisted
+ * On-demand page executor (docs/development/architecture.md §5, docs/development/browser-tools.md). It is built as an unlisted
  * script so WXT does not promote its match pattern into permanent host access.
  */
 

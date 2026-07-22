@@ -10,6 +10,8 @@ export default tseslint.config(
       '.wxt/**',
       'coverage/**',
       'dist/**',
+      'docs/.vitepress/cache/**',
+      'docs/.vitepress/dist/**',
       'node_modules/**',
       'output/**',
       'scratch/**',

@@ -12,7 +12,7 @@ function feedAll(parser: SseParser, chunks: string[]) {
   return { events, done };
 }
 
-describe('SseParser (docs/03 §3.1)', () => {
+describe('SseParser (docs/development/providers.md §3.1)', () => {
   it('parses simple data events split by blank lines', () => {
     const { events } = feedAll(new SseParser(), ['data: {"a":1}\n\ndata: {"b":2}\n\n']);
     expect(events.map((e) => e.data)).toEqual(['{"a":1}', '{"b":2}']);

@@ -1,5 +1,5 @@
 /**
- * Hand-written buffered SSE parser (docs/03 §3.1).
+ * Hand-written buffered SSE parser (docs/development/providers.md §3.1).
  *
  * Requirements it MUST satisfy (compat with imperfect "OpenAI-compatible"
  * relays):

@@ -1,7 +1,7 @@
 /**
  * GatekeeperService: stateful wrapper around the pure checkGate — loads
  * rules/blacklist from storage, tracks session grants, persists
- * acceptForSite rules and scopeOrigins growth (docs/06 §2-4).
+ * acceptForSite rules and scopeOrigins growth (docs/development/permissions.md §2-4).
  */
 
 import type { ApprovalDecision, PermissionPolicy } from '../messaging/protocol';
@@ -144,7 +144,7 @@ const ORIGINLESS_TOOLS = new Set([
 ]);
 
 export class GatekeeperService {
-  /** threadId → session grants (acceptForSession; storage.session, docs/06 §4). */
+  /** threadId → session grants (acceptForSession; storage.session, docs/development/permissions.md §4). */
   private sessionGrants = new Map<string, Set<string>>();
   /** threadId → per-thread permission-policy overrides. */
   private threadConfig = new Map<string, ThreadPermissionConfig>();
@@ -315,7 +315,7 @@ export class GatekeeperService {
   }
 
   /**
-   * Apply an approval decision's side effects (docs/06 §4):
+   * Apply an approval decision's side effects (docs/development/permissions.md §4):
    *  - accept: origin joins scopeOrigins (cross-scope approved once = in scope)
    *  - acceptForSession: in-memory (tool, origin) grant for this thread
    *  - acceptForSite: persistent allow rule

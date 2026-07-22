@@ -97,13 +97,13 @@ export function parseKeyCombo(combo: string): KeyPayload {
     .split('+')
     .map((p) => p.trim())
     .filter(Boolean);
-  if (parts.length === 0) throw new Error(`无效按键: "${combo}"`);
+  if (parts.length === 0) throw new Error(`无效按键："${combo}"`);
 
   let modifiers = 0;
   // Everything except the last part must be a modifier.
   for (const part of parts.slice(0, -1)) {
     const bit = MODIFIER_BITS[part];
-    if (bit === undefined) throw new Error(`未知修饰键: "${part}"（支持 Control/Alt/Shift/Meta）`);
+    if (bit === undefined) throw new Error(`未知修饰键："${part}"（支持 Control/Alt/Shift/Meta）`);
     modifiers |= bit;
   }
   const last = parts.at(-1);
@@ -190,7 +190,7 @@ export function parseKeyCombo(combo: string): KeyPayload {
     };
   }
 
-  throw new Error(`未知按键: "${last}"（支持单字符、Enter/Tab/Escape/方向键/F1-F12 等）`);
+  throw new Error(`未知按键："${last}"（支持单字符、Enter/Tab/Escape/方向键/F1-F12 等）`);
 }
 
 /** CDP event sequence for one key press (Playwright's ordering). */

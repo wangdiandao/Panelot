@@ -1,5 +1,5 @@
 /**
- * Built-in tools executed inside the engine (docs/05 §3).
+ * Built-in tools executed inside the engine (docs/development/browser-tools.md §3).
  */
 
 import { schema } from '../agent/schema';
@@ -14,7 +14,7 @@ export function createFetchUrlTool(): AnyAgentTool {
     name: 'fetch_url',
     label: '抓取网页',
     description:
-      'Fetch a URL in the background and return readable text (no tab opened). Use for reference lookups; use tab_open + read_page when you need to interact with the page.',
+      'Fetch a URL in the background and return readable text without opening a tab. Use it for reference lookups. Use tab_open and read_page when you need to interact with the page.',
     parameters: schema.object({ url: schema.string({ url: true }) }),
     level: 'builtin',
     effects: 'read',
@@ -102,7 +102,7 @@ export function createMemoryTools(db: PanelotDB): AnyAgentTool[] {
         if (params.key) {
           const record = await db.memories.where('key').equals(params.key).first();
           return {
-            content: [{ type: 'text', text: record ? record.value : `（无记忆: ${params.key}）` }],
+            content: [{ type: 'text', text: record ? record.value : `（无记忆：${params.key}）` }],
           };
         }
         const all = await db.memories.toArray();
@@ -114,7 +114,7 @@ export function createMemoryTools(db: PanelotDB): AnyAgentTool[] {
       name: 'memory_write',
       label: '写入记忆',
       description:
-        'Save a persistent memory (key + value). Use for user preferences and durable facts, not transient task state.',
+        'Save a persistent memory with a key and value. Use it for user preferences and durable facts, not transient task state.',
       parameters: schema.object({
         key: schema.string({ min: 1, max: 100 }),
         value: schema.string({ max: 4000 }),
@@ -133,7 +133,7 @@ export function createMemoryTools(db: PanelotDB): AnyAgentTool[] {
             updatedAt: Date.now(),
           });
         }
-        return { content: [{ type: 'text', text: `已保存记忆: ${params.key}` }] };
+        return { content: [{ type: 'text', text: `已保存记忆：${params.key}` }] };
       },
     },
   ];
@@ -163,7 +163,7 @@ export function createDownloadTool(): AnyAgentTool {
         url: params.url,
         filename: params.filename,
       });
-      return { content: [{ type: 'text', text: `已开始下载 (#${downloadId}): ${params.url}` }] };
+      return { content: [{ type: 'text', text: `已开始下载（#${downloadId}）：${params.url}` }] };
     },
   };
 }
@@ -173,7 +173,7 @@ export function createArtifactTool(db: PanelotDB, getThreadId: () => string): An
     name: 'artifact_create',
     label: '创建文件',
     description:
-      'Create a UTF-8 text artifact, save it to the conversation, and download it for the user. Use for requested Markdown, CSV, JSON, HTML, or plain-text deliverables; not for temporary reasoning.',
+      'Create a UTF-8 text artifact, save it to the conversation, and download it for the user. Use it for requested Markdown, CSV, JSON, HTML, or plain-text deliverables. Do not use it for temporary reasoning.',
     parameters: schema.object({
       filename: schema.string({
         min: 1,
@@ -216,7 +216,7 @@ export function createInteractionTools(
       name: 'ask_user',
       label: '询问用户',
       description:
-        'Pause the current turn and ask the user 1-3 concise questions. Use only when an answer materially changes the next action; call it alone, never for routine confirmation. Free-form answers are always available.',
+        'Pause the current turn and ask the user one to three concise questions. Use it only when an answer materially changes the next action. Call it alone, and do not use it for routine confirmation. Free-form answers are always available.',
       parameters: schema.object({ questions: schema.array(question, { min: 1, max: 3 }) }),
       level: 'builtin',
       effects: 'read',

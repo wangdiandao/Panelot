@@ -1,5 +1,5 @@
 /**
- * Palette full-text search (docs/09 §6): titles + message bodies.
+ * Palette full-text search (docs/development/ui.md §6): titles + message bodies.
  * No FTS index exists (nodes: id, threadId, [threadId+seq], parentId), so
  * this is a bounded scan — the 50 most-recent threads' message nodes,
  * filtered in JS. OpenWebUI does the same server-side; at extension scale

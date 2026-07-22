@@ -1,6 +1,6 @@
 /**
  * ProviderRegistry: connection storage, URL normalization, preset templates,
- * concurrent model fetching (docs/03 §4-6).
+ * concurrent model fetching (docs/development/providers.md §4-6).
  */
 
 import { AnthropicAdapter } from './anthropic';
@@ -9,7 +9,7 @@ import { normalizeEndpointUrl } from '../security/endpointUrl';
 import type { Connection, ModelEntry, ProviderAdapter, QuirkFlags } from './types';
 
 // ---------------------------------------------------------------------------
-// URL normalization (docs/03 §4)
+// URL normalization (docs/development/providers.md §4)
 // ---------------------------------------------------------------------------
 
 export function normalizeBaseUrl(
@@ -25,13 +25,13 @@ export function normalizeBaseUrl(
   // openai kind usually needs /v1 — hint, don't force (Azure-style paths exist).
   let hint: string | undefined;
   if (kind === 'openai' && !/\/v\d+($|\/)/.test(new URL(url).pathname)) {
-    hint = 'OpenAI-compatible endpoints usually end with /v1 — append it if requests fail.';
+    hint = 'OpenAI-compatible endpoints usually end with /v1. Append it if requests fail.';
   }
   return { url, hint };
 }
 
 // ---------------------------------------------------------------------------
-// Preset templates (docs/03 §4) — one-click fill, user only pastes the key
+// Preset templates (docs/development/providers.md §4) — one-click fill, user only pastes the key
 // ---------------------------------------------------------------------------
 
 export interface ConnectionTemplate {
@@ -78,7 +78,7 @@ export const CONNECTION_TEMPLATES: readonly ConnectionTemplate[] = [
 ] as const;
 
 // ---------------------------------------------------------------------------
-// Known-model capability table (docs/03 §1.2) — conservative fallback beyond it
+// Known-model capability table (docs/development/providers.md §1.2) — conservative fallback beyond it
 // ---------------------------------------------------------------------------
 
 interface KnownModel {
@@ -123,7 +123,7 @@ export function inferCapabilities(modelId: string): ModelEntry['capabilities'] {
       };
     }
   }
-  // Conservative default (docs/03 §1.2): assume tool use, no vision.
+  // Conservative default (docs/development/providers.md §1.2): assume tool use, no vision.
   return { toolUse: true, vision: false };
 }
 
@@ -151,8 +151,8 @@ export interface ModelFetchResult {
 }
 
 /**
- * Fetch models from ALL enabled connections concurrently, each with its own
- * 4s timeout. One failing connection never blocks the others (docs/03 §6 —
+ * Fetch models from all enabled connections concurrently, each with its own
+ * 4s timeout. One failing connection never blocks the others (docs/development/providers.md §6 —
  * OpenWebUI's serial-timeout lesson).
  */
 export async function fetchAllModels(connections: Connection[]): Promise<ModelFetchResult[]> {
