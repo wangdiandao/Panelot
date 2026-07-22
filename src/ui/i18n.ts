@@ -1212,6 +1212,7 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   'actions.usageInput': { 'zh-CN': '输入', en: 'Input' },
   'actions.usageOutput': { 'zh-CN': '输出', en: 'Output' },
   'actions.usageCacheRead': { 'zh-CN': '缓存读取', en: 'Cache read' },
+  'actions.usageCacheWrite': { 'zh-CN': '缓存写入', en: 'Cache write' },
   'actions.editHint': {
     'zh-CN': 'Esc 取消 · Ctrl+Enter 重新发送',
     en: 'Esc to cancel · Ctrl+Enter to resend',

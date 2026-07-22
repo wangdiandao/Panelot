@@ -600,6 +600,7 @@ function validateKnownAgentEvent(
                 field(usage, 'input', nonNegativeInteger, nested),
                 field(usage, 'output', nonNegativeInteger, nested),
                 optionalField(usage, 'cacheRead', nonNegativeInteger, nested),
+                optionalField(usage, 'cacheWrite', nonNegativeInteger, nested),
               ),
             ),
           '<root>',

@@ -189,7 +189,7 @@ type AgentEvent =
       type: 'token.usage';
       threadId: string;
       turnId: string;
-      usage: { input: number; output: number; cacheRead?: number };
+      usage: { input: number; output: number; cacheRead?: number; cacheWrite?: number };
       costUsd?: number;
     }
 

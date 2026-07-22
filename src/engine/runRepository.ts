@@ -508,6 +508,9 @@ export class RunRepository {
         ...(current.usage?.cacheRead !== undefined || usage.cacheRead !== undefined
           ? { cacheRead: (current.usage?.cacheRead ?? 0) + (usage.cacheRead ?? 0) }
           : {}),
+        ...(current.usage?.cacheWrite !== undefined || usage.cacheWrite !== undefined
+          ? { cacheWrite: (current.usage?.cacheWrite ?? 0) + (usage.cacheWrite ?? 0) }
+          : {}),
       };
       const updated: RunRecord = {
         ...current,
@@ -568,6 +571,9 @@ export class RunRepository {
         output: (run.usage?.output ?? 0) + usage.output,
         ...(run.usage?.cacheRead !== undefined || usage.cacheRead !== undefined
           ? { cacheRead: (run.usage?.cacheRead ?? 0) + (usage.cacheRead ?? 0) }
+          : {}),
+        ...(run.usage?.cacheWrite !== undefined || usage.cacheWrite !== undefined
+          ? { cacheWrite: (run.usage?.cacheWrite ?? 0) + (usage.cacheWrite ?? 0) }
           : {}),
       };
       const updated: RunRecord = {

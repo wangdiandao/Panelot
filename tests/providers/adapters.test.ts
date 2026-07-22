@@ -231,7 +231,7 @@ describe('OpenAiAdapter streaming', () => {
       sseResponse([
         'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n',
         'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n',
-        'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2}}\n\n',
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"prompt_tokens_details":{"cached_tokens":6,"cache_write_tokens":2}}}\n\n',
         'data: [DONE]\n\n',
       ]),
     );
@@ -244,7 +244,7 @@ describe('OpenAiAdapter streaming', () => {
       events.filter((e) => e.type === 'text').map((e) => (e as { delta: string }).delta),
     ).toEqual(['Hel', 'lo']);
     expect(final.message).toEqual([{ type: 'text', text: 'Hello' }]);
-    expect(final.usage).toMatchObject({ input: 10, output: 2 });
+    expect(final.usage).toEqual({ input: 10, output: 2, cacheRead: 6, cacheWrite: 2 });
     expect(final.stopReason).toBe('end');
   });
 
@@ -398,7 +398,7 @@ describe('AnthropicAdapter streaming', () => {
   it('streams text and tool_use blocks, aggregating by block index', async () => {
     mockFetchOnce(
       sseResponse([
-        'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":20,"cache_read_input_tokens":5}}}\n\n',
+        'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":20,"cache_read_input_tokens":5,"cache_creation_input_tokens":7}}}\n\n',
         'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"I will click."}}\n\n',
         'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tu_1","name":"click"}}\n\n',
         'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"ref\\""}}\n\n',
@@ -411,7 +411,7 @@ describe('AnthropicAdapter streaming', () => {
 
     expect(final.message).toEqual([{ type: 'text', text: 'I will click.' }]);
     expect(final.toolCalls).toEqual([{ id: 'tu_1', name: 'click', params: { ref: 's2_1' } }]);
-    expect(final.usage).toEqual({ input: 20, output: 15, cacheRead: 5 });
+    expect(final.usage).toEqual({ input: 32, output: 15, cacheRead: 5, cacheWrite: 7 });
     expect(final.stopReason).toBe('tool_use');
   });
 
@@ -487,7 +487,7 @@ describe('AnthropicAdapter streaming', () => {
     expect(body.output_config).toBeUndefined();
   });
 
-  it('sets cache_control breakpoints on system and last tool', async () => {
+  it('sets cache breakpoints on the stable system prefix and last tool', async () => {
     const spy = mockFetchOnce(
       sseResponse([
         'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0}}\n\n',
@@ -497,7 +497,8 @@ describe('AnthropicAdapter streaming', () => {
     await new AnthropicAdapter(aconn)
       .stream({
         ...baseReq,
-        system: 'KERNEL',
+        system: 'KERNEL\n\nDYNAMIC',
+        systemCachePrefix: 'KERNEL',
         tools: [
           { name: 't1', description: 'd1', parameters: { type: 'object' } },
           { name: 't2', description: 'd2', parameters: { type: 'object' } },
@@ -508,6 +509,10 @@ describe('AnthropicAdapter streaming', () => {
     const body = JSON.parse(spy.mock.calls[0]![1]!.body as string);
     expect(body.cache_control).toEqual({ type: 'ephemeral' });
     expect(body.system[0].cache_control).toEqual({ type: 'ephemeral' });
+    expect(body.system).toEqual([
+      { type: 'text', text: 'KERNEL', cache_control: { type: 'ephemeral' } },
+      { type: 'text', text: '\n\nDYNAMIC' },
+    ]);
     expect(body.tools[0].cache_control).toBeUndefined();
     expect(body.tools[1].cache_control).toEqual({ type: 'ephemeral' });
     const headers = spy.mock.calls[0]![1]!.headers as Record<string, string>;

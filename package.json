@@ -2,7 +2,7 @@
   "name": "panelot",
   "description": "Chrome and Edge AI agent extension with BYOK providers, browser tools, Skills, and MCP",
   "private": true,
-  "version": "0.4.6",
+  "version": "0.5.0",
   "packageManager": "pnpm@9.12.3",
   "engines": {
     "node": "^20.19.0 || >=22.12.0"

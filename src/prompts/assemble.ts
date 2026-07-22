@@ -1,10 +1,10 @@
 /**
  * Layered system-prompt assembly + untrusted-content fencing (docs/development/prompts.md §1/§4/§6).
  *
- * Layer order (stability descending, cache breakpoint after layer 2 is applied
- * by the Anthropic adapter via cache_control on `system`):
- *   [1] kernel  [2] (tools, in request)  [3] user global  [4] site prompts
- *   [5] skills index  [6] environment block
+ * Layer order places the stable kernel first. The Anthropic adapter applies an
+ * explicit cache breakpoint after that prefix. Tools remain a separate field.
+ *   [1] kernel  [2] preset  [3] user global  [4] site prompts
+ *   [5] skills index  [6] active skills  [7] environment block
  */
 
 import { KERNEL_PROMPT } from './kernel';
@@ -24,7 +24,6 @@ export interface AssembleOptions {
   environment?: {
     date?: string;
     language?: string;
-    activeTab?: { tabId?: number; url: string; title: string };
     permissionPolicy?: string;
   };
   /** Preset-level system prompt (ModelPreset.systemPrompt) sits with the user layer. */
@@ -65,15 +64,21 @@ export function assembleSystemPrompt(opts: AssembleOptions = {}): string {
     const lines: string[] = [];
     if (e.date) lines.push(`Date: ${e.date}`);
     if (e.language) lines.push(`User language: ${e.language}`);
-    if (e.activeTab) {
-      const id = e.activeTab.tabId === undefined ? '' : ` [tabId=${e.activeTab.tabId}]`;
-      lines.push(`Submission tab${id}: ${e.activeTab.title} — ${e.activeTab.url}`);
-    }
     if (e.permissionPolicy) lines.push(`Permission policy: ${e.permissionPolicy}`);
     if (lines.length) layers.push(`# Environment\n${lines.join('\n')}`);
   }
 
   return layers.join('\n\n');
+}
+
+/**
+ * The kernel is the longest system prefix that is stable across every turn.
+ * Provider adapters can cache it even when site instructions or tab context change.
+ */
+export function systemPromptCachePrefix(prompt: string): string | undefined {
+  return prompt === KERNEL_PROMPT || prompt.startsWith(`${KERNEL_PROMPT}\n\n`)
+    ? KERNEL_PROMPT
+    : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -86,8 +91,16 @@ export function assembleSystemPrompt(opts: AssembleOptions = {}): string {
  * cannot forge a closing tag. Applied by the engine at tool_result assembly —
  * tools themselves never fence.
  */
-export function fenceUntrusted(content: string, origin: string, tool: string): string {
-  const suffix = randomSuffix();
+export function fenceUntrusted(
+  content: string,
+  origin: string,
+  tool: string,
+  boundarySuffix = randomSuffix(),
+): string {
+  if (!/^[0-9a-f]{16}$/.test(boundarySuffix)) {
+    throw new Error('Untrusted-content boundary suffix must be 16 lowercase hex characters.');
+  }
+  const suffix = boundarySuffix;
   const tag = `web_content_${suffix}`;
   // Defense in depth: neutralize any fence-shaped marker already in the
   // content. Forging OUR nonce is impossible to predict; forging a fence

@@ -347,11 +347,15 @@ export class OpenAiAdapter implements ProviderAdapter {
             promptDetails === undefined ||
             (isRecord(promptDetails) &&
               (promptDetails.cached_tokens === undefined ||
-                isTokenCount(promptDetails.cached_tokens)));
+                isTokenCount(promptDetails.cached_tokens)) &&
+              (promptDetails.cache_write_tokens === undefined ||
+                isTokenCount(promptDetails.cache_write_tokens)));
           const hasTokenCount =
             isTokenCount(promptTokens) ||
             isTokenCount(completionTokens) ||
-            (isRecord(promptDetails) && isTokenCount(promptDetails.cached_tokens));
+            (isRecord(promptDetails) &&
+              (isTokenCount(promptDetails.cached_tokens) ||
+                isTokenCount(promptDetails.cache_write_tokens)));
 
           if (hasTokenCount && validPromptTokens && validCompletionTokens && validPromptDetails) {
             recognizedFrame = true;
@@ -361,6 +365,10 @@ export class OpenAiAdapter implements ProviderAdapter {
               cacheRead:
                 isRecord(promptDetails) && isTokenCount(promptDetails.cached_tokens)
                   ? promptDetails.cached_tokens
+                  : undefined,
+              cacheWrite:
+                isRecord(promptDetails) && isTokenCount(promptDetails.cache_write_tokens)
+                  ? promptDetails.cache_write_tokens
                   : undefined,
             };
             yield { type: 'usage', usage };

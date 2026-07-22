@@ -5,9 +5,8 @@
  * (text_delta | input_json_delta | thinking_delta) / content_block_stop /
  * message_delta / message_stop — aggregated by content block index.
  *
- * Prompt caching: cache_control ephemeral breakpoints on the tools definition
- * and system prompt (docs/development/providers.md §3.2 + docs/development/prompts.md §1) — in agent loops each turn
- * makes several calls, so cache hits dominate cost.
+ * Prompt caching uses ephemeral breakpoints on the final Tool and stable system
+ * prefix, plus automatic caching for growing message history.
  */
 
 import type { UnifiedMessage } from '../db/sessionContext';
@@ -174,8 +173,19 @@ export class AnthropicAdapter implements ProviderAdapter {
       cache_control: { type: 'ephemeral' },
     };
     if (req.system) {
-      // Cache breakpoint at the end of the stable system layer (docs/development/prompts.md §1).
-      body.system = [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }];
+      const cachePrefix = req.systemCachePrefix;
+      if (
+        cachePrefix &&
+        req.system.startsWith(cachePrefix) &&
+        cachePrefix.length < req.system.length
+      ) {
+        body.system = [
+          { type: 'text', text: cachePrefix, cache_control: { type: 'ephemeral' } },
+          { type: 'text', text: req.system.slice(cachePrefix.length) },
+        ];
+      } else {
+        body.system = [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }];
+      }
     }
     if (req.tools.length > 0) {
       body.tools = req.tools.map((t, i) => ({
@@ -301,12 +311,24 @@ export class AnthropicAdapter implements ProviderAdapter {
               ) {
                 break;
               }
+              if (
+                u.cache_creation_input_tokens !== undefined &&
+                !isTokenCount(u.cache_creation_input_tokens)
+              ) {
+                break;
+              }
+              const uncachedInput = isTokenCount(u.input_tokens) ? u.input_tokens : 0;
+              const cacheRead = isTokenCount(u.cache_read_input_tokens)
+                ? u.cache_read_input_tokens
+                : 0;
+              const cacheWrite = isTokenCount(u.cache_creation_input_tokens)
+                ? u.cache_creation_input_tokens
+                : 0;
               usage = {
-                input: isTokenCount(u.input_tokens) ? u.input_tokens : 0,
+                input: uncachedInput + cacheRead + cacheWrite,
                 output: 0,
-                cacheRead: isTokenCount(u.cache_read_input_tokens)
-                  ? u.cache_read_input_tokens
-                  : undefined,
+                ...(u.cache_read_input_tokens !== undefined ? { cacheRead } : {}),
+                ...(u.cache_creation_input_tokens !== undefined ? { cacheWrite } : {}),
               };
             }
             recognizedFrame = true;

@@ -51,9 +51,19 @@ export interface SessionContext {
 
 export function userMessageToUnifiedMessage(
   payload: UserMessagePayload,
+  browserContext?: import('../messaging/protocol').SubmissionBrowserContext,
+  boundarySeed?: string,
 ): Extract<UnifiedMessage, { role: 'user' }> {
-  const blocks: ContentBlock[] = [...payload.content];
-  for (const ctx of payload.attachedContext ?? []) {
+  const blocks: ContentBlock[] = [];
+  const defaultTab = browserContext?.defaultTab;
+  if (defaultTab) {
+    blocks.push({
+      type: 'text',
+      text: `[Panelot environment: submission tabId=${defaultTab.tabId} title=${JSON.stringify(defaultTab.title)} url=${JSON.stringify(defaultTab.url)}]`,
+    });
+  }
+  blocks.push(...payload.content);
+  for (const [contextIndex, ctx] of (payload.attachedContext ?? []).entries()) {
     const mustFence =
       ctx.trust === 'untrusted' ||
       ['page', 'selection', 'screenshot', 'tab', 'mcp_resource', 'file'].includes(ctx.kind);
@@ -64,6 +74,8 @@ export function userMessageToUnifiedMessage(
             ctx.content,
             ctx.origin ?? `panelot://${ctx.provenance ?? ctx.kind}`,
             ctx.provenance ?? ctx.kind,
+            boundarySeed,
+            contextIndex * 1024,
           )
         : ctx.content),
     );
@@ -102,7 +114,10 @@ export async function buildSessionContext(
 
   const messages: UnifiedMessage[] = [];
   const toolNames = new Map<string, string>();
-  const state: { activeAssistant?: Extract<UnifiedMessage, { role: 'assistant' }> } = {};
+  const state: {
+    activeAssistant?: Extract<UnifiedMessage, { role: 'assistant' }>;
+    browserContext?: import('../messaging/protocol').SubmissionBrowserContext;
+  } = {};
   for (const node of path) {
     appendNodeAsMessage(messages, toolNames, state, node);
   }
@@ -113,14 +128,18 @@ export async function buildSessionContext(
 function appendNodeAsMessage(
   messages: UnifiedMessage[],
   toolNames: Map<string, string>,
-  state: { activeAssistant?: Extract<UnifiedMessage, { role: 'assistant' }> },
+  state: {
+    activeAssistant?: Extract<UnifiedMessage, { role: 'assistant' }>;
+    browserContext?: import('../messaging/protocol').SubmissionBrowserContext;
+  },
   node: ThreadNode,
 ): void {
   switch (node.type) {
     case 'user_message': {
       const p = node.payload as UserMessagePayload;
-      messages.push(userMessageToUnifiedMessage(p));
+      messages.push(userMessageToUnifiedMessage(p, state.browserContext, node.id));
       state.activeAssistant = undefined;
+      state.browserContext = undefined;
       break;
     }
     case 'assistant_message': {
@@ -174,6 +193,7 @@ function appendNodeAsMessage(
               p.contentForLlm,
               p.origin ?? `panelot://${p.provenance ?? 'tool'}`,
               toolName,
+              node.id,
             )
           : p.contentForLlm,
         isError: !p.ok,
@@ -182,6 +202,8 @@ function appendNodeAsMessage(
     }
     // These nodes record engine or UI state, not provider conversation messages.
     case 'turn_context':
+      state.browserContext = (node.payload as TurnContextPayload).browserContext;
+      break;
     case 'approval_decision':
     case 'interaction_response':
     case 'system_notice':
@@ -191,10 +213,37 @@ function appendNodeAsMessage(
   }
 }
 
-function fenceBlocks(blocks: ContentBlock[], origin: string, source: string): ContentBlock[] {
-  return blocks.map((block) =>
+function fenceBlocks(
+  blocks: ContentBlock[],
+  origin: string,
+  source: string,
+  boundarySeed?: string,
+  ordinalOffset = 0,
+): ContentBlock[] {
+  return blocks.map((block, blockIndex) =>
     block.type === 'text'
-      ? { type: 'text', text: fenceUntrusted(block.text, origin, source) }
+      ? {
+          type: 'text',
+          text: fenceUntrusted(
+            block.text,
+            origin,
+            source,
+            boundarySeed === undefined
+              ? undefined
+              : stableBoundarySuffix(boundarySeed, ordinalOffset + blockIndex),
+          ),
+        }
       : block,
   );
+}
+
+/** The persisted node id is random for live data and stable across context rebuilds. */
+function stableBoundarySuffix(seed: string, ordinal: number): string {
+  let hash = 0xcbf29ce484222325n;
+  const input = `${seed}:${ordinal}`;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= BigInt(input.charCodeAt(index));
+    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
+  }
+  return hash.toString(16).padStart(16, '0');
 }

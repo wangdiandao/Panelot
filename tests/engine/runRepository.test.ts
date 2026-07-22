@@ -359,9 +359,14 @@ describe('RunRepository', () => {
       input: { text: 'hello' },
     });
     await runs.transition(run.id, 'preparing');
-    await runs.commitUsage(run.id, { input: 30, output: 12 }, 0.25);
+    await runs.commitUsage(run.id, { input: 30, output: 12, cacheRead: 10, cacheWrite: 5 }, 0.25);
 
-    expect((await db.runs.get(run.id))?.usage).toEqual({ input: 30, output: 12 });
+    expect((await db.runs.get(run.id))?.usage).toEqual({
+      input: 30,
+      output: 12,
+      cacheRead: 10,
+      cacheWrite: 5,
+    });
     expect((await db.threads.get(threadId))?.stats).toEqual({
       turns: 0,
       totalTokens: 42,

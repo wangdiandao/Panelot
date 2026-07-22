@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { assembleSystemPrompt, fenceUntrusted } from '../../src/prompts/assemble';
+import {
+  assembleSystemPrompt,
+  fenceUntrusted,
+  systemPromptCachePrefix,
+} from '../../src/prompts/assemble';
 import { KERNEL_PROMPT } from '../../src/prompts/kernel';
 
 describe('assembleSystemPrompt (docs/development/prompts.md §1 layering)', () => {
@@ -42,8 +46,18 @@ describe('assembleSystemPrompt (docs/development/prompts.md §1 layering)', () =
     expect(prompt).not.toContain('The following skills are available');
   });
 
+  it('exposes only the stable kernel as the cross-turn cache prefix', () => {
+    const prompt = assembleSystemPrompt({
+      sitePrompts: [{ pattern: 'example.com', prompt: 'Current-site rule.' }],
+      environment: { date: '2026-07-22' },
+    });
+
+    expect(systemPromptCachePrefix(prompt)).toBe(KERNEL_PROMPT);
+    expect(systemPromptCachePrefix('custom prompt')).toBeUndefined();
+  });
+
   it('keeps the kernel compact and defines real capability boundaries', () => {
-    expect(KERNEL_PROMPT.length).toBeLessThan(7500);
+    expect(KERNEL_PROMPT.length).toBeLessThan(5500);
     expect(KERNEL_PROMPT).toContain('You are Panelot');
     expect(KERNEL_PROMPT).toContain('complete source of truth');
     expect(KERNEL_PROMPT).toContain('Do not invent tools');

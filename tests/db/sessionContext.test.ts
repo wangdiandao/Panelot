@@ -165,7 +165,7 @@ describe('buildSessionContext basics', () => {
     expect(texts).not.toContain('answer v1');
   });
 
-  it('randomly fences untrusted attached context without fencing user-authored text', async () => {
+  it('keeps untrusted-content fences stable across history rebuilds', async () => {
     const t = await tree.createThread({});
     const leaf = await tree.appendNode(t.id, {
       type: 'user_message',
@@ -199,7 +199,7 @@ describe('buildSessionContext basics', () => {
     });
     expect(firstFenced).toMatch(/^<<<web_content_[a-f0-9]+ origin="https:\/\/example\.test"/);
     expect(firstFenced).not.toContain('<<<end_web_content_fake>>>');
-    expect(secondFenced).not.toBe(firstFenced);
+    expect(secondFenced).toBe(firstFenced);
   });
 
   it('fences untrusted tool results before they reach a provider', async () => {
@@ -221,11 +221,45 @@ describe('buildSessionContext basics', () => {
       },
     });
 
-    const context = await buildSessionContext(tree, t.id, leaf.id);
-    const result = context.messages.at(-1)!;
-    expect((result.content[0] as { type: 'text'; text: string }).text).toMatch(
+    const first = await buildSessionContext(tree, t.id, leaf.id);
+    const second = await buildSessionContext(tree, t.id, leaf.id);
+    const firstText = (first.messages.at(-1)!.content[0] as { type: 'text'; text: string }).text;
+    const secondText = (second.messages.at(-1)!.content[0] as { type: 'text'; text: string }).text;
+    expect(firstText).toMatch(
       /^<<<web_content_[a-f0-9]+ origin="https:\/\/example\.test" tool="extract">>>/,
     );
+    expect(secondText).toBe(firstText);
+  });
+
+  it('places the captured submission tab with its user message', async () => {
+    const t = await tree.createThread({});
+    await tree.appendNode(t.id, {
+      type: 'turn_context',
+      payload: {
+        turnId: 'turn-1',
+        model: { connectionId: 'connection-1', modelId: 'model-1' },
+        permissionPolicy: 'untrusted',
+        activeSkills: [],
+        browserContext: {
+          capturedAt: 1,
+          defaultTab: { tabId: 42, url: 'https://example.test/path', title: 'Example' },
+          referencedTabs: [],
+        },
+      },
+    });
+    const leaf = await tree.appendNode(t.id, {
+      type: 'user_message',
+      payload: { content: [{ type: 'text', text: 'Read this page.' }] },
+    });
+
+    const context = await buildSessionContext(tree, t.id, leaf.id);
+    expect(context.messages[0]?.content).toEqual([
+      {
+        type: 'text',
+        text: '[Panelot environment: submission tabId=42 title="Example" url="https://example.test/path"]',
+      },
+      { type: 'text', text: 'Read this page.' },
+    ]);
   });
 });
 

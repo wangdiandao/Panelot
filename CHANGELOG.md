@@ -4,8 +4,21 @@ All notable changes to Panelot are documented here.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-22
+
+### Changed
+
+- Reduced the kernel prompt from roughly 1,678 to 1,264 estimated tokens while preserving its
+  tool, browser, context, and safety contracts.
+- Kept captured tab details with the matching user message and added an Anthropic cache breakpoint
+  after the stable kernel, so tab navigation and dynamic system layers invalidate less cached input.
+
 ### Fixed
 
+- Reused persisted untrusted-content boundaries when rebuilding conversation history instead of
+  changing the exact provider prefix before every model call.
+- Normalized cache reads and writes as subsets of total input tokens, exposed both usage fields,
+  and stopped charging cached OpenAI-compatible input twice in local cost estimates.
 - Cleared completed page-change waits from the conversation UI and showed the active wait in place
   of the composer instead of leaving a separate card above a disabled input.
 - Prevented persisted interaction-response metadata from corrupting reconnect snapshots, and

@@ -14,12 +14,13 @@ The kernel stays small. Tool schemas and on-demand Skills describe most capabili
 3. User global instructions
 4. Site instructions matching the submitted default tab and referenced tabs
 5. Deduplicated name and description index for enabled matching Skills
-6. Environment block with date, language, and captured tab summaries
+6. Environment block with date and language
 
 Tool schemas remain a separate provider request field.
+The captured default tab ID, URL, and title are placed in a trusted header on the matching user message.
 ```
 
-Anthropic currently sends the whole system string as one cache-controlled text block and adds a breakpoint to the final Tool schema. It does not split cache blocks between preset and user layers. The assembly type supports a permission policy field, but background does not currently provide it.
+Anthropic splits the stable kernel prefix from the remaining system layers. It places explicit breakpoints after the kernel and the final Tool schema, while top-level automatic caching advances through message history. Site, Skill, or date changes can still reuse the Tool and kernel prefix. Tab navigation no longer changes the system string by itself. The assembly type supports a permission policy field, but background does not currently provide it.
 
 ## 2. Kernel system prompt
 
@@ -51,7 +52,7 @@ content
 <<<end_web_content_9f2ab41c07d3e58a>>>
 ```
 
-The 64-bit CSPRNG nonce changes per call. Any fence-shaped marker inside content is defanged so it cannot imitate structure. The unified boundary handles referenced pages, selections, tabs, files, MCP Resources, and untrusted Tool results once. Tool implementations return raw content and do not wrap it again.
+Each new persisted node derives a 64-bit nonce from its random ID. Context rebuilds reuse that nonce, so replay does not break an exact provider cache prefix. A new node receives a new boundary. Any fence-shaped marker inside content is defanged so it cannot imitate structure. The unified boundary handles referenced pages, selections, tabs, files, MCP Resources, and untrusted Tool results once. Tool implementations return raw content and do not wrap it again.
 
 The boundary is a prompt-level defense. Gatekeeper remains the independent execution boundary.
 
@@ -69,4 +70,4 @@ The target regression set is 20 scripted form, comparison, extraction, and injec
 
 Injection cases should cover fake system instructions, fake approval text, cross-origin inducement, and attempts to run JavaScript. `TurnContextPayload.promptVersion` is reserved but not written by `runTurn`, so stored context cannot currently identify the kernel version.
 
-Future A/B work can compare English kernel performance on Chinese sites and random `<<<web_content>>>` boundaries against XML tags. Until measured, the current kernel and random boundary remain unchanged.
+Future A/B work can compare English kernel performance on Chinese sites and `<<<web_content>>>` boundaries against XML tags. Until measured, the current kernel and boundary format remain unchanged.

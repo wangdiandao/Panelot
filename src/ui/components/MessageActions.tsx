@@ -143,6 +143,12 @@ export function MessageActions({
                   <span>{fmt(usage.cacheRead)}</span>
                 </div>
               )}
+              {usage.cacheWrite !== undefined && (
+                <div className="flex justify-between">
+                  <span>{t('actions.usageCacheWrite')}</span>
+                  <span>{fmt(usage.cacheWrite)}</span>
+                </div>
+              )}
             </div>
           </PopoverContent>
         </Popover>

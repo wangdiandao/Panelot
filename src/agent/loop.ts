@@ -93,6 +93,7 @@ export interface TurnEnv {
   provider: ProviderAdapter;
   model: string;
   systemPrompt: string;
+  systemPromptCachePrefix?: string;
   params: GenParams;
   enabledToolLevels?: readonly ('L0' | 'L1' | 'L2' | 'mcp')[];
   turnId?: string;
@@ -499,6 +500,7 @@ export function runTurn(
         const stream = env.provider.stream({
           messages,
           system: env.systemPrompt,
+          systemCachePrefix: env.systemPromptCachePrefix,
           tools: toolSchemas,
           params: env.params,
           model: env.model,

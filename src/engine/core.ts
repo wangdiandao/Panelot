@@ -18,6 +18,7 @@ import type {
   SnapshotItemKind,
   ThreadSnapshot,
   TurnOverrides,
+  Usage,
   UserInput,
   RunRecoveryState,
   SubmissionBrowserContext,
@@ -27,7 +28,11 @@ import { ThreadTree, type AppendNodeInput } from '../db/tree';
 import { buildSessionContext } from '../db/sessionContext';
 import { runTurn, type GatekeeperCheck, type TurnEnv, type TurnHandle } from '../agent/loop';
 import { ToolRegistry, validateParams } from '../agent/tool';
-import { assembleSystemPrompt, type AssembleOptions } from '../prompts/assemble';
+import {
+  assembleSystemPrompt,
+  systemPromptCachePrefix,
+  type AssembleOptions,
+} from '../prompts/assemble';
 import type { ProviderAdapter, GenParams } from '../providers/types';
 import type {
   ApprovalRecord,
@@ -61,6 +66,21 @@ import type { SkillFrontmatter } from '../skills/parse';
 
 const APPROVAL_TIMEOUT_MS = 5 * 60_000; // docs/development/permissions.md §4
 const ENQUEUE_CAPACITY = 8; // docs/development/agent-engine.md §3
+
+function calculateUsageCost(
+  usage: Usage,
+  pricing: { input: number; output: number; cacheRead?: number },
+): number {
+  const cacheRead = Math.min(usage.cacheRead ?? 0, usage.input);
+  const cacheWrite = Math.min(usage.cacheWrite ?? 0, usage.input - cacheRead);
+  const uncachedInput = usage.input - cacheRead - cacheWrite;
+  return (
+    ((uncachedInput + cacheWrite) * pricing.input +
+      cacheRead * (pricing.cacheRead ?? pricing.input) +
+      usage.output * pricing.output) /
+    1_000_000
+  );
+}
 
 function filterToolsForModel(
   registry: ToolRegistry,
@@ -1140,12 +1160,7 @@ export class RealEngineCore {
         if (ev.type === 'token.usage') {
           // Cost from pricing ($/Mtok), if the resolver supplied it (docs/development/providers.md §1.2).
           const pricing = resolved.pricing;
-          const costUsd = pricing
-            ? (ev.usage.input * pricing.input +
-                ev.usage.output * pricing.output +
-                (ev.usage.cacheRead ?? 0) * (pricing.cacheRead ?? pricing.input)) /
-              1_000_000
-            : undefined;
+          const costUsd = pricing ? calculateUsageCost(ev.usage, pricing) : undefined;
           ev = { ...ev, costUsd };
           // Accumulate into thread.stats for the session list (docs/development/data-model.md §2.1).
         }
@@ -1154,6 +1169,7 @@ export class RealEngineCore {
       provider: resolved.provider,
       model: resolved.model,
       systemPrompt,
+      systemPromptCachePrefix: systemPromptCachePrefix(systemPrompt),
       params: resolved.params,
       enabledToolLevels: runEnvironment.enabledToolLevels,
       turnId: run.turnId,
@@ -1166,22 +1182,12 @@ export class RealEngineCore {
       },
       appendAssistantAndCommitUsage: async (node, usage, state, patch) => {
         const pricing = resolved.pricing;
-        const costUsd = pricing
-          ? (usage.input * pricing.input +
-              usage.output * pricing.output +
-              (usage.cacheRead ?? 0) * (pricing.cacheRead ?? pricing.input)) /
-            1_000_000
-          : 0;
+        const costUsd = pricing ? calculateUsageCost(usage, pricing) : 0;
         await this.runs.appendAssistantAndCommitUsage(run.id, node, usage, costUsd, state, patch);
       },
       commitUsage: async (usage) => {
         const pricing = resolved.pricing;
-        const costUsd = pricing
-          ? (usage.input * pricing.input +
-              usage.output * pricing.output +
-              (usage.cacheRead ?? 0) * (pricing.cacheRead ?? pricing.input)) /
-            1_000_000
-          : 0;
+        const costUsd = pricing ? calculateUsageCost(usage, pricing) : 0;
         await this.runs.commitUsage(run.id, usage, costUsd);
       },
       activateSkill: async (skillId) => {

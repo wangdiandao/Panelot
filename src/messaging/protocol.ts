@@ -15,7 +15,7 @@ import type { ExecuteResult } from '../tools/content/protocol';
 export const PROTOCOL_VERSION = 1;
 export const ENGINE_PROTOCOL = 'panelot/engine-v1' as const;
 export const ENGINE_SCHEMA_HASH =
-  '3c75f629d386e586c48759202d7fd8ffb306ffd204da862b1602bf560695fcc9' as const;
+  '137e64d7fa7004c19af54e741120aa013ae6e728af0d27ec1ab3433246a43175' as const;
 export const CONTENT_SCRIPT_PROTOCOL = 'panelot/content-v1' as const;
 export const CONTENT_SCRIPT_SCHEMA_HASH =
   '936ac400c83589590f5416f69f16ab73ac022d2284f3eb7dacaed1bc015acde0' as const;
@@ -67,9 +67,11 @@ export interface UserInput {
 }
 
 export interface Usage {
+  /** Total input tokens, including cache reads and writes. */
   input: number;
   output: number;
   cacheRead?: number;
+  cacheWrite?: number;
 }
 
 // ---------------------------------------------------------------------------

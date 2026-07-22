@@ -1274,10 +1274,12 @@ function providerAssistantState(value: unknown): void {
 
 function usage(value: unknown): void {
   const stats = object(value, 'IMPORT_USAGE');
-  exact(stats, ['input', 'output', 'cacheRead'], 'IMPORT_USAGE');
+  exact(stats, ['input', 'output', 'cacheRead', 'cacheWrite'], 'IMPORT_USAGE');
   nonnegativeFinite(stats.input, 'IMPORT_USAGE_INPUT');
   nonnegativeFinite(stats.output, 'IMPORT_USAGE_OUTPUT');
   if (stats.cacheRead !== undefined) nonnegativeFinite(stats.cacheRead, 'IMPORT_USAGE_CACHE');
+  if (stats.cacheWrite !== undefined)
+    nonnegativeFinite(stats.cacheWrite, 'IMPORT_USAGE_CACHE_WRITE');
 }
 
 function modelRef(value: unknown, label: string): void {

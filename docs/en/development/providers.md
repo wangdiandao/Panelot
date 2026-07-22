@@ -32,6 +32,8 @@ The global task model can use any connection. Title generation prefers it and fa
 
 `ProviderAdapter.stream()` accepts unified messages, optional system text, tool schemas, parameters, model ID, and an AbortSignal. It yields text, reasoning, partial tool calls, and usage, then returns a final message, tool calls, usage, and stop reason. Optional `listModels()` supports discovery. Settings uses a separate `verifyConnection(adapter, connection)` workflow so diagnostics do not become part of the MV3 Service Worker runtime.
 
+`Usage.input` is the total input count, including cache reads and writes. `cacheRead` and `cacheWrite` are subsets of that total. OpenAI-compatible responses use `prompt_tokens` and retain available detail fields. Anthropic responses add `input_tokens`, `cache_read_input_tokens`, and `cache_creation_input_tokens`. Cost calculation removes the cache-read subset before applying its configured price, so cached tokens are not charged twice as ordinary input.
+
 A stream succeeds only after its protocol terminates completely. OpenAI requires a supported `finish_reason` and `[DONE]`. Anthropic requires `message_delta.stop_reason` and `message_stop`. A clean EOF after content is still incomplete. Unknown stop reasons fail closed.
 
 ## 3. Wire protocols
@@ -40,11 +42,11 @@ A stream succeeds only after its protocol terminates completely. OpenAI requires
 
 Panelot posts to `{baseUrl}/chat/completions`, parses SSE across chunk and line boundaries, groups partial `tool_calls` by index, and parses accumulated argument JSON at completion. Invalid arguments return a tool error to the model for correction.
 
-Usage normally uses `stream_options.include_usage`. Compatibility flags can disable it, read reasoning from `<think>` tags or `reasoning_content`, force one tool call, omit the system role, or choose the maximum-token field. Native `reasoning_content` is persisted with assistant history and returned unchanged on follow-up requests after tool calls. The `thinkTagReasoning` mode does not send that native field.
+Usage normally uses `stream_options.include_usage`. Cached prompt tokens and any reported cache-write tokens are retained as breakdowns of total input. Compatibility flags can disable usage, read reasoning from `<think>` tags or `reasoning_content`, force one tool call, omit the system role, or choose the maximum-token field. Native `reasoning_content` is persisted with assistant history and returned unchanged on follow-up requests after tool calls. The `thinkTagReasoning` mode does not send that native field.
 
 ### 3.2 Anthropic
 
-Panelot posts to `{baseUrl}/v1/messages` and groups message, content-block, text, JSON input, thinking, signature, redacted thinking, and stop events by block index. Complete thinking blocks are stored as provider state and replayed with the assistant message after a tool result. Reasoning effort uses adaptive thinking and `output_config.effort` by default. A compatibility flag enables the legacy fixed thinking budget while reserving output space for the final answer. The single-tool flag sends Anthropic's `disable_parallel_tool_use` option. Stable system and tool definitions use ephemeral prompt-cache markers. Requests use `x-api-key`, `anthropic-version`, and the direct-browser access header required by Anthropic.
+Panelot posts to `{baseUrl}/v1/messages` and groups message, content-block, text, JSON input, thinking, signature, redacted thinking, and stop events by block index. Complete thinking blocks are stored as provider state and replayed with the assistant message after a tool result. Reasoning effort uses adaptive thinking and `output_config.effort` by default. A compatibility flag enables the legacy fixed thinking budget while reserving output space for the final answer. The single-tool flag sends Anthropic's `disable_parallel_tool_use` option. The last Tool and the stable kernel prefix use explicit ephemeral cache markers. Top-level automatic caching advances through message history. Cache creation and reads are retained in usage. Requests use `x-api-key`, `anthropic-version`, and the direct-browser access header required by Anthropic.
 
 `model_context_window_exceeded` maps to an incomplete `max_tokens` stop. `pause_turn` requires a server-tool continuation loop that Panelot does not implement, so it is a protocol error.
 

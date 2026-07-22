@@ -177,6 +177,8 @@ export interface FinalResult {
 export interface StreamRequest {
   messages: UnifiedMessage[];
   system?: string;
+  /** Stable leading slice of `system` that may receive an explicit provider cache breakpoint. */
+  systemCachePrefix?: string;
   tools: ToolSchema[];
   params: GenParams;
   model: string;

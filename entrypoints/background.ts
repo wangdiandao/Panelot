@@ -426,10 +426,6 @@ function startBackground(
       environment: {
         date: new Date().toISOString().slice(0, 10),
         language: settings.language ?? 'zh-CN',
-        activeTab:
-          submittedTab?.url && submittedTab.title
-            ? { tabId: submittedTab.tabId, url: submittedTab.url, title: submittedTab.title }
-            : undefined,
       },
     };
   });

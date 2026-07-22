@@ -16,12 +16,13 @@ system string:
   [3] 用户全局自定义指令
   [4] 站点层：后台按提交时默认 tab 与显式引用 tab 匹配站点级指令（Skills 与 Plugins 文档 §6）
   [5] Skills 索引：enabled(且与上述任一 tab 站点匹配)的 name+description 去重列表
-  [6] 环境块：当前日期 / 语言 / 提交时 tab 摘要（tabId+url+title）
+  [6] 环境块：当前日期 / 语言
 
 tool schemas: 作为 Provider request 的独立字段，不在 system string 内
+提交时默认 tab 的 tabId、URL 与标题放在对应 user message 的可信环境头中
 ```
 
-Anthropic adapter 当前把整个 system 字符串作为一个带 `cache_control` 的 text block，并在最后一个 tool schema 上加 breakpoint；没有在上述第 2/3 层之间切开多个 system block。`AssembleOptions.environment` 虽支持 `permissionPolicy` 字段，background 当前没有传入该项。
+Anthropic adapter 把内核稳定前缀与其余 system 层拆成两个 text block，在内核末尾和最后一个 tool schema 上设置显式 breakpoint；请求顶层的自动缓存继续把缓存点推进到多轮消息历史。站点指令、Skill 索引或日期变化时，Provider 仍可复用工具目录与内核前缀。提交 tab 不再改写 system，因此页面导航不会仅因 URL 或标题改变而使既有消息前缀失配。`AssembleOptions.environment` 虽支持 `permissionPolicy` 字段，background 当前没有传入该项。
 
 ## 2. 内核 System Prompt
 
@@ -71,11 +72,11 @@ Anthropic adapter 当前把整个 system 字符串作为一个带 `cache_control
 ```
 
 - `buildSessionContext` 是内容进入 Provider 前的唯一统一定界层：页面、选区、文件、MCP Resource 和带不可信来源的 tool result 在这里按 `trust` / `provenance` 包装；工具执行器只返回原始内容，避免重复定界；
-- 定界符含每次调用生成的 CSPRNG nonce（64 bit，借鉴 agent-browser content boundaries）防内容内伪造闭合标记；
+- 新节点使用随机 UUID 派生 64 bit nonce；同一个持久化节点在后续上下文重建中沿用相同 nonce，避免仅因重放而破坏 Provider 的精确前缀缓存；
 - 内容中任何 fence 形状的 `<<<…web_content…>>>` 标记（无论 nonce）统一去牙化为 `‹‹‹…›››`——伪造不同 nonce 的假边界也无法在视觉上冒充结构；
 - 配合内核层声明（§2 Untrusted content 段）构成第一层防线；硬保障仍在 Gatekeeper，详见[权限](./permissions.md) §6。
 
-通过 `@` 附着的页面、选区、tab、文件与 MCP Resource，以及页面/MCP 工具结果，都会在 `buildSessionContext` 中使用随机 nonce 定界；用户亲自输入的正文和明确可信的用户资产保持原文。Gatekeeper 仍作为工具执行侧的独立硬边界。
+通过 `@` 附着的页面、选区、tab、文件与 MCP Resource，以及页面/MCP 工具结果，都会在 `buildSessionContext` 中使用按节点稳定的随机 nonce 定界；新节点获得新的边界。用户亲自输入的正文和明确可信的用户资产保持原文。Gatekeeper 仍作为工具执行侧的独立硬边界。
 
 ## 5. 副任务提示词（task model 执行）
 
