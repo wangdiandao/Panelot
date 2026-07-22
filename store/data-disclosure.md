@@ -14,7 +14,7 @@
 - Data sale/sharing: Panelot's operator does not sell data or disclose it to unrelated third parties. User-requested transmissions to configured Provider/MCP endpoints are necessary to perform the request and are described above.
 - Retention: local records remain until the user deletes them, clears extension data, or uninstalls Panelot. Exported copies are managed by the user. Remote endpoints apply their own retention policies.
 
-Privacy URL: `https://wangdiandao.github.io/Panelot/`
+Privacy URL: `https://wangdiandao.github.io/Panelot/en/privacy/`
 
 ## 简体中文
 
@@ -30,4 +30,4 @@ Privacy URL: `https://wangdiandao.github.io/Panelot/`
 - 数据出售/共享：Panelot 运营方不出售数据，也不向无关第三方披露数据。为完成用户请求而发送到已配置 Provider/MCP 端点的数据传输属于必要处理，具体如上所述。
 - 数据保留：本地记录会保留到用户将其删除、清除扩展数据或卸载 Panelot。导出的副本由用户自行管理；远程端点适用其各自的数据保留政策。
 
-隐私政策网址：`https://wangdiandao.github.io/Panelot/`
+隐私政策网址：`https://wangdiandao.github.io/Panelot/privacy/`

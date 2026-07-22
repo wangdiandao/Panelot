@@ -8,12 +8,17 @@ All notable changes to Panelot are documented here.
 
 - Added a VitePress documentation site for user guides, development references, and the privacy
   policy, with local search and GitHub Pages deployment.
+- Added an English counterpart for every published Chinese documentation page and a build gate
+  that rejects missing or unmatched locale paths.
 
 ### Changed
 
 - Reorganized engineering documentation under stable semantic paths and clarified that
   user-uploaded file bytes are sent only to an approved target website, not as ordinary model
   attachments.
+- Replaced the documentation root privacy page with a product and documentation README, split the
+  privacy policy into Chinese and English routes, and linked both repository READMEs to the user
+  and development documentation.
 
 ## [0.4.4] - 2026-07-21
 

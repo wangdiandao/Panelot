@@ -36,11 +36,13 @@ pnpm dev
 
 ```bash
 pnpm docs:dev
+pnpm docs:i18n:check
 pnpm docs:build
 pnpm docs:preview
 ```
 
-`docs:build` 会执行完整渲染和内部链接校验；CI、Release 与 GitHub Pages 工作流都会运行它。
+`docs:i18n:check` 以中文页面路径为基准，检查 `docs/en/` 是否具有完全一致的英文页面集合。
+`docs:build` 会先执行该审查，再完成渲染和内部链接校验；CI、Release 与 GitHub Pages 工作流都会运行它。
 
 ### 文档写作约定
 
@@ -146,6 +148,7 @@ Dexie 数据库名为 `panelot_v1`，表定义在 `src/db/schema.ts`。0.1.0 数
 | ----------------------------- | --------------------------------------------- | -------------------------------------------------- |
 | `pnpm dev`                    | Chrome 开发模式与热更新                       | `dist/chrome-mv3-dev`                              |
 | `pnpm dev:edge`               | Edge 开发目标                                 | `dist/edge-mv3-dev`                                |
+| `pnpm docs:i18n:check`        | 检查中英文文档页面路径一致性                  | `docs/` 与 `docs/en/`                              |
 | `pnpm compile`                | 协议 manifest 与 TypeScript 严格检查          | Engine/content 协议、主源码及独立配置              |
 | `pnpm protocol:check`         | 校验语义 manifest 与 schema hash              | Engine 与 content-script 跨上下文契约              |
 | `pnpm protocol:write`         | 写入审核后的语义 manifest hash                | `src/messaging/protocol.ts`                        |
@@ -221,7 +224,8 @@ Shiki 使用 core 单例与按需语言，Mermaid、KaTeX、CodeMirror 和设置
 - 跨上下文协议只在 `src/messaging/protocol.ts` 定义；UI、后台和测试直接引用同一类型。
 - UI 设计 token 的事实来源是 `src/ui/styles/global.css`；快捷键事实来源是 `src/ui/shortcuts.ts`。
 - 内核 prompt 的事实来源是 `src/prompts/kernel.ts`，文档只保留结构摘要。
-- 用户指南、开发文档和隐私政策由 `docs/.vitepress/config.mts` 统一组织；新增或移动页面时必须同步导航并通过 `pnpm docs:build` 的死链接检查。
+- 中文文档是内容基准；英文文档在 `docs/en/` 保持相同相对路径和语义。新增、移动或删除中文页面时同步英文页面与两种语言的导航，并通过 `pnpm docs:build` 的路径和死链接检查。
+- 用户指南、开发文档和隐私政策由 `docs/.vitepress/config.mts` 统一组织；中文隐私政策在 `docs/privacy/index.md`，英文版在 `docs/en/privacy/index.md`。
 - 不写版本迭代或修复轮次注释，不保留注释掉的旧代码；临时脚本放 `scratch/`，任务结束清理临时报告和调试输出。
 
 仓库采用 MIT License，并维护 `CONTRIBUTING.md`、`SECURITY.md`、`CHANGELOG.md`、第三方归属与双语隐私政策。

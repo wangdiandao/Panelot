@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - docs/**
+      - README.md
+      - README.zh-CN.md
+      - scripts/check-docs-i18n.mjs
       - package.json
       - pnpm-lock.yaml
       - .github/workflows/pages.yml
