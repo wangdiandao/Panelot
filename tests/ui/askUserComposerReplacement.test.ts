@@ -57,8 +57,8 @@ afterEach(async () => {
   setLang('zh-CN');
 });
 
-describe('ask_user composer replacement', () => {
-  it('replaces the message textarea only for ask_user', async () => {
+describe('interaction composer replacement', () => {
+  it('replaces the message textarea for ask_user but keeps user_action above it', async () => {
     await renderWithInteraction({
       interactionId: 'ask-1',
       turnId: 'turn-1',
@@ -89,6 +89,29 @@ describe('ask_user composer replacement', () => {
 
     expect(container.querySelector('textarea')).not.toBeNull();
     expect(container.textContent).toContain('Complete the browser step.');
+  });
+
+  it('replaces the message textarea while waiting for a page change', async () => {
+    await renderWithInteraction({
+      interactionId: 'watch-1',
+      turnId: 'turn-1',
+      itemId: 'call-1',
+      requestedAt: 1,
+      request: {
+        kind: 'watch_page',
+        tabId: 7,
+        condition: { type: 'text', value: 'Ready' },
+        deadlineAt: Date.now() + 60_000,
+      },
+    });
+
+    expect(container.querySelector('textarea')).toBeNull();
+    expect(container.querySelector('[role="region"]')?.textContent).toContain(
+      'Waiting for a page change',
+    );
+    expect(container.textContent).toContain(
+      'Panelot will continue when the condition is met or the wait times out.',
+    );
   });
 });
 

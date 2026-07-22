@@ -67,7 +67,7 @@ A parent must exist in the same Thread or be `null` for a root. On load, `leafId
 
 ## 4. Session context
 
-`buildSessionContext` reverses the leaf-to-root path, omits tombstones and system notices, and produces provider-neutral messages plus the latest Turn context. Prompt assembly happens separately in `src/prompts/assemble.ts`.
+`buildSessionContext` reverses the leaf-to-root path, omits tombstones and engine metadata, and produces provider-neutral messages plus the latest Turn context. Prompt assembly happens separately in `src/prompts/assemble.ts`. The UI snapshot also excludes `turn_context` and `interaction_response`. Full JSON exports retain those records for recovery and audit, and import validation checks their payloads before restoring them.
 
 Before execution, `runTurn` stores normalized input and a versioned `RunEnvironmentSnapshot` with a SHA-256 integrity digest. The snapshot fixes the connection, model, parameters, complete system prompt, Skill content, provider tool schemas, execution bindings, permission policy, browser submission context, and capability or pricing metadata.
 

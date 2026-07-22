@@ -174,6 +174,8 @@ async function buildSessionContext(
 
 `buildSessionContext` 服务 LLM 请求组装，从当前 `leafId` 派生统一消息序列。UI snapshot 和会话导出复用同一棵 `parentId` 树及相同的回溯约束，但分别生成适合 UI/Markdown 的载荷，不共享这一函数的返回类型。
 
+`turn_context`、`approval_decision` 和 `interaction_response` 保留在会话树中，用于恢复与审计，但不进入 Provider 消息。UI snapshot 同样排除 `turn_context` 和 `interaction_response`；JSON 全量导出仍保留这些节点，导入预检会按各自 payload 结构校验后恢复。
+
 `runTurn` 在进入 `preparing` 前，把规范化输入与 `RunEnvironmentSnapshot` 放进同一事务。快照带格式版本和 SHA-256 完整性摘要，并固定以下内容：
 
 - 实际 connection、model、参数和完整 system prompt；

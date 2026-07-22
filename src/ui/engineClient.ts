@@ -837,6 +837,9 @@ export class EngineSession {
                 }
               : it,
           ),
+          pendingInteractions: st.pendingInteractions.filter(
+            (interaction) => interaction.itemId !== ev.itemId,
+          ),
         }));
         break;
       }

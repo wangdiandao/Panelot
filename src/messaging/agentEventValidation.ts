@@ -10,6 +10,7 @@ import {
   type AgentEvent,
   type InteractionRequestPayload,
   type RunRecoveryState,
+  type SnapshotItemKind,
   type ThreadStreamCursor,
   isKnownAgentEventType,
 } from './protocol';
@@ -78,6 +79,15 @@ const RECOVERY_STATE_CATALOG = {
   paused_uncertain: true,
   interrupted: true,
 } as const satisfies Record<RunRecoveryState['state'], true>;
+
+const SNAPSHOT_ITEM_KIND_CATALOG = {
+  user_message: true,
+  assistant_message: true,
+  tool_call: true,
+  tool_result: true,
+  approval_decision: true,
+  system_notice: true,
+} as const satisfies Record<SnapshotItemKind, true>;
 
 const EVENT_TYPE_PATTERN = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*$/u;
 
@@ -435,19 +445,7 @@ const snapshotItem: Check = (value, path) =>
   recordCheck(value, path, (item, current) =>
     first(
       field(item, 'nodeId', nonEmptyString, current),
-      field(
-        item,
-        'kind',
-        oneOf([
-          'user_message',
-          'assistant_message',
-          'tool_call',
-          'tool_result',
-          'approval_decision',
-          'system_notice',
-        ]),
-        current,
-      ),
+      field(item, 'kind', oneOf(Object.keys(SNAPSHOT_ITEM_KIND_CATALOG)), current),
       field(item, 'ts', nonNegativeInteger, current),
       requiredField(item, 'payload', current),
       optionalField(

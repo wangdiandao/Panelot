@@ -47,7 +47,9 @@
 | **Turn**   | 一轮完整交换：一条用户输入 → 若干 LLM 调用与工具执行 → 停止      | `turn:start` → n 个 Item → `turn:complete`；是中断（interrupt）与插话（steer）的作用单位        |
 | **Item**   | 轮内的原子产出：一条助手消息、一次工具调用、一次审批、一个推理块 | 统一三段式 `item:start` → `item:delta`* → `item:complete`                                       |
 
-Item 类型（`ItemKind`）：`user_message` / `assistant_message` / `reasoning` / `tool_call` / `approval` / `system_notice`。协议 Item 与落库 NodeType 是两层概念：Node 还包含 `tool_result` / `approval_decision` / `turn_context` 等只落库、不走事件流的类型，详见[数据模型](./data-model.md) §2.2。
+Item 类型（`ItemKind`）：`user_message` / `assistant_message` / `reasoning` / `tool_call` / `approval` / `system_notice`。协议 Item 与落库 NodeType 是两层概念：Node 还包含 `tool_result` / `approval_decision` / `interaction_response` / `turn_context` 等只落库、不走事件流的类型，详见[数据模型](./data-model.md) §2.2。
+
+重连 snapshot 是落库路径的显式投影，不会把 `turn_context` 或 `interaction_response` 这类内部元数据发给 UI。投影函数和 snapshot 运行时目录都对联合类型做穷尽检查；新增 NodeType 或 snapshot kind 时，遗漏的映射会在编译或协议门禁中失败。
 
 ## 3. Port 消息协议
 

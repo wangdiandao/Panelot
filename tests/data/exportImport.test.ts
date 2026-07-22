@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { PanelotDB } from '../../src/db/schema';
 import { ThreadTree } from '../../src/db/tree';
+import type { InteractionResponsePayload } from '../../src/db/types';
 import { exportAll, exportThreadMarkdown, validateImportBundle } from '../../src/data/exportImport';
 
 // In-memory chrome.storage.local for settings round-trip.
@@ -82,6 +83,94 @@ describe('exportAll (docs/development/index.md §5)', () => {
     broken.nodes[0]!.parentId = 'missing-parent';
     await expect(validateImportBundle(target, broken)).rejects.toThrow(/parent/);
     expect(await target.threads.count()).toBe(0);
+  });
+
+  it('validates every persisted interaction shape in an exported thread', async () => {
+    const tree = new ThreadTree(db);
+    const thread = await tree.createThread({ title: 'interaction history' });
+    const payloads: InteractionResponsePayload[] = [
+      {
+        interactionId: 'ask-1',
+        request: {
+          kind: 'ask_user',
+          questions: [
+            {
+              id: 'choice',
+              question: 'Choose one.',
+              options: [{ value: 'A', label: 'Option A' }],
+            },
+          ],
+        },
+        response: { kind: 'submit', value: { answers: [{ id: 'choice', value: 'A' }] } },
+        respondedAt: 10,
+      },
+      {
+        interactionId: 'action-1',
+        request: { kind: 'user_action', instruction: 'Complete the browser step.', tabId: 7 },
+        response: { kind: 'cancel', note: 'Skipped.' },
+        respondedAt: 11,
+      },
+      {
+        interactionId: 'watch-1',
+        request: {
+          kind: 'watch_page',
+          tabId: 7,
+          condition: { type: 'text', value: 'Ready' },
+          deadlineAt: 20,
+        },
+        response: { kind: 'timeout', value: { observed: false } },
+        respondedAt: 12,
+      },
+      {
+        interactionId: 'download-1',
+        request: {
+          kind: 'watch_page',
+          tabId: 7,
+          condition: { type: 'download', downloadId: 9 },
+          deadlineAt: 21,
+        },
+        response: { kind: 'submit', value: null },
+        respondedAt: 13,
+      },
+      {
+        interactionId: 'schedule-1',
+        request: { kind: 'schedule', resumeAt: 30, reason: 'Wait for the scheduled time.' },
+        response: { kind: 'submit', value: { resumed: true } },
+        respondedAt: 14,
+      },
+      {
+        interactionId: 'mcp-1',
+        request: {
+          kind: 'mcp_elicitation',
+          serverId: 'server-1',
+          message: 'Choose a format.',
+          requestedSchema: { type: 'object', properties: { format: { type: 'string' } } },
+        },
+        response: { kind: 'cancel' },
+        respondedAt: 15,
+      },
+    ];
+    for (const payload of payloads) {
+      await tree.appendNode(thread.id, { type: 'interaction_response', payload });
+    }
+    const bundle = await exportAll(db);
+    const target = new PanelotDB(`export-interaction-target-${n++}`);
+
+    await expect(validateImportBundle(target, bundle)).resolves.toMatchObject({
+      report: { threadCount: 1, nodeCount: payloads.length },
+    });
+
+    const invalid = structuredClone(bundle);
+    const invalidNode = invalid.nodes.find(
+      (node) => (node.payload as InteractionResponsePayload).request.kind === 'ask_user',
+    );
+    const invalidRequest = (invalidNode!.payload as InteractionResponsePayload)
+      .request as unknown as Record<string, unknown>;
+    delete invalidRequest.questions;
+    await expect(validateImportBundle(target, invalid)).rejects.toThrow(
+      /IMPORT_INTERACTION_QUESTIONS/,
+    );
+    await target.delete();
   });
 
   it('validates persisted Anthropic thinking replay state', async () => {

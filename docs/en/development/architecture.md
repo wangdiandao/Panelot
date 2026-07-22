@@ -20,7 +20,7 @@ Background service worker
   -> chrome.debugger -> L2 CDP tools
 ```
 
-The background engine is the only authority that mutates conversation, approval, and tool-execution state. Several UIs may subscribe to one Thread. They combine persisted snapshots with live events and can reconnect without owning the task.
+The background engine is the only authority that mutates conversation, approval, and tool-execution state. Several UIs may subscribe to one Thread. They combine persisted snapshots with live events and can reconnect without owning the task. A reconnect snapshot is an explicit projection of the persisted path. Internal `turn_context` and `interaction_response` metadata never crosses into the UI item list, and exhaustive type checks guard the projection when node types change.
 
 ## 2. Thread, Turn, and Item
 

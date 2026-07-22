@@ -7,7 +7,7 @@
  *
  * Output shape:
  *  1. Walk leaf → root (tombstones skipped), reverse to linear order.
- *  2. system_notice nodes never enter LLM history (UI-only).
+ *  2. Metadata and UI-only nodes never enter LLM history.
  */
 
 import type { ContentBlock } from '../messaging/protocol';
@@ -180,11 +180,14 @@ function appendNodeAsMessage(
       });
       break;
     }
-    // turn_context / approval_decision / system_notice: metadata, not LLM messages.
+    // These nodes record engine or UI state, not provider conversation messages.
     case 'turn_context':
     case 'approval_decision':
+    case 'interaction_response':
     case 'system_notice':
       break;
+    default:
+      throw new Error(node.type satisfies never);
   }
 }
 

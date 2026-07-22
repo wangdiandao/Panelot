@@ -4,6 +4,13 @@ All notable changes to Panelot are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Cleared completed page-change waits from the conversation UI and showed the active wait in place
+  of the composer instead of leaving a separate card above a disabled input.
+- Prevented persisted interaction-response metadata from corrupting reconnect snapshots, and
+  restored export/import validation for conversations that contain it.
+
 ## [0.4.6] - 2026-07-22
 
 ### Added

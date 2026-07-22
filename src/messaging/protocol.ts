@@ -15,7 +15,7 @@ import type { ExecuteResult } from '../tools/content/protocol';
 export const PROTOCOL_VERSION = 1;
 export const ENGINE_PROTOCOL = 'panelot/engine-v1' as const;
 export const ENGINE_SCHEMA_HASH =
-  'f90beca3a27549f7b59649cd38792cda76fb041ed12ecd85e23dcd35312c220e' as const;
+  '3c75f629d386e586c48759202d7fd8ffb306ffd204da862b1602bf560695fcc9' as const;
 export const CONTENT_SCRIPT_PROTOCOL = 'panelot/content-v1' as const;
 export const CONTENT_SCRIPT_SCHEMA_HASH =
   '936ac400c83589590f5416f69f16ab73ac022d2284f3eb7dacaed1bc015acde0' as const;
@@ -216,15 +216,17 @@ export interface TurnOverrides {
 // ---------------------------------------------------------------------------
 
 /** Rendered form of a node for UI consumption (derived via buildSessionContext). */
+export type SnapshotItemKind =
+  | 'user_message'
+  | 'assistant_message'
+  | 'tool_call'
+  | 'tool_result'
+  | 'approval_decision'
+  | 'system_notice';
+
 export interface SnapshotItem {
   nodeId: string;
-  kind:
-    | 'user_message'
-    | 'assistant_message'
-    | 'tool_call'
-    | 'tool_result'
-    | 'approval_decision'
-    | 'system_notice';
+  kind: SnapshotItemKind;
   ts: number;
   payload: unknown;
   /** Sibling info for the branch switcher: [index, count] when count > 1. */

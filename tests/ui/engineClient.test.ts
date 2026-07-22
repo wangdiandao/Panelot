@@ -422,6 +422,65 @@ describe('EngineSession lifecycle', () => {
     }
   });
 
+  it('clears a pending interaction when its tool item completes', () => {
+    const transport = new FakeTransport();
+    const session = new EngineSession(() => transport);
+    session.start();
+    try {
+      session.openThread('thread-a');
+      const subscribe = transport.sent.find(
+        (op) => op.type === 'thread.subscribe' && op.threadId === 'thread-a',
+      )!;
+      const initial = snapshot('thread-a', 25, 1);
+      transport.emit({
+        type: 'initialized',
+        submissionId: subscribe.submissionId,
+        protocol: ENGINE_PROTOCOL,
+        schemaHash: ENGINE_SCHEMA_HASH,
+        snapshot: initial,
+        stream: initial.stream,
+      });
+      transport.emit({
+        type: 'interaction.request',
+        threadId: 'thread-a',
+        turnId: 'turn-a',
+        interactionId: 'interaction-a',
+        itemId: 'tool-a',
+        request: {
+          kind: 'watch_page',
+          tabId: 7,
+          condition: { type: 'text', value: 'Ready' },
+          deadlineAt: Date.now() + 60_000,
+        },
+        stream: { threadId: 'thread-a', epoch: 25, sequence: 2 },
+      });
+      transport.emit({
+        type: 'interaction.request',
+        threadId: 'thread-a',
+        turnId: 'turn-a',
+        interactionId: 'interaction-b',
+        itemId: 'tool-b',
+        request: { kind: 'user_action', instruction: 'Complete the browser step.' },
+        stream: { threadId: 'thread-a', epoch: 25, sequence: 3 },
+      });
+      expect(session.store.getState().pendingInteractions).toHaveLength(2);
+
+      transport.emit({
+        type: 'item.complete',
+        threadId: 'thread-a',
+        itemId: 'tool-a',
+        result: { ok: true },
+        stream: { threadId: 'thread-a', epoch: 25, sequence: 4 },
+      });
+
+      expect(session.store.getState().pendingInteractions).toMatchObject([
+        { interactionId: 'interaction-b', itemId: 'tool-b' },
+      ]);
+    } finally {
+      session.stop();
+    }
+  });
+
   it('preserves a live tool when a reconnect snapshot has only persisted its call', async () => {
     vi.useFakeTimers();
     const transports: FakeTransport[] = [];

@@ -33,6 +33,15 @@ describe('buildSessionContext basics', () => {
     await tree.appendNode(t.id, { type: 'turn_context', payload: turnCtx('turn1') });
     await tree.appendNode(t.id, { type: 'user_message', payload: msg('hello') });
     await tree.appendNode(t.id, { type: 'assistant_message', payload: assistant('hi there') });
+    await tree.appendNode(t.id, {
+      type: 'interaction_response',
+      payload: {
+        interactionId: 'interaction-1',
+        request: { kind: 'user_action', instruction: 'Continue.' },
+        response: { kind: 'submit', value: null },
+        respondedAt: 10,
+      },
+    });
     await tree.appendNode(t.id, { type: 'system_notice', payload: { text: 'paused' } });
     const leaf = await tree.appendNode(t.id, { type: 'user_message', payload: msg('next') });
 

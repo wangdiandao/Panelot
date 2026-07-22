@@ -64,9 +64,11 @@ Reasoning, tools, intermediate text, and the final response remain in one assist
 
 An approval action bar replaces the composer and takes focus. It keeps the target, risk summary, and primary decisions compact, while full parameters expand on demand. `Y`, `S`, `A`, and `N` mean allow once, browser session, always on site, and deny. `Esc` denies and stops. Several approvals show a queue position. A five-minute timeout closes as denied.
 
-### 4.4 User questions
+### 4.4 Interaction replacement area
 
-`ask_user` temporarily replaces the composer with one structured question at a time, numbered single-column options, recommendation marker, progress, navigation, and free-form input. Other interaction types remain above the normal composer.
+`ask_user` temporarily replaces the composer with one structured question at a time, numbered single-column options, recommendation marker, progress, navigation, and free-form input.
+
+`watch_page` also replaces the composer while it waits for a page condition. The matching tool completion event removes the waiting state and restores the composer when the condition is met or the wait times out. Other interaction types remain above the normal composer.
 
 ### 4.5 Run and stop
 

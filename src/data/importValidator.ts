@@ -1,4 +1,4 @@
-import type { SkillRecord } from '../db/types';
+import type { NodeType, SkillRecord } from '../db/types';
 import { normalizeEndpointUrl, validateEndpointUrl } from '../security/endpointUrl';
 import { unsealSecretWithRawKey } from '../security/secretStore';
 import {
@@ -18,6 +18,17 @@ const PERMISSION_POLICIES = ['always', 'untrusted', 'auto'];
 const LEGACY_APPROVAL_POLICIES = ['always', 'untrusted', 'on-request', 'never', 'granular', 'auto'];
 const LEGACY_CAPABILITY_SCOPES = ['read-only', 'same-origin-write', 'cross-origin', 'full'];
 const TOOL_LEVELS = ['L0', 'L1', 'L2', 'mcp'];
+
+const NODE_TYPE_CATALOG = {
+  user_message: true,
+  assistant_message: true,
+  tool_call: true,
+  tool_result: true,
+  approval_decision: true,
+  interaction_response: true,
+  turn_context: true,
+  system_notice: true,
+} as const satisfies Record<NodeType, true>;
 
 type SecretMode = 'sanitized' | 'materialized';
 type JsonRecord = Record<string, unknown>;
@@ -306,7 +317,8 @@ function validateThread(
 
 function validateNodePayload(type: unknown, value: unknown): void {
   const payload = object(value, 'IMPORT_NODE_PAYLOAD');
-  switch (type) {
+  const nodeType = parseNodeType(type);
+  switch (nodeType) {
     case 'user_message':
       exact(payload, ['content', 'attachedContext', 'steered'], 'IMPORT_USER_PAYLOAD');
       contentBlocks(payload.content, 'IMPORT_USER_CONTENT');
@@ -371,6 +383,13 @@ function validateNodePayload(type: unknown, value: unknown): void {
       approvalDecision(payload.decision);
       timestamp(payload.decidedAt, 'IMPORT_APPROVAL_TIME');
       return;
+    case 'interaction_response':
+      exact(payload, ['interactionId', 'request', 'response', 'respondedAt'], 'IMPORT_INTERACTION');
+      requiredString(payload.interactionId, 'IMPORT_INTERACTION_ID');
+      interactionRequest(payload.request);
+      interactionResponse(payload.response);
+      timestamp(payload.respondedAt, 'IMPORT_INTERACTION_TIME');
+      return;
     case 'turn_context':
       exact(
         payload,
@@ -408,8 +427,15 @@ function validateNodePayload(type: unknown, value: unknown): void {
       );
       return;
     default:
-      throw new Error('IMPORT_NODE_TYPE');
+      throw new Error(nodeType satisfies never);
   }
+}
+
+function parseNodeType(value: unknown): NodeType {
+  if (typeof value !== 'string' || !Object.hasOwn(NODE_TYPE_CATALOG, value)) {
+    throw new Error('IMPORT_NODE_TYPE');
+  }
+  return value as NodeType;
 }
 
 function validateSkill(value: unknown): void {
@@ -1063,6 +1089,96 @@ function approvalDecision(value: unknown): void {
       ['accept', 'acceptForSession', 'acceptForSite', 'cancel'],
       'IMPORT_APPROVAL_DECISION',
     );
+  }
+}
+
+function interactionRequest(value: unknown): void {
+  const request = object(value, 'IMPORT_INTERACTION_REQUEST');
+  switch (request.kind) {
+    case 'ask_user':
+      exact(request, ['kind', 'questions'], 'IMPORT_INTERACTION_REQUEST');
+      for (const candidate of array(
+        request.questions,
+        MAX_ASSETS,
+        'IMPORT_INTERACTION_QUESTIONS',
+      )) {
+        const question = object(candidate, 'IMPORT_INTERACTION_QUESTION');
+        exact(question, ['id', 'question', 'options'], 'IMPORT_INTERACTION_QUESTION');
+        requiredString(question.id, 'IMPORT_INTERACTION_QUESTION_ID');
+        requiredString(question.question, 'IMPORT_INTERACTION_QUESTION_TEXT', true);
+        if (question.options !== undefined) {
+          for (const optionCandidate of array(
+            question.options,
+            MAX_ASSETS,
+            'IMPORT_INTERACTION_OPTIONS',
+          )) {
+            const option = object(optionCandidate, 'IMPORT_INTERACTION_OPTION');
+            exact(option, ['value', 'label', 'description'], 'IMPORT_INTERACTION_OPTION');
+            requiredString(option.value, 'IMPORT_INTERACTION_OPTION_VALUE', true);
+            requiredString(option.label, 'IMPORT_INTERACTION_OPTION_LABEL', true);
+            optionalString(option.description, 'IMPORT_INTERACTION_OPTION_DESCRIPTION', true);
+          }
+        }
+      }
+      return;
+    case 'user_action':
+      exact(request, ['kind', 'instruction', 'tabId'], 'IMPORT_INTERACTION_REQUEST');
+      requiredString(request.instruction, 'IMPORT_INTERACTION_INSTRUCTION', true);
+      if (request.tabId !== undefined) nonnegativeInteger(request.tabId, 'IMPORT_INTERACTION_TAB');
+      return;
+    case 'watch_page': {
+      exact(request, ['kind', 'tabId', 'condition', 'deadlineAt'], 'IMPORT_INTERACTION_REQUEST');
+      nonnegativeInteger(request.tabId, 'IMPORT_INTERACTION_TAB');
+      timestamp(request.deadlineAt, 'IMPORT_INTERACTION_DEADLINE');
+      const condition = object(request.condition, 'IMPORT_INTERACTION_CONDITION');
+      if (condition.type === 'download') {
+        exact(condition, ['type', 'downloadId'], 'IMPORT_INTERACTION_CONDITION');
+        nonnegativeInteger(condition.downloadId, 'IMPORT_INTERACTION_DOWNLOAD');
+      } else {
+        exact(condition, ['type', 'value'], 'IMPORT_INTERACTION_CONDITION');
+        enumValue(condition.type, ['text', 'text_gone', 'url'], 'IMPORT_INTERACTION_CONDITION');
+        requiredString(condition.value, 'IMPORT_INTERACTION_CONDITION_VALUE', true);
+      }
+      return;
+    }
+    case 'schedule':
+      exact(request, ['kind', 'resumeAt', 'reason'], 'IMPORT_INTERACTION_REQUEST');
+      timestamp(request.resumeAt, 'IMPORT_INTERACTION_RESUME');
+      requiredString(request.reason, 'IMPORT_INTERACTION_REASON', true);
+      return;
+    case 'mcp_elicitation':
+      exact(
+        request,
+        ['kind', 'serverId', 'message', 'requestedSchema'],
+        'IMPORT_INTERACTION_REQUEST',
+      );
+      requiredString(request.serverId, 'IMPORT_INTERACTION_SERVER');
+      requiredString(request.message, 'IMPORT_INTERACTION_MESSAGE', true);
+      object(request.requestedSchema, 'IMPORT_INTERACTION_SCHEMA');
+      assertJsonValue(request.requestedSchema, true);
+      return;
+    default:
+      throw new Error('IMPORT_INTERACTION_REQUEST');
+  }
+}
+
+function interactionResponse(value: unknown): void {
+  const response = object(value, 'IMPORT_INTERACTION_RESPONSE');
+  switch (response.kind) {
+    case 'submit':
+      exact(response, ['kind', 'value'], 'IMPORT_INTERACTION_RESPONSE');
+      requiredJsonValue(response, 'value', 'IMPORT_INTERACTION_RESPONSE_VALUE');
+      return;
+    case 'cancel':
+      exact(response, ['kind', 'note'], 'IMPORT_INTERACTION_RESPONSE');
+      optionalString(response.note, 'IMPORT_INTERACTION_RESPONSE_NOTE', true);
+      return;
+    case 'timeout':
+      exact(response, ['kind', 'value'], 'IMPORT_INTERACTION_RESPONSE');
+      if (response.value !== undefined) assertJsonValue(response.value, true);
+      return;
+    default:
+      throw new Error('IMPORT_INTERACTION_RESPONSE');
   }
 }
 

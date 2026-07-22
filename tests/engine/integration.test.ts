@@ -478,6 +478,50 @@ describe('engine integration (Op → events → DB)', () => {
     expect(snapshot!.activeTurn).toBeNull();
   });
 
+  it('reconnects after persisted interaction metadata without emitting a protocol error', async () => {
+    const { host } = buildEngine();
+    const client = connect(host);
+    const threadId = await initThread(client);
+    const tree = new ThreadTree(db);
+    await tree.appendNode(threadId, {
+      type: 'tool_call',
+      payload: { itemId: 'ask-1', toolName: 'ask_user', params: {}, level: 'builtin' },
+    });
+    await tree.appendNode(threadId, {
+      type: 'interaction_response',
+      payload: {
+        interactionId: 'interaction-1',
+        request: {
+          kind: 'ask_user',
+          questions: [{ id: 'choice', question: 'Choose one.' }],
+        },
+        response: { kind: 'submit', value: { answers: [{ id: 'choice', value: 'A' }] } },
+        respondedAt: 10,
+      },
+    });
+    await tree.appendNode(threadId, {
+      type: 'tool_result',
+      payload: {
+        itemId: 'ask-1',
+        ok: true,
+        contentForLlm: [{ type: 'text', text: 'A' }],
+        provenance: 'user',
+      },
+    });
+    client.events.length = 0;
+
+    client.post({ type: 'thread.subscribe', threadId });
+    const initialized = await client.waitFor('initialized');
+
+    expect(initialized.snapshot?.items.map((item) => item.kind)).toEqual([
+      'tool_call',
+      'tool_result',
+    ]);
+    expect(
+      client.events.some((event) => event.type === 'error' && event.code === 'protocol_mismatch'),
+    ).toBe(false);
+  });
+
   it('does not expose tools when the selected model explicitly disables tool use', async () => {
     const resolver: ProviderResolver = {
       resolve: async () => ({

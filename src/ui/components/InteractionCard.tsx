@@ -13,9 +13,10 @@ import { ToggleGroup, ToggleGroupItem } from './ui/toggle-group';
 interface Props {
   interaction: PendingInteraction;
   onResponse: (interactionId: string, response: InteractionResponse) => void;
+  placement?: 'composer' | 'inline';
 }
 
-export function InteractionCard({ interaction, onResponse }: Props) {
+export function InteractionCard({ interaction, onResponse, placement = 'inline' }: Props) {
   const request = interaction.request;
 
   if (request.kind === 'ask_user') {
@@ -35,6 +36,7 @@ export function InteractionCard({ interaction, onResponse }: Props) {
       interactionId={interaction.interactionId}
       request={request}
       onResponse={onResponse}
+      placement={placement}
     />
   );
 }
@@ -43,12 +45,14 @@ interface InteractionRequestCardProps {
   interactionId: string;
   request: Exclude<PendingInteraction['request'], { kind: 'ask_user' }>;
   onResponse: (interactionId: string, response: InteractionResponse) => void;
+  placement: 'composer' | 'inline';
 }
 
 function InteractionRequestCard({
   interactionId,
   request,
   onResponse,
+  placement,
 }: InteractionRequestCardProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [structuredValue, setStructuredValue] = useState('{}');
@@ -71,7 +75,16 @@ function InteractionRequestCard({
   };
 
   return (
-    <Card ref={ref} tabIndex={-1} role="region" className="min-w-0 overflow-hidden">
+    <Card
+      ref={ref}
+      tabIndex={-1}
+      role="region"
+      className={
+        placement === 'composer'
+          ? 'mx-3 mb-3 min-w-0 overflow-hidden shadow-soft sm:mx-4 sm:mb-4'
+          : 'min-w-0 overflow-hidden'
+      }
+    >
       <CardHeader>
         <CardTitle>{interactionTitle(request.kind)}</CardTitle>
       </CardHeader>

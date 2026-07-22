@@ -15,6 +15,7 @@ import type {
   PendingApproval,
   PendingInteraction,
   SnapshotItem,
+  SnapshotItemKind,
   ThreadSnapshot,
   TurnOverrides,
   UserInput,
@@ -2404,7 +2405,10 @@ export class RealEngineCore {
     if (leafId) {
       const ctx = await buildSessionContext(this.tree, threadId, leafId);
       for (const node of ctx.path) {
-        if (node.type === 'turn_context') continue;
+        if (node.type === 'interaction_response' || node.type === 'turn_context') continue;
+        // This assignment is exhaustive: adding another NodeType fails compilation
+        // until its snapshot visibility is decided explicitly.
+        const kind: SnapshotItemKind = node.type;
         // Branch counters use LOGICAL siblings (turn_context is invisible
         // structure — a fork's branch physically hangs under its own
         // turn_context node); only message nodes can branch.
@@ -2412,7 +2416,7 @@ export class RealEngineCore {
         const siblings = branchable ? await this.tree.getLogicalSiblings(threadId, node.id) : [];
         items.push({
           nodeId: node.id,
-          kind: node.type as SnapshotItem['kind'],
+          kind,
           ts: node.ts,
           payload: node.payload,
           branch:

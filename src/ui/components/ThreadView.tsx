@@ -298,11 +298,13 @@ export function ThreadView({
   const canOpenErrorSettings = Boolean(errorView?.opensSettings && onOpenSettings);
   const canRetryError = Boolean(state.lastError?.retryable && state.lastInput);
   const reconnecting = !state.reloadRequired && !state.connected;
-  const askUserInteraction = state.pendingInteractions.find(
-    (interaction) => interaction.request.kind === 'ask_user',
+  const composerInteraction = state.pendingInteractions.find(
+    (interaction) =>
+      interaction.request.kind === 'ask_user' || interaction.request.kind === 'watch_page',
   );
   const cardInteractions = state.pendingInteractions.filter(
-    (interaction) => interaction.request.kind !== 'ask_user',
+    (interaction) =>
+      interaction.request.kind !== 'ask_user' && interaction.request.kind !== 'watch_page',
   );
   const activeApproval = state.pendingApprovals[0];
   const showOnboarding =
@@ -436,11 +438,12 @@ export function ThreadView({
             queuePosition={{ index: 1, total: state.pendingApprovals.length }}
             onDecision={onDecision}
           />
-        ) : askUserInteraction ? (
+        ) : composerInteraction ? (
           <InteractionCard
-            key={askUserInteraction.interactionId}
-            interaction={askUserInteraction}
+            key={composerInteraction.interactionId}
+            interaction={composerInteraction}
             onResponse={onInteractionResponse}
+            placement="composer"
           />
         ) : !providerConfigured ? (
           showOnboarding ? null : (

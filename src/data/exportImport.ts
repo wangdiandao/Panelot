@@ -202,8 +202,13 @@ export async function exportThreadMarkdown(db: PanelotDB, threadId: string): Pro
         lines.push(`> ${p.ok ? '✓' : '✗'} ${text.slice(0, 500)}`, '');
         break;
       }
-      default:
+      case 'approval_decision':
+      case 'interaction_response':
+      case 'turn_context':
+      case 'system_notice':
         break;
+      default:
+        throw new Error(node.type satisfies never);
     }
   }
   return lines.join('\n');
