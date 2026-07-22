@@ -14,6 +14,8 @@ At Turn admission, one transaction stores `turn_context`, the user message, and 
 
 For every tool call, the engine prepares a stable node identity, asks Gatekeeper, persists any approval request, validates the decision, executes the tool, and stores a result with the next Run state. Tool errors become error results that the model can use to correct its next action.
 
+Before persistence, the engine replaces empty or session-duplicate provider call IDs with unique IDs. Interleaved persistence of parallel calls and results still rebuilds one assistant tool-call batch. Tool calls paired with a non-`tool_use` stop reason are protocol errors and fail before any tool side effect.
+
 Interrupt aborts the current fetch and tool, then detaches L2 tools. Stored nodes remain, and the Turn ends as interrupted. Provider `tool_use` continues the loop; final `end`, `max_tokens`, and `content_filter` stop reasons enter the Run and UI. `turn.complete` is emitted only after required writes finish.
 
 Title generation starts in parallel on the first Turn. It writes a first-line fallback before a best-effort task-model call. Follow-up suggestions are not currently implemented.
@@ -39,6 +41,8 @@ Every local, browser, MCP, or built-in tool registers one descriptor containing 
 Runtime validation errors become tool results for model correction. Long operations can report progress through `onUpdate` and `item.delta`.
 
 `ToolRegistry.register()` is the capability metadata boundary. It normalizes and deep-freezes schema, security metadata, provenance, trust, and execution binding. MCP bindings include server, endpoint, and authentication identity. Provider schemas and Run tool catalogs derive from the same descriptor.
+
+Model capability metadata is part of the Run environment. An explicit `toolUse:false` binds an empty Registry for both new and recovered Runs. `vision:false` removes `screenshot` from a new Run catalog and rejects existing image history before the provider call.
 
 Descriptor digests cover schema, safety metadata, and binding. Recovery obtains one atomic implementation-and-descriptor generation so MCP reconnect cannot replace a tool between digest and execution.
 

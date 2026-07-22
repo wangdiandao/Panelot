@@ -4,6 +4,30 @@ All notable changes to Panelot are documented here.
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-07-22
+
+### Added
+
+- Added a manual GitHub Release update check to Settings > About, with browser-specific download
+  links and clear instructions for reloading a developer-mode installation.
+
+### Changed
+
+- GitHub Release packages and SBOMs now use stable filenames without embedded version numbers.
+- Provider verification now completes an echo tool call and tool-result round trip, and it can use
+  manually described models when endpoint discovery is unavailable.
+- Anthropic reasoning now uses adaptive effort by default, preserves signed and redacted thinking
+  state across tool turns, and offers a compatibility option for legacy fixed thinking budgets.
+
+### Fixed
+
+- Normalized empty and duplicate Provider tool-call IDs before persistence, kept interleaved
+  parallel calls in one assistant turn, and rejected inconsistent stop reasons before execution.
+- Enforced explicit model capability metadata by removing tools for chat-only models, rejecting
+  image history for non-vision models, and omitting reasoning effort when reasoning is disabled.
+- Applied the single-tool compatibility option to Anthropic requests as well as OpenAI-compatible
+  endpoints.
+
 ## [0.4.5] - 2026-07-22
 
 ### Added
@@ -215,7 +239,8 @@ All notable changes to Panelot are documented here.
 - Plugin archives reject traversal, symlinks, executable payloads, and archive bombs.
 - Provider error details are sanitized before display or persistence.
 
-[Unreleased]: https://github.com/wangdiandao/Panelot/compare/v0.4.5...HEAD
+[Unreleased]: https://github.com/wangdiandao/Panelot/compare/v0.4.6...HEAD
+[0.4.6]: https://github.com/wangdiandao/Panelot/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/wangdiandao/Panelot/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/wangdiandao/Panelot/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/wangdiandao/Panelot/compare/v0.4.2...v0.4.3

@@ -21,6 +21,8 @@ export interface QuirkFlags {
   thinkTagReasoning?: boolean;
   /** Force single tool call per response. */
   noParallelToolCalls?: boolean;
+  /** Use Anthropic's legacy fixed thinking budget instead of adaptive thinking. */
+  anthropicManualThinking?: boolean;
   maxTokensField?: 'max_tokens' | 'max_completion_tokens';
   /** Endpoint rejects system role — convert to leading user message. */
   noSystemRole?: boolean;
@@ -132,9 +134,41 @@ export interface FinalToolCall {
   parseError?: string;
 }
 
+export type AnthropicThinkingBlock =
+  | { type: 'thinking'; thinking: string; signature: string }
+  | { type: 'redacted_thinking'; data: string };
+
+export type ProviderAssistantState = {
+  kind: 'anthropic';
+  thinkingBlocks: AnthropicThinkingBlock[];
+};
+
+/**
+ * Provider-issued tool call IDs are opaque, but conversation history requires
+ * each one to be non-empty and unique for the whole request path.
+ */
+export function withUniqueToolCallIds(
+  calls: readonly FinalToolCall[],
+  reservedIds: Iterable<string> = [],
+): FinalToolCall[] {
+  const used = new Set(reservedIds);
+  return calls.map((call) => {
+    let id = call.id;
+    if (!id || used.has(id)) {
+      do {
+        id = crypto.randomUUID();
+      } while (used.has(id));
+    }
+    used.add(id);
+    return id === call.id ? call : { ...call, id };
+  });
+}
+
 export interface FinalResult {
   message: ContentBlock[];
   reasoning?: string;
+  /** Provider-specific assistant state that must be replayed unchanged. */
+  providerState?: ProviderAssistantState;
   toolCalls: FinalToolCall[];
   usage: Usage;
   stopReason: ProviderStopReason;
@@ -156,7 +190,6 @@ export interface ProviderStream extends AsyncIterable<StreamEvent> {
 export interface ProviderAdapter {
   stream(req: StreamRequest): ProviderStream;
   listModels?(): Promise<string[]>;
-  verify(): Promise<VerifyResult>;
 }
 
 // ---------------------------------------------------------------------------

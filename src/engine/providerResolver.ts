@@ -214,6 +214,7 @@ export class SettingsProviderResolver implements ProviderResolver {
     const modelEntry = connections
       .find((connection) => connection.id === connectionId)
       ?.models?.find((model) => model.id === modelId);
+    if (modelEntry?.capabilities.reasoning === false) delete params.reasoningEffort;
     const globalSettings = await SettingsStore.global.get();
     return {
       provider,

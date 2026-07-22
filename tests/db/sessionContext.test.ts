@@ -79,6 +79,44 @@ describe('buildSessionContext basics', () => {
     expect(result).toMatchObject({ role: 'tool_result', toolCallId: 'call1', isError: false });
   });
 
+  it('keeps interleaved parallel calls on one assistant turn', async () => {
+    const t = await tree.createThread({});
+    await tree.appendNode(t.id, { type: 'user_message', payload: msg('compare') });
+    await tree.appendNode(t.id, { type: 'assistant_message', payload: assistant('') });
+    await tree.appendNode(t.id, {
+      type: 'tool_call',
+      payload: { itemId: 'call-a', toolName: 'read', params: { key: 'a' }, level: 'L0' },
+    });
+    await tree.appendNode(t.id, {
+      type: 'tool_result',
+      payload: { itemId: 'call-a', ok: true, contentForLlm: [{ type: 'text', text: 'A' }] },
+    });
+    await tree.appendNode(t.id, {
+      type: 'tool_call',
+      payload: { itemId: 'call-b', toolName: 'read', params: { key: 'b' }, level: 'L0' },
+    });
+    const leaf = await tree.appendNode(t.id, {
+      type: 'tool_result',
+      payload: { itemId: 'call-b', ok: true, contentForLlm: [{ type: 'text', text: 'B' }] },
+    });
+
+    const context = await buildSessionContext(tree, t.id, leaf.id);
+
+    expect(context.messages.map((message) => message.role)).toEqual([
+      'user',
+      'assistant',
+      'tool_result',
+      'tool_result',
+    ]);
+    expect(context.messages[1]).toMatchObject({
+      role: 'assistant',
+      toolCalls: [
+        { id: 'call-a', name: 'read' },
+        { id: 'call-b', name: 'read' },
+      ],
+    });
+  });
+
   it('renders failed tool results with isError=true', async () => {
     const t = await tree.createThread({});
     await tree.appendNode(t.id, { type: 'assistant_message', payload: assistant('trying') });

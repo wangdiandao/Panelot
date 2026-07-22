@@ -14,7 +14,7 @@ Multiple keys are sticky. Panelot keeps the current usable key and fails over af
 
 A `ModelEntry` identifies a model within one connection and records tool-use, vision, optional reasoning, and optional context-window capabilities. Pricing can describe input, output, and cache-read dollars per million tokens.
 
-Metadata comes from the built-in prefix registry or user JSON. Unknown models default conservatively to tool use enabled and vision disabled. Pricing is fixed in the Run environment before usage and Thread cost are updated in one transaction.
+Metadata comes from the built-in prefix registry or user JSON. Unknown models use the compatibility fallback of tool use enabled and vision disabled. A model explicitly marked with `toolUse:false` receives no tool schemas, and its Run snapshot has an empty tool catalog. `vision:false` rejects image history before a request. `reasoning:false` removes `reasoningEffort` from preset and Thread parameters. Pricing is fixed in the Run environment before usage and Thread cost are updated in one transaction.
 
 ### 1.3 Model presets
 
@@ -30,7 +30,7 @@ The global task model can use any connection. Title generation prefers it and fa
 
 ## 2. Adapter interface
 
-`ProviderAdapter.stream()` accepts unified messages, optional system text, tool schemas, parameters, model ID, and an AbortSignal. It yields text, reasoning, partial tool calls, and usage, then returns a final message, tool calls, usage, and stop reason. Optional `listModels()` and required `verify()` methods support settings.
+`ProviderAdapter.stream()` accepts unified messages, optional system text, tool schemas, parameters, model ID, and an AbortSignal. It yields text, reasoning, partial tool calls, and usage, then returns a final message, tool calls, usage, and stop reason. Optional `listModels()` supports discovery. Settings uses a separate `verifyConnection(adapter, connection)` workflow so diagnostics do not become part of the MV3 Service Worker runtime.
 
 A stream succeeds only after its protocol terminates completely. OpenAI requires a supported `finish_reason` and `[DONE]`. Anthropic requires `message_delta.stop_reason` and `message_stop`. A clean EOF after content is still incomplete. Unknown stop reasons fail closed.
 
@@ -44,7 +44,7 @@ Usage normally uses `stream_options.include_usage`. Compatibility flags can disa
 
 ### 3.2 Anthropic
 
-Panelot posts to `{baseUrl}/v1/messages` and groups message, content-block, text, JSON input, thinking, and stop events by block index. Stable system and tool definitions use ephemeral prompt-cache markers. Requests use `x-api-key`, `anthropic-version`, and the direct-browser access header required by Anthropic.
+Panelot posts to `{baseUrl}/v1/messages` and groups message, content-block, text, JSON input, thinking, signature, redacted thinking, and stop events by block index. Complete thinking blocks are stored as provider state and replayed with the assistant message after a tool result. Reasoning effort uses adaptive thinking and `output_config.effort` by default. A compatibility flag enables the legacy fixed thinking budget while reserving output space for the final answer. The single-tool flag sends Anthropic's `disable_parallel_tool_use` option. Stable system and tool definitions use ephemeral prompt-cache markers. Requests use `x-api-key`, `anthropic-version`, and the direct-browser access header required by Anthropic.
 
 `model_context_window_exceeded` maps to an incomplete `max_tokens` stop. `pause_turn` requires a server-tool continuation loop that Panelot does not implement, so it is a protocol error.
 
@@ -56,11 +56,11 @@ Selecting Verify requests optional host access for the endpoint. Saving a form a
 
 ## 5. Compatibility flags
 
-Per-connection flags isolate endpoint differences: no streaming usage option, reasoning in `<think>`, no parallel tool calls, alternate maximum-token field, and no system role. Templates set known flags, while a custom connection uses verification and user configuration.
+Per-connection flags isolate endpoint differences: no streaming usage option, reasoning in `<think>`, no parallel tool calls, Anthropic's legacy fixed thinking budget, an alternate maximum-token field, and no system role. Templates set known flags, while a custom connection uses verification and user configuration.
 
 ## 6. Verification and model listing
 
-OpenAI verification performs a model request with a shared four-second timeout and key failover, a minimal streaming request, and an echo tool probe. Anthropic performs minimal streaming and tool probes. Model-list data must be JSON with a `data` array of non-empty string IDs before it reaches settings.
+Verification performs model discovery with a shared four-second timeout and key failover, a minimal streaming request, and a complete echo tool round trip. The last step sends the assistant tool call and tool result back before accepting tool use as compatible. A probe model can come from manual IDs, manually described models, or endpoint discovery. Model-list data must be JSON with a `data` array of non-empty string IDs before it reaches settings.
 
 Enabled connections list models concurrently with independent failures. The chat selector loads when first opened, while the settings default-model selector loads immediately. Component instances cache results. There is no one-hour TTL or manual refresh button.
 

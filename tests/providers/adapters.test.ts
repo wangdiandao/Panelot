@@ -1,11 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OpenAiAdapter, ThinkTagSplitter, toOpenAiMessages } from '../../src/providers/openai';
 import { AnthropicAdapter, toAnthropicMessages } from '../../src/providers/anthropic';
+import { verifyConnection } from '../../src/providers/verify';
 import {
   mergeParams,
   ProviderError,
   type Connection,
+  type FinalResult,
+  type ProviderAdapter,
+  type ProviderStream,
   type StreamEvent,
+  type StreamRequest,
 } from '../../src/providers/types';
 import type { UnifiedMessage } from '../../src/db/sessionContext';
 import { buildProviderErrorPresentation } from '../../src/ui/providerErrorPresentation';
@@ -410,17 +415,76 @@ describe('AnthropicAdapter streaming', () => {
     expect(final.stopReason).toBe('tool_use');
   });
 
-  it('captures thinking deltas as reasoning', async () => {
+  it('captures and preserves signed and redacted thinking blocks', async () => {
     mockFetchOnce(
       sseResponse([
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}\n\n',
         'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hmm"}}\n\n',
-        'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"done"}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig_1"}}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"redacted_thinking","data":"redacted_1"}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"done"}}\n\n',
         'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n',
         'event: message_stop\ndata: {"type":"message_stop"}\n\n',
       ]),
     );
     const final = await new AnthropicAdapter(aconn).stream(baseReq).final();
     expect(final.reasoning).toBe('hmm');
+    expect(final.providerState).toEqual({
+      kind: 'anthropic',
+      thinkingBlocks: [
+        { type: 'thinking', thinking: 'hmm', signature: 'sig_1' },
+        { type: 'redacted_thinking', data: 'redacted_1' },
+      ],
+    });
+  });
+
+  it('uses adaptive effort and applies the parallel-tool compatibility option', async () => {
+    const spy = mockFetchOnce(
+      sseResponse([
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+      ]),
+    );
+    await new AnthropicAdapter(
+      conn({
+        kind: 'anthropic',
+        baseUrl: 'https://api.anthropic.com',
+        quirks: { noParallelToolCalls: true },
+      }),
+    )
+      .stream({
+        ...baseReq,
+        params: { reasoningEffort: 'high' },
+        tools: [{ name: 'echo', description: 'Echo.', parameters: { type: 'object' } }],
+      })
+      .final();
+
+    const body = JSON.parse(spy.mock.calls[0]![1]!.body as string);
+    expect(body.thinking).toEqual({ type: 'adaptive' });
+    expect(body.output_config).toEqual({ effort: 'high' });
+    expect(body.tool_choice).toEqual({ type: 'auto', disable_parallel_tool_use: true });
+  });
+
+  it('reserves answer space when legacy Anthropic thinking is enabled', async () => {
+    const spy = mockFetchOnce(
+      sseResponse([
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+      ]),
+    );
+    await new AnthropicAdapter(
+      conn({
+        kind: 'anthropic',
+        baseUrl: 'https://api.anthropic.com',
+        quirks: { anthropicManualThinking: true },
+      }),
+    )
+      .stream({ ...baseReq, params: { reasoningEffort: 'high', maxTokens: 5000 } })
+      .final();
+
+    const body = JSON.parse(spy.mock.calls[0]![1]!.body as string);
+    expect(body.thinking).toEqual({ type: 'enabled', budget_tokens: 3976 });
+    expect(body.output_config).toBeUndefined();
   });
 
   it('sets cache_control breakpoints on system and last tool', async () => {
@@ -473,6 +537,30 @@ describe('AnthropicAdapter streaming', () => {
 });
 
 describe('Anthropic message conversion', () => {
+  it('replays provider thinking state before assistant content and tool calls', () => {
+    const out = toAnthropicMessages([
+      {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'checking' }],
+        providerState: {
+          kind: 'anthropic',
+          thinkingBlocks: [
+            { type: 'thinking', thinking: 'private', signature: 'sig' },
+            { type: 'redacted_thinking', data: 'hidden' },
+          ],
+        },
+        toolCalls: [{ id: 'tool-1', name: 'echo', params: { text: 'hi' } }],
+      },
+    ]);
+
+    expect(out[0]!.content).toEqual([
+      { type: 'thinking', thinking: 'private', signature: 'sig' },
+      { type: 'redacted_thinking', data: 'hidden' },
+      { type: 'text', text: 'checking' },
+      { type: 'tool_use', id: 'tool-1', name: 'echo', input: { text: 'hi' } },
+    ]);
+  });
+
   it('puts tool_result inside user messages and merges consecutive results', () => {
     const messages: UnifiedMessage[] = [
       {
@@ -507,6 +595,63 @@ describe('Anthropic message conversion', () => {
 });
 
 describe('provider verification diagnostics', () => {
+  it('uses manually described models and verifies the complete tool-result round trip', async () => {
+    const requests: StreamRequest[] = [];
+    const finals: FinalResult[] = [
+      { message: [], toolCalls: [], usage: { input: 1, output: 1 }, stopReason: 'end' },
+      {
+        message: [],
+        toolCalls: [
+          { id: 'same', name: 'echo', params: { text: 'hi' } },
+          { id: 'same', name: 'echo', params: { text: 'hi' } },
+        ],
+        usage: { input: 1, output: 1 },
+        stopReason: 'tool_use',
+      },
+      { message: [], toolCalls: [], usage: { input: 1, output: 1 }, stopReason: 'end' },
+    ];
+    const adapter: ProviderAdapter = {
+      listModels: async () => {
+        throw new Error('not supported');
+      },
+      stream: (request): ProviderStream => {
+        requests.push(request);
+        const final = finals[requests.length - 1]!;
+        return {
+          async *[Symbol.asyncIterator]() {},
+          final: async () => final,
+        };
+      },
+    };
+
+    const result = await verifyConnection(
+      adapter,
+      conn({
+        modelIds: undefined,
+        models: [{ id: 'manual-model', capabilities: { toolUse: true, vision: false } }],
+      }),
+    );
+
+    expect(result).toMatchObject({
+      reachable: true,
+      keyValid: true,
+      streaming: true,
+      toolUse: true,
+    });
+    expect(requests).toHaveLength(3);
+    expect(requests.every((request) => request.model === 'manual-model')).toBe(true);
+    const assistant = requests[2]!.messages.find((message) => message.role === 'assistant');
+    expect(assistant?.role).toBe('assistant');
+    const ids = assistant?.toolCalls?.map((call) => call.id) ?? [];
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
+    expect(
+      requests[2]!.messages
+        .filter((message) => message.role === 'tool_result')
+        .map((message) => (message.role === 'tool_result' ? message.toolCallId : '')),
+    ).toEqual(ids);
+  });
+
   it('preserves OpenAI chat-probe status and upstream details', async () => {
     vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(
@@ -519,7 +664,10 @@ describe('provider verification diagnostics', () => {
         ),
       );
 
-    await expect(new OpenAiAdapter(conn()).verify()).resolves.toMatchObject({
+    const connection = conn();
+    await expect(
+      verifyConnection(new OpenAiAdapter(connection), connection),
+    ).resolves.toMatchObject({
       failure: 'protocol_mismatch',
       detail: 'invalid tools',
       details: {
@@ -543,10 +691,9 @@ describe('provider verification diagnostics', () => {
         ),
       );
 
+    const connection = conn({ kind: 'anthropic', baseUrl: 'https://api.anthropic.com' });
     await expect(
-      new AnthropicAdapter(
-        conn({ kind: 'anthropic', baseUrl: 'https://api.anthropic.com' }),
-      ).verify(),
+      verifyConnection(new AnthropicAdapter(connection), connection),
     ).resolves.toMatchObject({
       failure: 'protocol_mismatch',
       detail: 'invalid tools',
@@ -567,7 +714,10 @@ describe('provider verification diagnostics', () => {
       ),
     );
 
-    await expect(new OpenAiAdapter(conn()).verify()).resolves.toMatchObject({
+    const connection = conn();
+    await expect(
+      verifyConnection(new OpenAiAdapter(connection), connection),
+    ).resolves.toMatchObject({
       failure: 'invalid_key',
       detail: 'Key was rejected',
       details: {

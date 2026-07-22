@@ -7,6 +7,7 @@ import type { VerifyResult } from '../../src/providers/types';
 import { setLang, t } from '../../src/ui/i18n';
 
 const registryMocks = vi.hoisted(() => ({ createAdapter: vi.fn() }));
+const verifyMocks = vi.hoisted(() => ({ verifyConnection: vi.fn() }));
 const permissionMocks = vi.hoisted(() => ({ request: vi.fn() }));
 const settingsMocks = vi.hoisted(() => ({
   upsertConnection: vi.fn(),
@@ -16,6 +17,10 @@ const settingsMocks = vi.hoisted(() => ({
 vi.mock('../../src/providers/registry', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/providers/registry')>()),
   createAdapter: registryMocks.createAdapter,
+}));
+
+vi.mock('../../src/providers/verify', () => ({
+  verifyConnection: verifyMocks.verifyConnection,
 }));
 
 vi.mock('../../src/permissions/hostPermissionBroker', () => ({
@@ -57,6 +62,7 @@ beforeEach(() => {
     globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
   ).IS_REACT_ACT_ENVIRONMENT = true;
   permissionMocks.request.mockResolvedValue(true);
+  registryMocks.createAdapter.mockReturnValue({});
   settingsMocks.upsertConnection.mockResolvedValue(undefined);
   settingsMocks.patchGlobal.mockResolvedValue(undefined);
   container = document.createElement('div');
@@ -95,9 +101,9 @@ describe('Onboarding verification ordering', () => {
   it('keeps only the newest fingerprint result and saves it with an atomic upsert', async () => {
     const first = deferred<VerifyResult>();
     const second = deferred<VerifyResult>();
-    registryMocks.createAdapter
-      .mockReturnValueOnce({ verify: vi.fn(() => first.promise) })
-      .mockReturnValueOnce({ verify: vi.fn(() => second.promise) });
+    verifyMocks.verifyConnection
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
 
     await act(async () =>
       root.render(
@@ -156,13 +162,11 @@ describe('Onboarding verification ordering', () => {
   });
 
   it('invalidates a successful verification as soon as a credential field changes', async () => {
-    registryMocks.createAdapter.mockReturnValue({
-      verify: vi.fn(async () => ({
-        reachable: true,
-        keyValid: true,
-        streaming: true,
-        toolUse: true,
-      })),
+    verifyMocks.verifyConnection.mockResolvedValue({
+      reachable: true,
+      keyValid: true,
+      streaming: true,
+      toolUse: true,
     });
 
     await act(async () =>

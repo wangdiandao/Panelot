@@ -7,6 +7,7 @@ import { ProviderError, type VerifyResult } from '../../src/providers/types';
 import { setLang, t } from '../../src/ui/i18n';
 
 const registryMocks = vi.hoisted(() => ({ createAdapter: vi.fn() }));
+const verifyMocks = vi.hoisted(() => ({ verifyConnection: vi.fn() }));
 const permissionMocks = vi.hoisted(() => ({ request: vi.fn() }));
 const settingsMocks = vi.hoisted(() => ({
   getConnections: vi.fn(),
@@ -19,6 +20,10 @@ const settingsMocks = vi.hoisted(() => ({
 vi.mock('../../src/providers/registry', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/providers/registry')>()),
   createAdapter: registryMocks.createAdapter,
+}));
+
+vi.mock('../../src/providers/verify', () => ({
+  verifyConnection: verifyMocks.verifyConnection,
 }));
 
 vi.mock('../../src/permissions/hostPermissionBroker', () => ({
@@ -61,6 +66,7 @@ beforeEach(() => {
   settingsMocks.getGlobal.mockResolvedValue({});
   settingsMocks.patchGlobal.mockResolvedValue(undefined);
   permissionMocks.request.mockResolvedValue(true);
+  registryMocks.createAdapter.mockReturnValue({});
   container = document.createElement('div');
   document.body.append(container);
   root = createRoot(container);
@@ -147,15 +153,13 @@ describe('ProvidersPage connection verification', () => {
   });
 
   it('turns an asynchronous adapter rejection into a visible message without leaking secrets', async () => {
-    registryMocks.createAdapter.mockReturnValue({
-      verify: vi.fn().mockRejectedValue(
-        new ProviderError('auth', 'request failed with sk-async-secret', undefined, {
-          status: 401,
-          reason: 'invalid_key',
-          upstreamMessage: 'credential sk-async-secret was rejected',
-        }),
-      ),
-    });
+    verifyMocks.verifyConnection.mockRejectedValue(
+      new ProviderError('auth', 'request failed with sk-async-secret', undefined, {
+        status: 401,
+        reason: 'invalid_key',
+        upstreamMessage: 'credential sk-async-secret was rejected',
+      }),
+    );
     await openConnectionForm();
     await setControlValue('#conn-url', 'https://api.example.com/v1');
     await setControlValue('#conn-keys', 'sk-async-secret');
@@ -179,7 +183,7 @@ describe('ProvidersPage connection verification', () => {
     const pending = new Promise<VerifyResult>((resolve) => {
       resolveVerify = resolve;
     });
-    registryMocks.createAdapter.mockReturnValue({ verify: vi.fn(() => pending) });
+    verifyMocks.verifyConnection.mockReturnValue(pending);
     await openConnectionForm();
     await setControlValue('#conn-url', 'https://api.example.com/v1');
 

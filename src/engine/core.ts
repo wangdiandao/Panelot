@@ -61,6 +61,19 @@ import type { SkillFrontmatter } from '../skills/parse';
 const APPROVAL_TIMEOUT_MS = 5 * 60_000; // docs/development/permissions.md §4
 const ENQUEUE_CAPACITY = 8; // docs/development/agent-engine.md §3
 
+function filterToolsForModel(
+  registry: ToolRegistry,
+  capabilities: import('../providers/types').ModelCapabilities | undefined,
+): ToolRegistry {
+  if (capabilities?.toolUse === false) return new ToolRegistry();
+  if (capabilities?.vision !== false || !registry.get('screenshot')) return registry;
+  const filtered = new ToolRegistry();
+  for (const tool of registry.list()) {
+    if (tool.name !== 'screenshot') filtered.register(tool);
+  }
+  return filtered;
+}
+
 /** Resolves the provider/model/params for a thread (preset & overrides). */
 export interface ProviderResolver {
   resolve(
@@ -992,7 +1005,10 @@ export class RealEngineCore {
           pricing: runEnvironment.pricing,
         };
         systemPrompt = runEnvironment.systemPrompt;
-        turnTools = await bindToolRegistry(this.toolsFor(threadId, runEnvironment), runEnvironment);
+        turnTools =
+          runEnvironment.modelCapabilities?.toolUse === false
+            ? new ToolRegistry()
+            : await bindToolRegistry(this.toolsFor(threadId, runEnvironment), runEnvironment);
       } else {
         resolved = await this.providers.resolve(threadId, overrides?.model);
         const presetSkillIds = [...(resolved.activeSkills ?? [])];
@@ -1029,7 +1045,7 @@ export class RealEngineCore {
           promptVersion: resolved.promptVersion ?? 'kernel',
           browserContext,
         };
-        turnTools = this.toolsFor(threadId);
+        turnTools = filterToolsForModel(this.toolsFor(threadId), resolved.modelCapabilities);
         const availableSkillNames = new Set(
           (promptOpts.skillsIndex ?? []).map((entry) => entry.name),
         );
@@ -1282,7 +1298,10 @@ export class RealEngineCore {
         modelId: snapshot.modelId,
       });
     }
-    const tools = await bindToolRegistry(this.toolsFor(run.threadId, snapshot), snapshot);
+    const tools =
+      snapshot.modelCapabilities?.toolUse === false
+        ? new ToolRegistry()
+        : await bindToolRegistry(this.toolsFor(run.threadId, snapshot), snapshot);
     return { snapshot, tools };
   }
 

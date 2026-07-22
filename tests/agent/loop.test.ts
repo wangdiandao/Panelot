@@ -334,6 +334,61 @@ describe('agent loop (docs/development/agent-engine.md §2)', () => {
     );
   });
 
+  it('fails closed when tool calls arrive with a non-tool stop reason', async () => {
+    const execute = vi.fn();
+    tools.register(makeEchoTool({ execute }));
+    const thread = await tree.createThread({});
+    provider.queue({
+      stopReason: 'end',
+      toolCalls: [{ id: 'unexpected-call', name: 'echo', params: { text: 'x' } }],
+    });
+
+    const stop = await runTurn(makeEnv(), thread.id, { text: 'go' }).done;
+
+    expect(stop).toBe('error');
+    expect(execute).not.toHaveBeenCalled();
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: 'error', errorKind: 'protocol', retryable: false }),
+    );
+  });
+
+  it('rejects image history before calling a model configured without vision', async () => {
+    const thread = await tree.createThread({});
+    const stop = await runTurn(
+      makeEnv({
+        runEnvironment: {
+          connectionId: 'connection',
+          modelId: 'text-only',
+          modelParameters: {},
+          modelCapabilities: { toolUse: true, vision: false },
+          enabledToolLevels: ['L0', 'L1', 'L2', 'mcp'],
+          permissionPolicy: 'untrusted',
+          activeSkills: [],
+          promptVersion: 'kernel',
+        },
+      }),
+      thread.id,
+      {
+        text: 'describe this',
+        attachedContext: [
+          {
+            kind: 'screenshot',
+            label: 'Screenshot',
+            trust: 'untrusted',
+            provenance: 'page',
+            content: [{ type: 'image', mime: 'image/png', data: 'AA==' }],
+          },
+        ],
+      },
+    ).done;
+
+    expect(stop).toBe('error');
+    expect(provider.requests).toHaveLength(0);
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: 'error', errorKind: 'protocol', retryable: false }),
+    );
+  });
+
   it('loops through tool calls until the model stops calling tools', async () => {
     tools.register(makeEchoTool());
     const thread = await tree.createThread({});
@@ -417,7 +472,7 @@ describe('agent loop (docs/development/agent-engine.md §2)', () => {
     ).toBe(1);
   });
 
-  it('uses the persisted step and batch ordinal when provider call ids repeat', async () => {
+  it('normalizes repeated provider call ids before persistence and replay', async () => {
     const execute = vi.fn(async () => ({ content: [{ type: 'text' as const, text: 'done' }] }));
     tools.register(makeEchoTool({ execute }));
     const thread = await tree.createThread({});
@@ -442,6 +497,20 @@ describe('agent loop (docs/development/agent-engine.md §2)', () => {
       'tool-call:turn-repeated-id:1:0',
       'tool-call:turn-repeated-id:1:1',
     ]);
+    const persistedItemIds = toolCalls.map((node) => (node.payload as { itemId: string }).itemId);
+    expect(new Set(persistedItemIds).size).toBe(2);
+    expect(persistedItemIds[0]).toBe('repeated-call');
+    expect(persistedItemIds[1]).toMatch(/^[a-f0-9-]{36}$/);
+    const replayedAssistant = provider.requests[1]!.messages.find(
+      (message) => message.role === 'assistant',
+    );
+    expect(replayedAssistant?.role).toBe('assistant');
+    expect(replayedAssistant?.toolCalls?.map((call) => call.id)).toEqual(persistedItemIds);
+    expect(
+      provider.requests[1]!.messages.filter((message) => message.role === 'tool_result').map(
+        (message) => (message.role === 'tool_result' ? message.toolCallId : ''),
+      ),
+    ).toEqual(persistedItemIds);
     expect(execute).toHaveBeenCalledTimes(2);
   });
 

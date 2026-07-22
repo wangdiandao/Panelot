@@ -42,7 +42,7 @@ interface ModelEntry {
 }
 ```
 
-能力标注来自 `src/providers/registry.ts` 内置前缀表或 Connection 的手动 ModelEntry JSON；未命中时保守默认 `toolUse:true, vision:false`。设置页可为自定义模型填写 capabilities 与可选 pricing。
+能力标注来自 `src/providers/registry.ts` 内置前缀表或 Connection 的手动 ModelEntry JSON；未命中时兼容性默认 `toolUse:true, vision:false`。设置页可为自定义模型填写 capabilities 与可选 pricing。显式标为 `toolUse:false` 的模型不会收到工具 schema，Run 快照也记录空 tool catalog；`vision:false` 遇到图片历史时会在请求前报错；`reasoning:false` 会移除预设或 Thread 覆盖中的 `reasoningEffort`。
 
 resolver 将 ModelEntry pricing 固化进 Run 环境，usage 与 Thread 统计同事务累计 `costUsd`；未配置价格时成本为 0。
 
@@ -99,7 +99,6 @@ interface ProviderAdapter {
     signal: AbortSignal;
   }): AsyncIterable<StreamEvent> & { final(): Promise<FinalResult> };
   listModels?(): Promise<string[]>; // GET /models（可选实现）
-  verify(): Promise<VerifyResult>; // 连接测试
 }
 
 type StreamEvent =
@@ -111,11 +110,14 @@ type StreamEvent =
 interface FinalResult {
   message: ContentBlock[];
   reasoning?: string;
+  providerState?: ProviderAssistantState; // 需随 assistant 历史原样回放的 Provider 状态
   toolCalls: { id: string; name: string; params: unknown; parseError?: string }[];
   usage: Usage;
   stopReason: 'end' | 'tool_use' | 'max_tokens' | 'content_filter';
 }
 ```
+
+设置页使用独立的 `verifyConnection(adapter, connection)` 工作流进行连接测试，避免把只在设置界面使用的诊断流程打进 MV3 Service Worker。
 
 流式响应只有在协议终止标记完整时才算成功。OpenAI 流必须同时出现受支持的
 `finish_reason` 和 `[DONE]`；Anthropic 流必须同时出现
@@ -137,7 +139,9 @@ Anthropic 的 `model_context_window_exceeded` 映射为 `max_tokens`，表示响
 
 ### 3.2 AnthropicAdapter（`POST {baseUrl}/v1/messages`）
 
-- 事件类型：`message_start / content_block_start / content_block_delta(text_delta | input_json_delta | thinking_delta) / content_block_stop / message_delta / message_stop`；按 `content_block index` 聚合。
+- 事件类型：`message_start / content_block_start / content_block_delta(text_delta | input_json_delta | thinking_delta | signature_delta) / content_block_stop / message_delta / message_stop`；按 `content_block index` 聚合。
+- Extended thinking 会保存完整的 `thinking`、`signature` 与 `redacted_thinking` 块，并在工具结果后的后续请求中放回对应 assistant 消息。`reasoningEffort` 默认使用 adaptive thinking 与 `output_config.effort`；旧模型可打开固定 thinking 预算兼容开关，预算会为最终回答保留输出空间。
+- `noParallelToolCalls` 会发送 `tool_choice: {type:'auto', disable_parallel_tool_use:true}`，与 OpenAI 路径的单工具限制保持一致。
 - **Prompt caching**：system prompt 与 tools 定义使用显式 `cache_control: {type:'ephemeral'}`，请求顶层同时启用自动缓存，使缓存点随多轮消息历史前移；布局配合[提示词](./prompts.md) §6 的分层拼装（稳定层在前）。
 - 头：`x-api-key` + `anthropic-version`；扩展环境直连需 `anthropic-dangerous-direct-browser-access: true`。
 
@@ -151,13 +155,14 @@ Anthropic 的 `model_context_window_exceeded` 映射为 `max_tokens`，表示响
 
 ## 5. Quirks 兼容表
 
-「OpenAI 兼容」端点细节参差，用 per-connection 开关吸收，不污染适配器主逻辑：
+不同 Provider 与兼容端点的协议细节参差，用 per-connection 开关吸收，不污染适配器主逻辑：
 
 ```ts
 interface QuirkFlags {
   noStreamOptions?: boolean; // 不支持 stream_options.include_usage
   thinkTagReasoning?: boolean; // reasoning 走 <think> 内联标签
   noParallelToolCalls?: boolean; // 强制单工具调用
+  anthropicManualThinking?: boolean; // Anthropic 使用旧版固定 thinking 预算
   maxTokensField?: 'max_tokens' | 'max_completion_tokens';
   noSystemRole?: boolean; // system 需转成首条 user
 }
@@ -167,7 +172,7 @@ interface QuirkFlags {
 
 ## 6. Verify 连接测试与模型拉取
 
-- **Verify**：OpenAI 路径依次 ① `GET /models`（整个请求与 key failover 共用 4s 超时）② 最小 streaming chat 请求 ③ echo 工具探测；Anthropic 路径执行最小 streaming/tool 探测。产出可达性 / key / 流式 / 工具结构化结果，设置页在发请求前动态申请 endpoint host permission。
+- **Verify**：OpenAI 路径依次 ① `GET /models`（整个请求与 key failover 共用 4s 超时）② 最小 streaming chat 请求 ③ echo 工具调用并把 assistant tool call 与 tool result 回传，再确认下一次流式请求成功；Anthropic 路径执行相同层级的 streaming/tool 往返探测。探测模型可来自手动 `modelIds`、带能力描述的 `models` 或端点列表。产出可达性 / key / 流式 / 工具结构化结果，设置页在发请求前动态申请 endpoint host permission。
 - `/models` 响应在使用前必须是包含非空字符串 `id` 的 `data` 数组；非 JSON、缺字段或畸形条目归类为 protocol 错误，不把未经校验的 Provider 数据写入模型列表。
 - **模型拉取**：所有 enabled 连接并发拉取，adapter `listModels()` 各自使用 4s timeout；失败连接独立返回 error。对话内的 ModelSelector 在组件首次打开时拉取；设置页的默认模型选择器会立即拉取，以保证其值始终指向一个明确的可用模型。结果缓存到组件实例，当前没有 1h TTL 或手动刷新按钮。
 

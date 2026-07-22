@@ -244,4 +244,4 @@ pnpm budget
 pnpm zip:smoke -- dist/panelot-<version>-chrome.zip dist/panelot-<version>-edge.zip
 ```
 
-CI 对 push/PR 执行完整门禁。`v*` tag 在版本匹配、main 来源和成功 CI 校验后，分别为 Chrome/Edge ZIP 生成 CycloneDX SBOM，记录每个 ZIP 与 SBOM 的 SHA-256，再创建 GitHub Release；Chrome Web Store 与 Edge Add-ons 仍人工上传。用户指南、开发文档和隐私政策由 GitHub Pages 工作流发布。
+CI 对 push/PR 执行完整门禁。`v*` tag 在版本匹配、main 来源和成功 CI 校验后，分别为 Chrome/Edge ZIP 生成 CycloneDX SBOM，记录每个 ZIP 与 SBOM 的 SHA-256，再创建 GitHub Release。Release 中的公开资产名固定为 `panelot-chrome.zip`、`panelot-edge.zip`、`panelot-chrome.cdx.json` 和 `panelot-edge.cdx.json`；`dist/` 中的 WXT 中间产物仍带版本号。Chrome Web Store 与 Edge Add-ons 仍人工上传。用户指南、开发文档和隐私政策由 GitHub Pages 工作流发布。

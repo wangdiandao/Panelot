@@ -127,4 +127,4 @@ Every published Chinese page needs the same relative path under `docs/en/`. Upda
 
 ## 10. Release packaging
 
-Run the same gates as the release workflow, create both browser archives, and validate them with `zip:smoke`. A release is complete only after GitHub Actions succeeds and the GitHub Release contains both ZIP files, SBOMs, and checksums.
+Run the same gates as the release workflow, create both browser archives, and validate them with `zip:smoke`. The workflow publishes `panelot-chrome.zip`, `panelot-edge.zip`, `panelot-chrome.cdx.json`, and `panelot-edge.cdx.json`; WXT's intermediate files in `dist/` retain their versioned names. A release is complete only after GitHub Actions succeeds and the GitHub Release contains both ZIP files, SBOMs, and checksums.

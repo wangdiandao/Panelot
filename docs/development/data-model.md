@@ -89,7 +89,7 @@ interface ThreadNode {
 type NodeType =
   | 'user_message' // { content: ContentBlock[], attachedContext?: ContextBlock[] }
   | 'assistant_message' // { content: ContentBlock[], model: string, connectionId: string,
-  //   reasoning?: string, usage?: Usage }
+  //   reasoning?: string, providerState?: ProviderAssistantState, usage?: Usage }
   | 'tool_call' // { itemId, toolName, params, level: 'L0'|'L1'|'L2'|'mcp'|'builtin' }
   | 'tool_result' // { itemId, ok, contentForLlm: ContentBlock[], details?: unknown }
   | 'approval_decision' // { approvalId, request: ApprovalRequestPayload, decision, ts }
@@ -103,6 +103,7 @@ type NodeType =
 
 - `childrenIds` **不存储**，由 `parentId` 索引反查派生（避免双向引用失同步——这是 OpenWebUI 教训的直接应用）。
 - `tool_call` / `tool_result` 分开两个节点：审批可能间隔任意长时间，且 result 的 `details`（截图等大对象）指向 attachments 表而非内联。
+- `providerState` 只保存后续请求必须原样回放的 Provider 状态。目前 Anthropic 用它保留 signed thinking 与 redacted thinking 块；它与可显示的 `reasoning` 分开，导入时按严格结构校验。
 - `interactions` 保存等待用户或外部条件的请求；响应和恢复 claim 都以事务提交，避免 Worker 重启后重复续跑。
 - **不落库的内容**：`item.delta` 流式增量、L1 快照的 selector_map（内存态，详见[浏览器工具](./browser-tools.md)）。
 

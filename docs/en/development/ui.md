@@ -46,6 +46,8 @@ Navigation contains Attachments, Sites, Presets, General, Models, Browser permis
 
 Model settings manage connections, verification results, compatibility options, manual models, and one valid default. Permission settings manage the three policies, rule table, and user sensitive origins. MCP settings show connection and Tool state, OAuth controls, JSON import, and removal. Data import performs a background preflight, requires explicit confirmation for active or paused state, commits on a second action, and requires extension reload.
 
+About shows the manifest version and can check the latest GitHub Release. When an update is available, it links to the ZIP for the current browser. Developer-mode installations still require replacing the existing files and reloading the extension from the browser's extension page.
+
 ## 4. Interaction states
 
 ### 4.1 Streaming

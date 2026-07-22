@@ -25,6 +25,8 @@ Database `panelot_v1` has these tables:
 
 Provider configuration, permission rules, and UI preferences use `chrome.storage.local` because they are smaller and need cross-context change events.
 
+Assistant nodes can store provider-specific replay state separately from visible reasoning. Anthropic uses this field for signed and redacted thinking blocks that must accompany a later tool-result request. Import validation accepts only the defined bounded structure.
+
 ### 2.1 Threads
 
 `ThreadMeta` stores title, timestamps, `leafId`, optional folder and preset, tags, pin and archive flags, optional `parentThreadId`, usage statistics, and origins reached or approved by the Thread. The UI reads this table for the conversation list instead of scanning nodes.

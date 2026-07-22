@@ -10,13 +10,15 @@ Panelot currently provides developer-mode packages through GitHub Releases. Ther
 
 ## Install the extension
 
-1. Open [GitHub Releases](https://github.com/wangdiandao/Panelot/releases) and download the Chrome or Edge ZIP for your browser.
+1. Open [GitHub Releases](https://github.com/wangdiandao/Panelot/releases). Download `panelot-chrome.zip` for Chrome or `panelot-edge.zip` for Edge.
 2. Extract the ZIP to a directory you will keep. Do not move or delete it after loading the extension.
 3. Open `chrome://extensions` in Chrome or `edge://extensions` in Edge.
 4. Enable Developer mode, choose Load unpacked, and select the extracted directory.
 5. Pin Panelot to the browser toolbar. Click its icon or press `Alt+P` to open the side panel.
 
 Before upgrading a manually installed build, export a backup from Settings > Data. Keep the same extension directory, disable the extension or close related browser windows, replace all old files with the new package, and click Reload on the extensions page.
+
+Settings > About > Check for updates compares the installed version with the latest GitHub Release. When a newer version is available, it links to the ZIP for the current browser. You still need to replace the existing files and reload the extension as described above.
 
 Do not mix files from different versions or switch to another directory. The browser can treat an unpacked extension at a new path as a separate installation, so its existing local data may not appear.
 

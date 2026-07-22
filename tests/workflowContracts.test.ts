@@ -68,14 +68,14 @@ describe('repository delivery contracts', () => {
     expect(release).toContain('.conclusion == "success"');
     expect(release).toContain('pnpm test:coverage');
 
-    const subjects = [
-      ...release.matchAll(
-        /^\s+file: release\/panelot-\$\{\{ env\.VERSION \}\}-(chrome|edge)\.zip$/gm,
-      ),
-    ].map((match) => match[1]);
+    const subjects = [...release.matchAll(/^\s+file: release\/panelot-(chrome|edge)\.zip$/gm)].map(
+      (match) => match[1],
+    );
     expect(subjects.sort()).toEqual(['chrome', 'edge']);
-    expect(release).toContain('output-file: release/panelot-${{ env.VERSION }}-chrome.cdx.json');
-    expect(release).toContain('output-file: release/panelot-${{ env.VERSION }}-edge.cdx.json');
+    expect(release).toContain('cp "dist/panelot-${VERSION}-chrome.zip" release/panelot-chrome.zip');
+    expect(release).toContain('cp "dist/panelot-${VERSION}-edge.zip" release/panelot-edge.zip');
+    expect(release).toContain('output-file: release/panelot-chrome.cdx.json');
+    expect(release).toContain('output-file: release/panelot-edge.cdx.json');
     expect(release.match(/upload-artifact: false/g)).toHaveLength(2);
     expect(release.match(/upload-release-assets: false/g)).toHaveLength(2);
     expect(release).not.toMatch(/^\s+path:\s+\.\s*$/m);

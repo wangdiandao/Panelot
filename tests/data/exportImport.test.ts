@@ -84,6 +84,42 @@ describe('exportAll (docs/development/index.md §5)', () => {
     expect(await target.threads.count()).toBe(0);
   });
 
+  it('validates persisted Anthropic thinking replay state', async () => {
+    const tree = new ThreadTree(db);
+    const thread = await tree.createThread({ title: 'Anthropic state' });
+    await tree.appendNode(thread.id, {
+      type: 'assistant_message',
+      payload: {
+        content: [],
+        model: 'claude',
+        connectionId: 'anthropic',
+        providerState: {
+          kind: 'anthropic',
+          thinkingBlocks: [
+            { type: 'thinking', thinking: 'private', signature: 'signed' },
+            { type: 'redacted_thinking', data: 'redacted' },
+          ],
+        },
+      },
+    });
+    const bundle = await exportAll(db);
+    const target = new PanelotDB(`export-provider-state-${n++}`);
+
+    await expect(validateImportBundle(target, bundle)).resolves.toMatchObject({
+      report: { nodeCount: 1 },
+    });
+
+    const invalid = structuredClone(bundle);
+    const payload = invalid.nodes[0]!.payload as {
+      providerState: { thinkingBlocks: Record<string, unknown>[] };
+    };
+    delete payload.providerState.thinkingBlocks[0]!.signature;
+    await expect(validateImportBundle(target, invalid)).rejects.toThrow(
+      /IMPORT_ASSISTANT_PROVIDER_STATE/,
+    );
+    await target.delete();
+  });
+
   it('allows conflict-free merge validation and rejects an existing thread id', async () => {
     const tree = new ThreadTree(db);
     await tree.createThread({ title: 'merge source' });

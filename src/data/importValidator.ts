@@ -316,13 +316,22 @@ function validateNodePayload(type: unknown, value: unknown): void {
     case 'assistant_message':
       exact(
         payload,
-        ['content', 'model', 'connectionId', 'reasoning', 'usage', 'providerStopReason'],
+        [
+          'content',
+          'model',
+          'connectionId',
+          'reasoning',
+          'providerState',
+          'usage',
+          'providerStopReason',
+        ],
         'IMPORT_ASSISTANT_PAYLOAD',
       );
       contentBlocks(payload.content, 'IMPORT_ASSISTANT_CONTENT');
       requiredString(payload.model, 'IMPORT_ASSISTANT_MODEL');
       requiredString(payload.connectionId, 'IMPORT_ASSISTANT_CONNECTION');
       optionalString(payload.reasoning, 'IMPORT_ASSISTANT_REASONING', true);
+      if (payload.providerState !== undefined) providerAssistantState(payload.providerState);
       if (payload.usage !== undefined) usage(payload.usage);
       optionalEnum(
         payload.providerStopReason,
@@ -697,6 +706,7 @@ function quirks(value: unknown): void {
       'noStreamOptions',
       'thinkTagReasoning',
       'noParallelToolCalls',
+      'anthropicManualThinking',
       'maxTokensField',
       'noSystemRole',
     ],
@@ -705,6 +715,7 @@ function quirks(value: unknown): void {
   optionalBoolean(flags.noStreamOptions, 'IMPORT_QUIRK');
   optionalBoolean(flags.thinkTagReasoning, 'IMPORT_QUIRK');
   optionalBoolean(flags.noParallelToolCalls, 'IMPORT_QUIRK');
+  optionalBoolean(flags.anthropicManualThinking, 'IMPORT_QUIRK');
   optionalBoolean(flags.noSystemRole, 'IMPORT_QUIRK');
   optionalEnum(flags.maxTokensField, ['max_tokens', 'max_completion_tokens'], 'IMPORT_QUIRK');
 }
@@ -1123,6 +1134,26 @@ function browserTab(value: unknown): void {
   nonnegativeInteger(tab.tabId, 'IMPORT_BROWSER_TAB_ID');
   requiredString(tab.url, 'IMPORT_BROWSER_TAB_URL');
   requiredString(tab.title, 'IMPORT_BROWSER_TAB_TITLE', true);
+}
+
+function providerAssistantState(value: unknown): void {
+  const label = 'IMPORT_ASSISTANT_PROVIDER_STATE';
+  const state = object(value, label);
+  exact(state, ['kind', 'thinkingBlocks'], label);
+  if (state.kind !== 'anthropic') throw new Error(label);
+  for (const candidate of array(state.thinkingBlocks, MAX_ASSETS, label)) {
+    const block = object(candidate, label);
+    if (block.type === 'thinking') {
+      exact(block, ['type', 'thinking', 'signature'], label);
+      requiredString(block.thinking, label, true);
+      requiredString(block.signature, label, true);
+    } else if (block.type === 'redacted_thinking') {
+      exact(block, ['type', 'data'], label);
+      requiredString(block.data, label);
+    } else {
+      throw new Error(label);
+    }
+  }
 }
 
 function usage(value: unknown): void {

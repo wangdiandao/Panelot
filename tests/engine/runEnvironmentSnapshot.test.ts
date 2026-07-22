@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { ToolRegistry } from '../../src/agent/tool';
 import { PanelotDB } from '../../src/db/schema';
+import { ThreadTree } from '../../src/db/tree';
 import type {
   ResolvedRunEnvironment,
   RunEnvironmentSnapshot,
@@ -91,10 +92,45 @@ async function snapshot(registry: ToolRegistry, text = 'hello'): Promise<RunEnvi
 }
 
 beforeEach(async () => {
-  await SettingsStore.connections.set([]);
+  await Promise.all([SettingsStore.connections.set([]), SettingsStore.presets.set([])]);
 });
 
 describe('run environment snapshot', () => {
+  it('removes reasoning effort when the selected model explicitly disables reasoning', async () => {
+    const db = new PanelotDB(`provider-capability-${sequence++}`);
+    const thread = await new ThreadTree(db).createThread({ preset: 'chat-only-preset' });
+    await SettingsStore.connections.set([
+      {
+        id: 'provider-a',
+        name: 'Provider',
+        kind: 'openai',
+        baseUrl: 'https://provider.example.test/v1',
+        apiKeys: [],
+        enabled: true,
+        models: [
+          {
+            id: 'chat-only',
+            capabilities: { toolUse: false, vision: false, reasoning: false },
+          },
+        ],
+      },
+    ]);
+    await SettingsStore.presets.set([
+      {
+        id: 'chat-only-preset',
+        name: 'Chat only',
+        base: { connectionId: 'provider-a', modelId: 'chat-only' },
+        params: { reasoningEffort: 'high', temperature: 0.2 },
+      },
+    ]);
+
+    const resolved = await new SettingsProviderResolver(db).resolve(thread.id);
+
+    expect(resolved.params).toEqual({ temperature: 0.2 });
+    expect(resolved.modelCapabilities).toMatchObject({ reasoning: false });
+    await db.delete();
+  });
+
   it('captures immutable prompt, skill, model, policy, browser, and tool request facts', async () => {
     const registry = new ToolRegistry();
     registerTool(registry);

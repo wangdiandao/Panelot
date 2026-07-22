@@ -478,6 +478,76 @@ describe('engine integration (Op → events → DB)', () => {
     expect(snapshot!.activeTurn).toBeNull();
   });
 
+  it('does not expose tools when the selected model explicitly disables tool use', async () => {
+    const resolver: ProviderResolver = {
+      resolve: async () => ({
+        provider,
+        model: 'chat-only',
+        params: {},
+        connectionId: 'connection',
+        modelCapabilities: { toolUse: false, vision: false, reasoning: false },
+      }),
+    };
+    const { host } = buildEngine(undefined, resolver);
+    tools.register({
+      name: 'echo',
+      label: 'Echo',
+      description: 'Echo text.',
+      parameters: z.object({ text: z.string() }),
+      level: 'builtin',
+      effects: 'read',
+      execute: async (_id, params) => ({
+        content: [{ type: 'text', text: params.text }],
+      }),
+    });
+    const client = connect(host);
+    const threadId = await initThread(client);
+    provider.queue({ streamText: ['plain reply'] });
+
+    client.post({ type: 'turn.submit', threadId, input: { text: 'hi' } });
+    await client.waitFor('turn.complete');
+
+    expect(provider.requests[0]!.tools).toEqual([]);
+    const run = await db.runs.where('threadId').equals(threadId).first();
+    expect(
+      run?.environment && 'toolCatalog' in run.environment
+        ? run.environment.toolCatalog
+        : undefined,
+    ).toEqual([]);
+  });
+
+  it('omits the screenshot tool when the selected model disables vision', async () => {
+    const resolver: ProviderResolver = {
+      resolve: async () => ({
+        provider,
+        model: 'text-agent',
+        params: {},
+        connectionId: 'connection',
+        modelCapabilities: { toolUse: true, vision: false },
+      }),
+    };
+    const { host } = buildEngine(undefined, resolver);
+    for (const name of ['echo', 'screenshot']) {
+      tools.register({
+        name,
+        label: name,
+        description: `${name} tool.`,
+        parameters: z.object({}),
+        level: name === 'screenshot' ? 'L2' : 'builtin',
+        effects: 'read',
+        execute: async () => ({ content: [{ type: 'text', text: name }] }),
+      });
+    }
+    const client = connect(host);
+    const threadId = await initThread(client);
+    provider.queue({ streamText: ['plain reply'] });
+
+    client.post({ type: 'turn.submit', threadId, input: { text: 'hi' } });
+    await client.waitFor('turn.complete');
+
+    expect(provider.requests[0]!.tools.map((tool) => tool.name)).toEqual(['echo']);
+  });
+
   it('preserves a real adapter stop reason through the run, event, and snapshot', async () => {
     const adapter = new OpenAiAdapter({
       id: 'openai-connection',

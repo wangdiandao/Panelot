@@ -58,6 +58,7 @@ import {
   SelectValue,
 } from '../components/ui/select';
 import { createAdapter, normalizeBaseUrl } from '../../providers/registry';
+import { verifyConnection } from '../../providers/verify';
 import {
   ProviderError,
   type Connection,
@@ -553,7 +554,7 @@ function ConnectionForm({
       }
       const adapter = createAdapter(candidate);
       phase = 'request';
-      const result = await adapter.verify();
+      const result = await verifyConnection(adapter, candidate);
       setVerifyResult(result);
     } catch (error) {
       if (phase === 'configuration') {
@@ -670,6 +671,14 @@ function ConnectionForm({
                     ['noStreamOptions', t('settings.providers.quirk.noStreamOptions')],
                     ['thinkTagReasoning', t('settings.providers.quirk.thinkTagReasoning')],
                     ['noParallelToolCalls', t('settings.providers.quirk.noParallelToolCalls')],
+                    ...(conn.kind === 'anthropic'
+                      ? ([
+                          [
+                            'anthropicManualThinking',
+                            t('settings.providers.quirk.anthropicManualThinking'),
+                          ],
+                        ] as [keyof QuirkFlags, string][])
+                      : []),
                     ['noSystemRole', t('settings.providers.quirk.noSystemRole')],
                   ] as [keyof QuirkFlags, string][]
                 ).map(([key, label]) => (

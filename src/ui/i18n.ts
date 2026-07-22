@@ -419,6 +419,28 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
     en: 'Connect your own model to read and operate pages in the browser.',
   },
   'settings.about.github': { 'zh-CN': '查看 GitHub', en: 'View on GitHub' },
+  'settings.about.update.check': { 'zh-CN': '检查更新', en: 'Check for updates' },
+  'settings.about.update.checking': { 'zh-CN': '正在检查', en: 'Checking' },
+  'settings.about.update.currentTitle': { 'zh-CN': '已是最新版本', en: 'Panelot is up to date' },
+  'settings.about.update.currentDescription': {
+    'zh-CN': 'GitHub Release 的最新版本是 v{version}。',
+    en: 'The latest GitHub Release is v{version}.',
+  },
+  'settings.about.update.availableTitle': {
+    'zh-CN': '发现新版本 v{version}',
+    en: 'Version v{version} is available',
+  },
+  'settings.about.update.availableDescription': {
+    'zh-CN': '下载 {asset}，解压后覆盖原扩展目录，再到扩展管理页重新加载。',
+    en: 'Download {asset}, replace the files in the existing extension directory, then reload the extension.',
+  },
+  'settings.about.update.download': { 'zh-CN': '下载更新包', en: 'Download update' },
+  'settings.about.update.releaseNotes': { 'zh-CN': '发行说明', en: 'Release notes' },
+  'settings.about.update.errorTitle': { 'zh-CN': '无法检查更新', en: 'Update check failed' },
+  'settings.about.update.errorDescription': {
+    'zh-CN': '请检查网络连接后重试，或直接打开 GitHub Releases。',
+    en: 'Check your network connection and try again, or open GitHub Releases directly.',
+  },
 
   // Provider settings and onboarding
   'settings.providers.title': { 'zh-CN': '模型连接', en: 'Model connections' },
@@ -492,6 +514,10 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   'settings.providers.quirk.noParallelToolCalls': {
     'zh-CN': '强制单工具调用',
     en: 'Force one tool call at a time',
+  },
+  'settings.providers.quirk.anthropicManualThinking': {
+    'zh-CN': 'Anthropic 使用旧版固定 thinking 预算',
+    en: 'Use the legacy fixed thinking budget for Anthropic',
   },
   'settings.providers.quirk.noSystemRole': {
     'zh-CN': '不支持 system 角色（转为首条 user）',

@@ -59,6 +59,7 @@ async function runTurn(thread: Thread, input: UserInput, overrides?: TurnOverrid
 
 行为规范：
 
+- Provider 返回的空工具调用 ID 或与当前会话历史重复的 ID 会在落库前替换为会话内唯一 ID。同一响应中的并行调用即使按 `tool_call → tool_result` 交错持久化，重建历史时仍归属于同一个 assistant 消息。工具调用与非 `tool_use` stop reason 组合属于协议错误，任何工具副作用发生前即失败关闭。
 - 工具失败时抛出异常。引擎把错误作为 `isError` tool result 返回模型，loop 继续；模型可以重新读取页面或换一种方法。
 - interrupt 会 abort 当前 fetch 和工具执行，L2 工具随后 detach。已经落库的节点保留，终态为 `turn.complete{stopReason:'interrupted'}`。
 - 每个 `assistant_message` 保存实际 `providerStopReason`。中间的 `tool_use` 会继续执行工具，不作为 turn 终态；最终的 `end`、`max_tokens` 和 `content_filter` 会进入 Run 与 `turn.complete`。后两种情况由 UI 提示回复可能不完整。
@@ -117,6 +118,8 @@ interface ToolResult<D> {
 `ToolRegistry.register()` 是工具能力元数据的统一边界。注册时会校验名称、展示文案、交互准备器与 execution binding，并把 runtime schema、Provider JSON Schema、`level/effects/recovery`、结果信任来源和执行绑定规范化为同一个只读 capability descriptor。`mcp` level 必须使用带 server、endpoint 和 auth 身份的 MCP binding，其余 level 只能使用 local binding，避免远端实现继承 builtin 的可信默认值。未显式声明时，read/write 分别默认 `retry-safe`/`never-retry`；builtin 默认可信且来源为 `tool`，MCP 默认不可信且来源为 `mcp`，L0/L1/L2 默认不可信且来源为 `page`。需要不同语义的工具必须显式覆盖，不能在调用方另写一套默认值。
 
 Provider tool schema 与 `RunEnvironmentSnapshot.toolCatalog` 都从该 descriptor 生成。descriptor、JSON Schema 与 execution binding 会深冻结；工具实例本身不冻结，`execute/resolveTarget/prepareInteraction` 保留原始 `this`。每个快照工具条目的 SHA-256 digest 因而同时覆盖 schema、安全元数据和 execution binding；同名注册会报告现有与新 descriptor 的 level/effect/recovery/binding 摘要。恢复绑定从 Registry 一次取得“冻结实现 + descriptor”的原子代次快照，异步计算 digest 后不会再按名称读取可能已被 MCP 重连替换的实现。历史 v1 快照若只缺少当时由调用方隐式应用的 trust/provenance 默认值，会在原摘要验证通过后补齐相同默认值再比较；其它元数据漂移仍拒绝恢复。
+
+模型能力也是 Run 环境的一部分。显式 `toolUse:false` 会在新建与恢复路径都绑定空 Registry，避免只隐藏 UI 却仍向 Provider 发送 schema；`vision:false` 会从新 Run 的 catalog 移除 `screenshot`，已有图片输入仍会在 Provider 调用前拒绝。
 
 ## 5. 恢复语义
 

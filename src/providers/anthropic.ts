@@ -23,13 +23,13 @@ import {
 } from './http';
 import {
   type Connection,
+  type AnthropicThinkingBlock,
   type FinalResult,
   type FinalToolCall,
   type ProviderAdapter,
   type ProviderStream,
   type StreamEvent,
   type StreamRequest,
-  type VerifyResult,
 } from './types';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -43,7 +43,6 @@ function isTokenCount(value: unknown): value is number {
 function isBlockIndex(value: unknown): value is number {
   return isTokenCount(value);
 }
-import { verifyConnection } from './openai';
 
 function mapAnthropicStopReason(reason: string, status: number): FinalResult['stopReason'] {
   switch (reason) {
@@ -81,6 +80,7 @@ function mapAnthropicStopReason(reason: string, status: number): FinalResult['st
 type AnthropicContent =
   | { type: 'text'; text: string }
   | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
+  | AnthropicThinkingBlock
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean };
 
@@ -108,7 +108,11 @@ export function toAnthropicMessages(messages: UnifiedMessage[]): AnthropicMessag
         out.push({ role: 'user', content: blocksToAnthropic(m.content) });
         break;
       case 'assistant': {
-        const content: AnthropicContent[] = blocksToAnthropic(m.content);
+        const content: AnthropicContent[] =
+          m.providerState?.kind === 'anthropic'
+            ? m.providerState.thinkingBlocks.map((block) => structuredClone(block))
+            : [];
+        content.push(...blocksToAnthropic(m.content));
         for (const c of m.toolCalls ?? []) {
           content.push({ type: 'tool_use', id: c.id, name: c.name, input: c.params ?? {} });
         }
@@ -182,21 +186,34 @@ export class AnthropicAdapter implements ProviderAdapter {
         // request layout, so this caches the whole tools array.
         ...(i === req.tools.length - 1 ? { cache_control: { type: 'ephemeral' } } : {}),
       }));
+      if (this.connection.quirks?.noParallelToolCalls) {
+        body.tool_choice = { type: 'auto', disable_parallel_tool_use: true };
+      }
     }
     const p = req.params;
     if (p.temperature !== undefined) body.temperature = p.temperature;
     if (p.topP !== undefined) body.top_p = p.topP;
     if (p.stopSequences !== undefined) body.stop_sequences = p.stopSequences;
     if (p.reasoningEffort !== undefined) {
-      // Map reasoning effort to a thinking budget (docs/development/providers.md §1.4 leaves the
-      // mapping to the adapter; unset → no thinking block).
-      const budgets = { low: 2048, medium: 8192, high: 16384 } as const;
-      const maxTokens = body.max_tokens as number;
-      if (maxTokens > 1024) {
+      if (this.connection.quirks?.anthropicManualThinking) {
+        const budgets = { low: 2048, medium: 8192, high: 16384 } as const;
+        const maxTokens = body.max_tokens as number;
+        const answerReserve = 1024;
+        if (maxTokens <= answerReserve + 1024) {
+          throw createResponseFormatError(
+            'protocol',
+            400,
+            'Anthropic manual thinking needs maxTokens > 2048',
+            'not enough maxTokens for manual thinking',
+          );
+        }
         body.thinking = {
           type: 'enabled',
-          budget_tokens: Math.min(budgets[p.reasoningEffort], maxTokens - 1),
+          budget_tokens: Math.min(budgets[p.reasoningEffort], maxTokens - answerReserve),
         };
+      } else {
+        body.thinking = { type: 'adaptive' };
+        body.output_config = { effort: p.reasoningEffort };
       }
     }
 
@@ -206,6 +223,7 @@ export class AnthropicAdapter implements ProviderAdapter {
 
     const textParts: string[] = [];
     const reasoningParts: string[] = [];
+    const thinkingBlocks = new Map<number, AnthropicThinkingBlock>();
     // index → partial tool_use block
     const partialBlocks = new Map<number, { id: string; name: string; json: string }>();
     let usage: Usage = { input: 0, output: 0 };
@@ -315,6 +333,19 @@ export class AnthropicAdapter implements ProviderAdapter {
               if (typeof block.text !== 'string') break;
             } else if (block.type === 'thinking') {
               if (typeof block.thinking !== 'string') break;
+              if (block.signature !== undefined && typeof block.signature !== 'string') break;
+              thinkingBlocks.set(ev.index, {
+                type: 'thinking',
+                thinking: block.thinking,
+                signature: typeof block.signature === 'string' ? block.signature : '',
+              });
+              if (block.thinking) {
+                reasoningParts.push(block.thinking);
+                yield { type: 'reasoning', delta: block.thinking };
+              }
+            } else if (block.type === 'redacted_thinking') {
+              if (typeof block.data !== 'string') break;
+              thinkingBlocks.set(ev.index, { type: 'redacted_thinking', data: block.data });
             } else {
               break;
             }
@@ -331,11 +362,19 @@ export class AnthropicAdapter implements ProviderAdapter {
                 yield { type: 'text', delta: d.text };
               }
             } else if (d.type === 'thinking_delta' && typeof d.thinking === 'string') {
+              const block = thinkingBlocks.get(ev.index);
+              if (!block || block.type !== 'thinking') break;
               recognizedFrame = true;
               if (d.thinking) {
+                block.thinking += d.thinking;
                 reasoningParts.push(d.thinking);
                 yield { type: 'reasoning', delta: d.thinking };
               }
+            } else if (d.type === 'signature_delta' && typeof d.signature === 'string') {
+              const block = thinkingBlocks.get(ev.index);
+              if (!block || block.type !== 'thinking') break;
+              recognizedFrame = true;
+              block.signature += d.signature;
             } else if (d.type === 'input_json_delta' && typeof d.partial_json === 'string') {
               const block = partialBlocks.get(ev.index);
               if (!block) break;
@@ -451,6 +490,16 @@ export class AnthropicAdapter implements ProviderAdapter {
         return {
           message,
           reasoning: reasoning || undefined,
+          ...(thinkingBlocks.size > 0
+            ? {
+                providerState: {
+                  kind: 'anthropic' as const,
+                  thinkingBlocks: [...thinkingBlocks.entries()]
+                    .sort(([left], [right]) => left - right)
+                    .map(([, block]) => structuredClone(block)),
+                },
+              }
+            : {}),
           toolCalls,
           usage,
           stopReason: finalStopReason,
@@ -488,9 +537,5 @@ export class AnthropicAdapter implements ProviderAdapter {
       );
     }
     return parseModelListResponse(json, res.status);
-  }
-
-  async verify(): Promise<VerifyResult> {
-    return verifyConnection(this, this.connection);
   }
 }

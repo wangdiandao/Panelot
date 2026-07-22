@@ -59,23 +59,23 @@ jobs:
       - name: Collect release packages
         run: |
           mkdir release
-          cp "dist/panelot-${VERSION}-chrome.zip" release/
-          cp "dist/panelot-${VERSION}-edge.zip" release/
+          cp "dist/panelot-${VERSION}-chrome.zip" release/panelot-chrome.zip
+          cp "dist/panelot-${VERSION}-edge.zip" release/panelot-edge.zip
       - name: Generate Chrome artifact SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
-          file: release/panelot-${{ env.VERSION }}-chrome.zip
+          file: release/panelot-chrome.zip
           format: cyclonedx-json
-          output-file: release/panelot-${{ env.VERSION }}-chrome.cdx.json
+          output-file: release/panelot-chrome.cdx.json
           dependency-snapshot: false
           upload-artifact: false
           upload-release-assets: false
       - name: Generate Edge artifact SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
-          file: release/panelot-${{ env.VERSION }}-edge.zip
+          file: release/panelot-edge.zip
           format: cyclonedx-json
-          output-file: release/panelot-${{ env.VERSION }}-edge.cdx.json
+          output-file: release/panelot-edge.cdx.json
           dependency-snapshot: false
           upload-artifact: false
           upload-release-assets: false

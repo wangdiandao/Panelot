@@ -29,6 +29,7 @@ export type UnifiedMessage =
       role: 'assistant';
       content: ContentBlock[];
       reasoning?: string;
+      providerState?: import('../providers/types').ProviderAssistantState;
       toolCalls?: UnifiedToolCall[];
     }
   | { role: 'tool_result'; toolCallId: string; content: ContentBlock[]; isError: boolean };
@@ -101,8 +102,9 @@ export async function buildSessionContext(
 
   const messages: UnifiedMessage[] = [];
   const toolNames = new Map<string, string>();
+  const state: { activeAssistant?: Extract<UnifiedMessage, { role: 'assistant' }> } = {};
   for (const node of path) {
-    appendNodeAsMessage(messages, toolNames, node);
+    appendNodeAsMessage(messages, toolNames, state, node);
   }
 
   return { messages, turnContext, path };
@@ -111,37 +113,48 @@ export async function buildSessionContext(
 function appendNodeAsMessage(
   messages: UnifiedMessage[],
   toolNames: Map<string, string>,
+  state: { activeAssistant?: Extract<UnifiedMessage, { role: 'assistant' }> },
   node: ThreadNode,
 ): void {
   switch (node.type) {
     case 'user_message': {
       const p = node.payload as UserMessagePayload;
       messages.push(userMessageToUnifiedMessage(p));
+      state.activeAssistant = undefined;
       break;
     }
     case 'assistant_message': {
       const p = node.payload as AssistantMessagePayload;
-      messages.push({
+      const message: Extract<UnifiedMessage, { role: 'assistant' }> = {
         role: 'assistant',
         content: p.content,
         ...(p.reasoning ? { reasoning: p.reasoning } : {}),
-      });
+        ...(p.providerState ? { providerState: p.providerState } : {}),
+      };
+      messages.push(message);
+      state.activeAssistant = message;
       break;
     }
     case 'tool_call': {
       const p = node.payload as ToolCallPayload;
-      // Attach the call to the preceding assistant message (Anthropic/OpenAI
-      // both model tool calls as part of the assistant turn).
-      const prev = messages[messages.length - 1];
+      // Persisted parallel calls are interleaved with their results. Keep all
+      // calls attached to the active assistant turn until a new user or
+      // assistant message starts another turn.
       const call: UnifiedToolCall = { id: p.itemId, name: p.toolName, params: p.params };
-      if (prev && prev.role === 'assistant') {
-        if (!prev.toolCalls?.some((existing) => existing.id === p.itemId)) {
+      if (state.activeAssistant) {
+        if (!state.activeAssistant.toolCalls?.some((existing) => existing.id === p.itemId)) {
           toolNames.set(p.itemId, p.toolName);
+          (state.activeAssistant.toolCalls ??= []).push(call);
         }
-        (prev.toolCalls ??= []).push(call);
       } else {
         toolNames.set(p.itemId, p.toolName);
-        messages.push({ role: 'assistant', content: [], toolCalls: [call] });
+        const message: Extract<UnifiedMessage, { role: 'assistant' }> = {
+          role: 'assistant',
+          content: [],
+          toolCalls: [call],
+        };
+        messages.push(message);
+        state.activeAssistant = message;
       }
       break;
     }

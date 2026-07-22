@@ -27,7 +27,7 @@ import type {
 } from '../messaging/protocol';
 import { interactionResultContent, interactionResultProvenance } from './interaction';
 import type { ProviderAdapter, GenParams, ToolSchema } from '../providers/types';
-import { isProviderErrorRetryable, ProviderError } from '../providers/types';
+import { isProviderErrorRetryable, ProviderError, withUniqueToolCallIds } from '../providers/types';
 import { ActionError } from '../tools/action/errors';
 import { validateParams, type AnyAgentTool, type ToolRegistry } from './tool';
 import {
@@ -134,6 +134,26 @@ export interface TurnEnv {
   initialPendingSteers?: readonly { nodeId: string; admissionSequence: number }[];
   /** Optional hard token budget for the turn (docs/development/agent-engine.md §1). */
   tokenBudget?: number;
+}
+
+function toolCallIdsInHistory(
+  messages: Awaited<ReturnType<typeof buildSessionContext>>['messages'],
+) {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    if (message.role === 'assistant') {
+      for (const call of message.toolCalls ?? []) ids.add(call.id);
+    } else if (message.role === 'tool_result') {
+      ids.add(message.toolCallId);
+    }
+  }
+  return ids;
+}
+
+function containsImageInput(
+  messages: Awaited<ReturnType<typeof buildSessionContext>>['messages'],
+): boolean {
+  return messages.some((message) => message.content.some((block) => block.type === 'image'));
 }
 
 export interface TurnHandle {
@@ -443,6 +463,14 @@ export function runTurn(
           messages.push({ role: 'user', content: [{ type: 'text', text: STUCK_REMINDER }] });
           stuckReminderPending = false;
         }
+        if (
+          env.runEnvironment?.modelCapabilities?.vision === false &&
+          containsImageInput(messages)
+        ) {
+          throw new ProviderError('protocol', 'Model does not support image input.', undefined, {
+            reason: 'invalid_request',
+          });
+        }
         if (forcedFinalization) {
           messages.push({
             role: 'user',
@@ -496,18 +524,16 @@ export function runTurn(
         }
 
         const providerStopReason = final.stopReason;
+        const toolCalls = withUniqueToolCallIds(final.toolCalls, toolCallIdsInHistory(messages));
         if (
           !forcedFinalization &&
-          providerStopReason === 'tool_use' &&
-          final.toolCalls.length === 0
+          ((providerStopReason === 'tool_use') !== toolCalls.length > 0 ||
+            (env.runEnvironment?.modelCapabilities?.toolUse === false && toolCalls.length > 0))
         ) {
           env.emit({ type: 'item.complete', threadId, itemId, result: { ok: false } });
-          throw new ProviderError(
-            'protocol',
-            'Provider ended with tool_use but returned no tool calls',
-            undefined,
-            { reason: 'response_format' },
-          );
+          throw new ProviderError('protocol', 'Invalid tool-call response.', undefined, {
+            reason: 'response_format',
+          });
         }
 
         const assistantNode: AppendNodeInput = {
@@ -517,6 +543,7 @@ export function runTurn(
             model: env.model,
             connectionId: env.runEnvironment?.connectionId ?? '',
             reasoning: final.reasoning,
+            providerState: final.providerState,
             usage: final.usage,
             providerStopReason,
           },
@@ -540,15 +567,7 @@ export function runTurn(
           break;
         }
 
-        if (final.toolCalls.length === 0) {
-          if (providerStopReason === 'tool_use') {
-            throw new ProviderError(
-              'protocol',
-              'Provider tool calls disappeared before execution',
-              undefined,
-              { reason: 'response_format' },
-            );
-          }
+        if (toolCalls.length === 0) {
           acceptingSteer = false;
           await Promise.allSettled(
             [...pendingAdmissions.values()].map((admission) => admission.persistence),
@@ -557,7 +576,7 @@ export function runTurn(
             acceptingSteer = turnKind === 'user';
             continue;
           }
-          stopReason = providerStopReason;
+          stopReason = providerStopReason as Exclude<typeof providerStopReason, 'tool_use'>;
           break;
         }
 
@@ -568,7 +587,7 @@ export function runTurn(
         }
 
         // ---- execute tool calls ----------------------------------------------
-        for (const [batchOrdinal, call] of final.toolCalls.entries()) {
+        for (const [batchOrdinal, call] of toolCalls.entries()) {
           if (abort.signal.aborted) {
             stopReason = 'interrupted';
             break loop;
@@ -739,7 +758,7 @@ export function runTurn(
           }
 
           if (tool.interaction) {
-            if (final.toolCalls.length !== 1) {
+            if (toolCalls.length !== 1) {
               await fail(
                 `${tool.name} must be the only tool call in its model response. Ask or wait first, then plan subsequent actions from the result.`,
               );

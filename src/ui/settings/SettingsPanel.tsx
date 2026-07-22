@@ -9,10 +9,8 @@
 import { useState } from 'react';
 import {
   Bot,
-  Code2,
   Cog,
   Database,
-  ExternalLink,
   Globe2,
   Info,
   Plug,
@@ -23,8 +21,6 @@ import {
   Sparkles,
   Zap,
 } from 'lucide-react';
-import { Button } from '../components/ui/button';
-import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from '../components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Textarea } from '../components/ui/textarea';
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '../components/ui/field';
@@ -47,6 +43,7 @@ import { PluginsPage } from './PluginsPage';
 import { PresetsPage } from './PresetsPage';
 import { SiteInstructionsPage } from './SiteInstructionsPage';
 import { AttachmentsPage } from './AttachmentsPage';
+import { AboutPage } from './AboutPage';
 import { SettingsStore, type GlobalSettings } from '../../settings/store';
 import { setLang, t } from '../i18n';
 import { useStorageValue } from '../useStorageValue';
@@ -315,52 +312,6 @@ function GeneralPage() {
           </Select>
         </Field>
       </FieldGroup>
-    </div>
-  );
-}
-
-function AboutPage() {
-  // Version comes from the manifest (single source: package.json → wxt build).
-  // Guarded so the chrome-less preview server renders without it.
-  const version =
-    typeof chrome !== 'undefined' && chrome.runtime?.getManifest
-      ? chrome.runtime.getManifest().version
-      : null;
-  return (
-    <div className="flex max-w-2xl flex-col gap-5">
-      <h2 className="text-[15px] font-semibold">{t('settings.about.title')}</h2>
-
-      <Card className="gap-0 overflow-hidden py-0">
-        <CardHeader className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-4 p-5 sm:p-6">
-          <img
-            src="/icon/128.png"
-            alt=""
-            aria-hidden="true"
-            className="size-14 rounded-2xl shadow-sm sm:size-16"
-          />
-          <div className="flex min-w-0 flex-col gap-2">
-            <CardTitle className="flex flex-wrap items-baseline gap-2">
-              <span>Panelot</span>
-              {version && (
-                <span className="text-xs font-normal text-muted-foreground">v{version}</span>
-              )}
-            </CardTitle>
-            <CardDescription className="leading-relaxed">
-              {t('settings.about.summary')}
-            </CardDescription>
-          </div>
-        </CardHeader>
-
-        <CardFooter className="justify-start px-5 pb-5 sm:px-6 sm:pb-6">
-          <Button variant="outline" size="sm" asChild>
-            <a href="https://github.com/wangdiandao/Panelot" target="_blank" rel="noreferrer">
-              <Code2 data-icon="inline-start" aria-hidden="true" />
-              {t('settings.about.github')}
-              <ExternalLink data-icon="inline-end" aria-hidden="true" />
-            </a>
-          </Button>
-        </CardFooter>
-      </Card>
     </div>
   );
 }

@@ -18,7 +18,6 @@ import {
   requestWithRetry,
 } from './http';
 import {
-  ProviderError,
   type Connection,
   type FinalResult,
   type FinalToolCall,
@@ -27,7 +26,6 @@ import {
   type StreamEvent,
   type StreamRequest,
   type ToolSchema,
-  type VerifyResult,
 } from './types';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -560,112 +558,4 @@ export class OpenAiAdapter implements ProviderAdapter {
     }
     return parseModelListResponse(json, res.status);
   }
-
-  async verify(): Promise<VerifyResult> {
-    return verifyConnection(this, this.connection);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Shared verify flow (docs/development/providers.md §6) — used by both adapters
-// ---------------------------------------------------------------------------
-
-export async function verifyConnection(
-  adapter: ProviderAdapter,
-  connection: Connection,
-): Promise<VerifyResult> {
-  const result: VerifyResult = {
-    reachable: false,
-    keyValid: false,
-    streaming: false,
-    toolUse: false,
-  };
-
-  // Step 1: GET /models (3s timeout, optional — many relays lack it).
-  let models: string[] | undefined;
-  if (adapter.listModels) {
-    try {
-      models = await adapter.listModels();
-      result.reachable = true;
-      result.models = models;
-    } catch (e) {
-      if (e instanceof ProviderError && e.kind === 'auth') {
-        result.reachable = true;
-        result.failure = 'invalid_key';
-        result.detail = e.details.upstreamMessage ?? e.message;
-        result.details = e.details;
-        return result;
-      }
-      // Unreachable or no /models — fall through to chat probe.
-    }
-  }
-
-  const probeModel = connection.modelIds?.[0] ?? models?.[0];
-  if (!probeModel) {
-    if (!result.reachable) {
-      result.failure = 'unreachable';
-      result.detail = 'no /models endpoint and no manual model list configured';
-    }
-    return result;
-  }
-
-  // Step 2: minimal chat request (max_tokens: 1), streaming.
-  try {
-    const stream = adapter.stream({
-      messages: [{ role: 'user', content: [{ type: 'text', text: 'ping' }] }],
-      tools: [],
-      params: { maxTokens: 1 },
-      model: probeModel,
-      signal: AbortSignal.timeout(10_000),
-    });
-    await stream.final();
-    result.reachable = true;
-    result.keyValid = true;
-    result.streaming = true;
-  } catch (e) {
-    if (e instanceof ProviderError) {
-      result.reachable = e.kind !== 'network';
-      result.failure =
-        e.kind === 'auth'
-          ? 'invalid_key'
-          : e.kind === 'network'
-            ? 'unreachable'
-            : 'protocol_mismatch';
-      result.detail = e.details.upstreamMessage ?? e.message;
-      result.details = e.details;
-    } else {
-      result.failure = 'unreachable';
-      result.detail = (e as Error).message;
-    }
-    return result;
-  }
-
-  // Step 3: echo-tool probe for toolUse capability.
-  try {
-    const stream = adapter.stream({
-      messages: [
-        { role: 'user', content: [{ type: 'text', text: 'Call the echo tool with text="hi".' }] },
-      ],
-      tools: [
-        {
-          name: 'echo',
-          description: 'Echo the given text back.',
-          parameters: {
-            type: 'object',
-            properties: { text: { type: 'string' } },
-            required: ['text'],
-          },
-        },
-      ],
-      params: { maxTokens: 64 },
-      model: probeModel,
-      signal: AbortSignal.timeout(15_000),
-    });
-    const final = await stream.final();
-    result.toolUse = final.toolCalls.length > 0;
-  } catch {
-    result.toolUse = false; // tool probe failure is non-fatal
-  }
-
-  return result;
 }

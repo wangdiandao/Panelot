@@ -77,6 +77,7 @@ export interface AssistantMessagePayload {
   model: string;
   connectionId: string;
   reasoning?: string;
+  providerState?: import('../providers/types').ProviderAssistantState;
   usage?: Usage;
   providerStopReason?: ProviderStopReason;
 }

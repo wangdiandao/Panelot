@@ -35,6 +35,7 @@ import {
   SelectValue,
 } from './ui/select';
 import { createAdapter, normalizeBaseUrl } from '../../providers/registry';
+import { verifyConnection } from '../../providers/verify';
 import type { Connection, VerifyResult } from '../../providers/types';
 import { SettingsStore } from '../../settings/store';
 import { encryptSecret } from '../../settings/crypto';
@@ -135,7 +136,7 @@ export function Onboarding({ onConfigured, onOpenSettings, onTryDemo }: Props) {
         /* non-extension env */
       }
       if (generation !== verificationGeneration.current) return;
-      const result = await createAdapter(conn).verify();
+      const result = await verifyConnection(createAdapter(conn), conn);
       if (generation !== verificationGeneration.current) return;
       setVerified(result);
       setVerifiedFingerprint(fingerprint);
