@@ -1,3 +1,7 @@
+<p align="center">
+  <strong>English</strong> | <a href="./README.zh-CN.md">简体中文</a>
+</p>
+
 <div align="center">
   <img src="public/icon/128.png" width="96" alt="Panelot icon" />
 
@@ -5,7 +9,7 @@
 
 Connect your own model provider in Chrome or Edge and let an agent perform browser tasks within explicit permission and approval rules.
 
-[简体中文](./README.zh-CN.md) · [Documentation](https://wangdiandao.github.io/Panelot/en/) ·
+[Documentation](https://wangdiandao.github.io/Panelot/en/) ·
 [User guide](https://wangdiandao.github.io/Panelot/en/guide/) ·
 [Development](https://wangdiandao.github.io/Panelot/en/development/) ·
 [Privacy](https://wangdiandao.github.io/Panelot/en/privacy/)

@@ -18,8 +18,6 @@ Panelot 不提供账户、云同步或自有模型代理。会话、设置、审
 | [开发文档](./development/) | 贡献者和审查实现的开发者 | 架构、协议、存储、Provider、Agent 引擎、工具、安全、测试和发布流程 |
 | [隐私政策](./privacy/) | 所有用户 | 本地存储、第三方数据流、保留期限和用户控制 |
 
-英文文档位于 [English documentation](./en/)。中文文档是内容基准；两种语言使用相同的页面路径，并由构建门禁检查缺页。
-
 ## 安装
 
 1. 从 [GitHub Releases](https://github.com/wangdiandao/Panelot/releases) 下载 Chrome 或 Edge ZIP。

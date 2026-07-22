@@ -1,3 +1,7 @@
+<p align="center">
+  <a href="./README.md">English</a> | <strong>简体中文</strong>
+</p>
+
 <div align="center">
   <img src="public/icon/128.png" width="96" alt="Panelot 图标" />
 
@@ -5,7 +9,7 @@
 
 在 Chrome 和 Edge 中连接自己的模型服务，并让 Agent 在审批和权限规则内完成浏览器任务。
 
-[English](./README.md) · [文档站](https://wangdiandao.github.io/Panelot/) ·
+[文档站](https://wangdiandao.github.io/Panelot/) ·
 [用户指南](https://wangdiandao.github.io/Panelot/guide/) ·
 [开发文档](https://wangdiandao.github.io/Panelot/development/) ·
 [隐私政策](https://wangdiandao.github.io/Panelot/privacy/)

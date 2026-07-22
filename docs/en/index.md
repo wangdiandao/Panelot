@@ -18,8 +18,6 @@ Panelot does not provide accounts, cloud sync, or a model proxy. Conversations, 
 | [Development documentation](./development/) | Contributors and implementation reviewers | Architecture, protocols, storage, providers, the agent engine, tools, security, tests, and releases |
 | [Privacy policy](./privacy/) | All users | Local storage, third-party data flows, retention, and user controls |
 
-The [Chinese documentation](../) is authoritative. Both locales use matching page paths, and the documentation build rejects missing translations.
-
 ## Install
 
 1. Download the Chrome or Edge ZIP from [GitHub Releases](https://github.com/wangdiandao/Panelot/releases).
