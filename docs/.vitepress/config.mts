@@ -1,3 +1,5 @@
+import { resolve } from 'node:path';
+
 import { defineConfig } from 'vitepress';
 import type { DefaultTheme } from 'vitepress';
 
@@ -178,6 +180,9 @@ export default defineConfig({
   cleanUrls: true,
   lastUpdated: true,
   sitemap: { hostname: 'https://wangdiandao.github.io/Panelot/' },
+  vite: {
+    publicDir: resolve(import.meta.dirname, '../../public'),
+  },
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: '/Panelot/icon/icon.svg' }],
     ['link', { rel: 'icon', type: 'image/png', sizes: '32x32', href: '/Panelot/icon/32.png' }],
