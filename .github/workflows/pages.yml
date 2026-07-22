@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - docs/**
+      - public/icon/**
       - README.md
       - README.zh-CN.md
       - scripts/check-docs-i18n.mjs

@@ -129,6 +129,7 @@ describe('repository delivery contracts', () => {
     expect(scripts.scripts['format:check']).toContain('preview');
     expect(read('.github/workflows/ci.yml')).toContain('- run: pnpm compile');
     expect(read('.github/workflows/ci.yml')).toContain('- run: pnpm docs:build');
+    expect(read('.github/workflows/pages.yml')).toContain('- public/icon/**');
     expect(read('.github/workflows/release.yml')).toContain('- run: pnpm compile');
     expect(read('.github/workflows/release.yml')).toContain('- run: pnpm docs:build');
   });
