@@ -44,7 +44,12 @@ function isTokenCount(value: unknown): value is number {
 
 type OpenAiMessage =
   | { role: 'system' | 'user'; content: string | OpenAiContentPart[] }
-  | { role: 'assistant'; content: string | null; tool_calls?: OpenAiToolCall[] }
+  | {
+      role: 'assistant';
+      content: string | null;
+      reasoning_content?: string;
+      tool_calls?: OpenAiToolCall[];
+    }
   | { role: 'tool'; tool_call_id: string; content: string };
 
 type OpenAiContentPart =
@@ -91,6 +96,12 @@ export function toOpenAiMessages(
           role: 'assistant',
           content: m.content.length > 0 ? blocksToPlainText(m.content) : null,
         };
+        // Endpoints that emit native reasoning_content require that exact value
+        // on the next request. Inline <think> endpoints keep reasoning in their
+        // content protocol and must not receive this provider-specific field.
+        if (m.reasoning && !quirks?.thinkTagReasoning) {
+          msg.reasoning_content = m.reasoning;
+        }
         if (m.toolCalls?.length) {
           msg.tool_calls = m.toolCalls.map((c) => ({
             id: c.id,

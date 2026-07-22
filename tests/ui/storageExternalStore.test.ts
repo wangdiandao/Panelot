@@ -24,6 +24,30 @@ afterEach(() => {
 });
 
 describe('StorageExternalStore', () => {
+  it('reports hydration when a missing key resolves to the unchanged fallback', async () => {
+    vi.stubGlobal('chrome', {
+      storage: {
+        local: { get: vi.fn(async () => ({})) },
+        onChanged: {
+          addListener: vi.fn(),
+          removeListener: vi.fn(),
+        },
+      },
+    });
+
+    const store = getStorageExternalStore<null>('connections', null);
+    const listener = vi.fn();
+    const unsubscribe = store.subscribe(listener);
+
+    expect(store.getSnapshot()).toBeNull();
+    expect(store.getHydratedSnapshot()).toBe(false);
+    await vi.waitFor(() => expect(store.getHydratedSnapshot()).toBe(true));
+
+    expect(store.getSnapshot()).toBeNull();
+    expect(listener).toHaveBeenCalledOnce();
+    unsubscribe();
+  });
+
   it('does not let an older hydration read overwrite a newer storage event', async () => {
     const hydration = deferred<Record<string, unknown>>();
     let storageListener: (
@@ -51,6 +75,7 @@ describe('StorageExternalStore', () => {
       'local',
     );
     expect(store.getSnapshot()).toEqual({ theme: 'dark' });
+    expect(store.getHydratedSnapshot()).toBe(true);
 
     hydration.resolve({ global_settings: { theme: 'light' } });
     await hydration.promise;

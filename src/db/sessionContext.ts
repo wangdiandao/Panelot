@@ -25,7 +25,12 @@ import type {
 /** Provider-neutral message format consumed by the adapters (docs/development/providers.md §2). */
 export type UnifiedMessage =
   | { role: 'user'; content: ContentBlock[] }
-  | { role: 'assistant'; content: ContentBlock[]; toolCalls?: UnifiedToolCall[] }
+  | {
+      role: 'assistant';
+      content: ContentBlock[];
+      reasoning?: string;
+      toolCalls?: UnifiedToolCall[];
+    }
   | { role: 'tool_result'; toolCallId: string; content: ContentBlock[]; isError: boolean };
 
 export interface UnifiedToolCall {
@@ -116,7 +121,11 @@ function appendNodeAsMessage(
     }
     case 'assistant_message': {
       const p = node.payload as AssistantMessagePayload;
-      messages.push({ role: 'assistant', content: p.content });
+      messages.push({
+        role: 'assistant',
+        content: p.content,
+        ...(p.reasoning ? { reasoning: p.reasoning } : {}),
+      });
       break;
     }
     case 'tool_call': {

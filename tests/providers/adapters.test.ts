@@ -346,6 +346,45 @@ describe('OpenAI message conversion', () => {
     expect(out[2]).toMatchObject({ role: 'assistant', tool_calls: [{ id: 'c1' }] });
     expect(out[3]).toEqual({ role: 'tool', tool_call_id: 'c1', content: 'ok' });
   });
+
+  it('passes native reasoning_content back on follow-up requests', () => {
+    const messages: UnifiedMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+      {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'done' }],
+        reasoning: 'thinking...',
+      },
+    ];
+
+    expect(toOpenAiMessages(messages, undefined, undefined)[1]).toMatchObject({
+      role: 'assistant',
+      reasoning_content: 'thinking...',
+    });
+    expect(
+      toOpenAiMessages(messages, undefined, { thinkTagReasoning: true })[1],
+    ).not.toHaveProperty('reasoning_content');
+  });
+
+  it('explains a reasoning_content passback rejection directly', () => {
+    expect(
+      buildProviderErrorPresentation({
+        message: 'bad request',
+        kind: 'protocol',
+        details: {
+          status: 400,
+          reason: 'invalid_request',
+          upstreamCode: 'invalid_request_error',
+          upstreamMessage:
+            'The `reasoning_content` in the thinking mode must be passed back to the API.',
+        },
+      }),
+    ).toMatchObject({
+      summaryKey: 'error.reason.reasoning_passback',
+      guidanceKey: 'error.guidance.reasoning_passback',
+      opensSettings: true,
+    });
+  });
 });
 
 describe('AnthropicAdapter streaming', () => {

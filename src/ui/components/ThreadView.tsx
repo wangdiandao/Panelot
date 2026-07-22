@@ -34,6 +34,7 @@ import { t } from '../i18n';
 import { buildProviderErrorPresentation } from '../providerErrorPresentation';
 import { ProviderErrorNotice } from './ProviderErrorNotice';
 import { ProviderStopNotice } from './ProviderStopNotice';
+import { ModelRequiredBar } from './ModelRequiredBar';
 import { useThreadDraft } from '../useThreadDraft';
 import { captureSubmissionBrowserContext } from '../pageContext';
 import { useStorageValue } from '../useStorageValue';
@@ -303,6 +304,9 @@ export function ThreadView({
   const cardInteractions = state.pendingInteractions.filter(
     (interaction) => interaction.request.kind !== 'ask_user',
   );
+  const activeApproval = state.pendingApprovals[0];
+  const showOnboarding =
+    !providerConfigured && state.items.length === 0 && state.liveItems.length === 0;
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background text-foreground">
@@ -356,7 +360,7 @@ export function ThreadView({
             <Skeleton className="h-10 w-2/5 rounded-2xl" />
           </div>
         </div>
-      ) : !providerConfigured && state.items.length === 0 && state.liveItems.length === 0 ? (
+      ) : showOnboarding ? (
         <div className="min-h-0 flex-1 overflow-y-auto">
           <Onboarding
             onConfigured={() => onProviderConfigured?.()}
@@ -394,18 +398,6 @@ export function ThreadView({
         className="mx-auto w-full"
         style={contentMaxWidth ? { maxWidth: contentMaxWidth } : undefined}
       >
-        {state.pendingApprovals.length > 0 && (
-          <div className="flex min-w-0 flex-col gap-2 px-3 pb-2 sm:px-4">
-            {state.pendingApprovals.slice(0, 1).map((a, _, arr) => (
-              <ApprovalCard
-                key={a.approvalId}
-                approval={a}
-                queuePosition={{ index: 1, total: state.pendingApprovals.length || arr.length }}
-                onDecision={onDecision}
-              />
-            ))}
-          </div>
-        )}
         {cardInteractions.length > 0 && (
           <div className="flex min-w-0 flex-col gap-2 px-3 pb-2 sm:px-4">
             {cardInteractions.slice(0, 1).map((interaction) => (
@@ -428,11 +420,6 @@ export function ThreadView({
               onResolve={(resolution) => session.resolveUncertain(run.runId, resolution)}
             />
           ))}
-        {!providerConfigured && (
-          <Button variant="outline" type="button" onClick={onOpenSettings} className="mx-4 mb-2">
-            {t('input.noProvider')}
-          </Button>
-        )}
         <QueueDock
           runs={state.queuedRuns}
           paused={state.pendingApprovals.length > 0 || state.pendingInteractions.length > 0}
@@ -442,19 +429,28 @@ export function ThreadView({
           }}
           onRemove={(runId) => session.removeQueued(runId)}
         />
-        {askUserInteraction ? (
+        {activeApproval ? (
+          <ApprovalCard
+            key={activeApproval.approvalId}
+            approval={activeApproval}
+            queuePosition={{ index: 1, total: state.pendingApprovals.length }}
+            onDecision={onDecision}
+          />
+        ) : askUserInteraction ? (
           <InteractionCard
             key={askUserInteraction.interactionId}
             interaction={askUserInteraction}
             onResponse={onInteractionResponse}
           />
+        ) : !providerConfigured ? (
+          showOnboarding ? null : (
+            <ModelRequiredBar onOpenSettings={onOpenSettings} />
+          )
         ) : (
           <PromptInput
             running={state.activeTurn !== null}
             steerable={state.activeTurn?.steerable ?? false}
-            disabled={
-              state.reloadRequired || !providerConfigured || state.pendingInteractions.length > 0
-            }
+            disabled={state.reloadRequired || state.pendingInteractions.length > 0}
             disabledHint={state.reloadRequired ? t('input.reloadRequired') : undefined}
             contextChips={stagedContext}
             submissionThreadId={state.threadId}

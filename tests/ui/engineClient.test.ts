@@ -139,6 +139,31 @@ describe('EngineSession lifecycle', () => {
     session.stop();
   });
 
+  it('attaches the current permission policy to explicit and automatic queued messages', () => {
+    const transport = new FakeTransport();
+    const session = new EngineSession(() => transport);
+    session.start();
+    try {
+      session.store.setState({
+        threadId: 'thread-a',
+        activeTurn: { turnId: 'turn-a', steerable: false },
+      });
+      session.setOverrides({ permissionPolicy: 'auto' });
+      transport.sent.length = 0;
+
+      expect(session.submit({ text: 'automatic queue' })).toBe(true);
+      expect(session.enqueue({ text: 'explicit queue' })).toBe(true);
+
+      const queued = transport.sent.filter(
+        (op): op is Extract<Op, { type: 'turn.enqueue' }> => op.type === 'turn.enqueue',
+      );
+      expect(queued).toHaveLength(2);
+      expect(queued.map((op) => op.overrides?.permissionPolicy)).toEqual(['auto', 'auto']);
+    } finally {
+      session.stop();
+    }
+  });
+
   it('rejects a stale cross-thread snapshot and non-increasing stream cursor', () => {
     const transport = new FakeTransport();
     const session = new EngineSession(() => transport);

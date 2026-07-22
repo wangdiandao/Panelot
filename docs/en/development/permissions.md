@@ -18,6 +18,8 @@ Panelot does not use a site allowlist. Outside `always`, a sensitive-origin entr
 
 Remote MCP annotations are informational. Without a trusted-server configuration, every MCP Tool registers as a write with `never-retry` and follows write approval rules.
 
+Every submitted or queued message carries the permission policy selected in the composer at submission time. When a queued message starts its Turn, the engine synchronizes that policy to Gatekeeper again. Gatekeeper reads the current Thread configuration before every tool dispatch and performs the final authorization check there.
+
 ## 2. Gatekeeper order
 
 Every browser, MCP, and applicable built-in tool calls `gatekeeper.check()`:

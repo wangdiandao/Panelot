@@ -33,7 +33,8 @@ import { useTheme } from '../../src/ui/useTheme';
 import { t, useLanguage } from '../../src/ui/i18n';
 import { attachCurrentPage, getActiveTab } from '../../src/ui/pageContext';
 import type { Connection } from '../../src/providers/types';
-import { useStorageValue } from '../../src/ui/useStorageValue';
+import { useStorageValueState } from '../../src/ui/useStorageValue';
+import { resolveProviderConfigurationState } from '../../src/ui/providerConfiguration';
 import { PanelotDB } from '../../src/db/schema';
 import type { ThreadMeta } from '../../src/db/types';
 import { cn } from '../../src/ui/lib/utils';
@@ -54,14 +55,11 @@ export function App() {
   useTheme();
   const session = useMemo(() => new EngineSession(), []);
   const state = useEngineState(session);
-  const storedConnections = useStorageValue<Connection[] | null>('connections', null);
+  const { value: storedConnections, hydrated: connectionsHydrated } = useStorageValueState<
+    Connection[] | null
+  >('connections', null);
   const providerConfigured =
-    storedConnections === null ||
-    storedConnections.some(
-      (connection) =>
-        connection.enabled &&
-        (connection.apiKeys.length > 0 || connection.baseUrl.includes('localhost')),
-    );
+    resolveProviderConfigurationState(storedConnections, connectionsHydrated) !== 'missing';
   const [threads, setThreads] = useState<ThreadMeta[]>([]);
   const [staged, setStaged] = useState<ContextBlock[]>([]);
   const [currentPage, setCurrentPage] = useState<{ title: string; url?: string } | null>(null);

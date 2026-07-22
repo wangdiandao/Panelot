@@ -60,6 +60,12 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   },
   'input.running': { 'zh-CN': '输入以插话，Esc 停止…', en: 'Type to steer, Esc to stop…' },
   'input.noProvider': { 'zh-CN': '先在设置中添加模型 →', en: 'Add a model in settings first →' },
+  'input.modelRequired': { 'zh-CN': '需要先添加模型', en: 'Add a model to continue' },
+  'input.modelRequiredHint': {
+    'zh-CN': '添加并选择可用模型后才能继续对话',
+    en: 'Connect and select an available model before chatting',
+  },
+  'input.addModel': { 'zh-CN': '添加模型', en: 'Add model' },
   'input.send': { 'zh-CN': '发送', en: 'Send' },
   'input.stop': { 'zh-CN': '停止', en: 'Stop' },
   'input.hintIdle': {
@@ -126,6 +132,8 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   'approval.allowOnce': { 'zh-CN': '允许一次', en: 'Allow once' },
   'approval.allowSession': { 'zh-CN': '本次会话', en: 'This chat' },
   'approval.allowSite': { 'zh-CN': '本站始终', en: 'Always on this site' },
+  'approval.moreAccess': { 'zh-CN': '更多允许方式', en: 'More options' },
+  'approval.details': { 'zh-CN': '查看操作详情', en: 'Review details' },
   'interaction.question': { 'zh-CN': '需要你的回答', en: 'Your input is needed' },
   'interaction.userAction': { 'zh-CN': '请接管此步骤', en: 'Take over this step' },
   'interaction.watchPage': { 'zh-CN': '正在等待页面变化', en: 'Waiting for a page change' },
@@ -244,6 +252,10 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
     'zh-CN': '上游拒绝了请求参数',
     en: 'Upstream rejected the request',
   },
+  'error.reason.reasoning_passback': {
+    'zh-CN': '上游要求回传思考内容',
+    en: 'Upstream requires reasoning to be returned',
+  },
   'error.reason.upstream_error': { 'zh-CN': '上游服务发生错误', en: 'Upstream service error' },
   'error.reason.response_format': {
     'zh-CN': '上游响应格式不兼容',
@@ -272,6 +284,11 @@ const STRINGS: Record<string, { 'zh-CN': string; en: string }> = {
   'error.guidance.invalid_request': {
     'zh-CN': '检查模型能力、兼容性开关和请求参数。',
     en: 'Check model capabilities, compatibility switches, and request parameters.',
+  },
+  'error.guidance.reasoning_passback': {
+    'zh-CN':
+      'Panelot 会在后续请求中回传 reasoning_content。请重试；若仍失败，确认端点和模型使用相同的思考模式。',
+    en: 'Panelot returns reasoning_content on follow-up requests. Retry; if it still fails, confirm that the endpoint and model use the same reasoning mode.',
   },
   'error.guidance.upstream_error': {
     'zh-CN': '稍后重试；若持续失败，请查看上游服务状态。',

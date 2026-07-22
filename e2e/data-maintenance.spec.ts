@@ -206,7 +206,7 @@ test('data import cancels cleanly, rechecks TOCTOU blockers, and reconciles afte
 
     const recoveredPage = await openDataPage(context, extensionId);
     await expect(
-      recoveredPage.getByText('A committed import was detected and recovery cleanup completed.', {
+      recoveredPage.getByText('A committed import was detected. Recovery cleanup is complete.', {
         exact: true,
       }),
     ).toBeVisible();

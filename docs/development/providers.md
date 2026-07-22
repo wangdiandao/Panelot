@@ -131,7 +131,9 @@ Anthropic 的 `model_context_window_exceeded` 映射为 `max_tokens`，表示响
 - SSE 分帧：按 `\n\n` 切事件，`data: [DONE]` 结束；**必须容忍**一帧内多 data 行、跨 chunk 断行（手写缓冲式解析器，状态机：`buffer → 完整行 → 完整事件`）。
 - tool_calls 增量：`choices[0].delta.tool_calls[i]` 按 `index` 聚合，`function.arguments` 字符串拼接，流结束后 `JSON.parse`；解析失败 → 该 call 以参数错误回给模型自纠，详见[Agent 引擎](./agent-engine.md) §4。
 - usage：请求带 `stream_options: {include_usage: true}`（quirk 开关，部分中转不支持）。
-- reasoning：兼容 `delta.reasoning_content`（DeepSeek 等）与 `<think>` 标签内联两种形态（quirk）。
+- reasoning：兼容 `delta.reasoning_content`（DeepSeek 等）与 `<think>` 标签内联两种形态（quirk）。原生
+  `reasoning_content` 会随 assistant 历史持久化，并在工具调用后的后续请求中原样回传；启用
+  `thinkTagReasoning` 时不发送该字段，避免把内联标签协议误当成原生字段。
 
 ### 3.2 AnthropicAdapter（`POST {baseUrl}/v1/messages`）
 

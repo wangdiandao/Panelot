@@ -1,16 +1,36 @@
 ---
+layout: home
 title: Panelot
 description: Use your own model provider for chats and browser tasks in Chrome and Edge
 outline: [2, 3]
+hero:
+  name: Panelot
+  text: Bring your own model into the browser
+  tagline: Chat in the side panel or a full page, then let the agent handle web tasks within clear permission and approval boundaries.
+  image:
+    src: /icon/icon.svg
+    alt: Panelot
+  actions:
+    - theme: brand
+      text: Get started
+      link: /en/guide/getting-started
+    - theme: alt
+      text: Read the development docs
+      link: /en/development/
+features:
+  - title: Use your own model service
+    details: Connect an OpenAI-compatible or Anthropic endpoint while keeping control of its keys and settings.
+  - title: Work directly with web pages
+    details: Reference pages, text, and files, then read, click, type, or download in the browser.
+  - title: See the boundary before an action
+    details: Permission mode, sensitive-site rules, and per-action approval determine what can run.
 ---
-
-# Panelot
 
 Panelot is an AI agent extension for Chrome and Edge. You can connect an OpenAI-compatible or Anthropic service, chat in the side panel or full-page interface, and add web pages, text, or files to a task. Browser actions pass through permission policies and approval rules.
 
 Panelot does not provide accounts, cloud sync, or a model proxy. Conversations, settings, approvals, Skills, Plugins, memories, and attachments stay in the current browser profile. Model requests go directly to the provider you configure. When MCP is enabled, tool arguments and relevant results are exchanged with the selected remote server.
 
-## Choose a section
+## Start here
 
 | Section | Audience | Contents |
 | --- | --- | --- |

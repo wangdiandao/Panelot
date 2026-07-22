@@ -1,16 +1,36 @@
 ---
+layout: home
 title: Panelot
 description: 在 Chrome 和 Edge 中使用自己的模型服务完成对话与浏览器任务
 outline: [2, 3]
+hero:
+  name: Panelot
+  text: 把自己的模型接入浏览器
+  tagline: 在侧边栏或全页界面中对话，让 Agent 在清晰的权限和审批边界内完成网页任务。
+  image:
+    src: /icon/icon.svg
+    alt: Panelot
+  actions:
+    - theme: brand
+      text: 开始使用
+      link: /guide/getting-started
+    - theme: alt
+      text: 查看开发文档
+      link: /development/
+features:
+  - title: 自带模型服务
+    details: 连接 OpenAI 兼容或 Anthropic 接口，Key 和端点由你管理。
+  - title: 直接处理网页任务
+    details: 引用页面、文本和文件，在浏览器中读取、点击、输入或下载。
+  - title: 操作前边界清楚
+    details: 权限模式、敏感站点规则和逐次审批共同决定操作能否执行。
 ---
-
-# Panelot
 
 Panelot 是运行在 Chrome 和 Edge 中的 AI Agent 扩展。你可以连接自己的 OpenAI 兼容或 Anthropic 服务，在侧边栏或全页界面中对话，并把网页、文本和文件作为任务上下文。浏览器操作会经过权限策略和审批规则。
 
 Panelot 不提供账户、云同步或自有模型代理。会话、设置、审批、Skills、Plugins、记忆和附件保存在当前浏览器配置文件中。模型请求直接发送到你配置的 Provider；启用 MCP 后，工具参数和相关结果会与对应的远端服务器交换。
 
-## 选择文档
+## 从这里开始
 
 | 入口 | 适合谁 | 内容 |
 | --- | --- | --- |

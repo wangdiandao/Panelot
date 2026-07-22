@@ -5,6 +5,7 @@ type Listener = () => void;
 
 export class StorageExternalStore<T> {
   private snapshot: T;
+  private hydrated = false;
   private readonly listeners = new Set<Listener>();
   private stopStorageListener: (() => void) | null = null;
   private lifecycle = 0;
@@ -19,6 +20,8 @@ export class StorageExternalStore<T> {
 
   getSnapshot = (): T => this.snapshot;
 
+  getHydratedSnapshot = (): boolean => this.hydrated;
+
   subscribe = (listener: Listener): (() => void) => {
     this.listeners.add(listener);
     if (this.listeners.size === 1) this.start();
@@ -30,6 +33,7 @@ export class StorageExternalStore<T> {
 
   private publish(value: T): void {
     this.snapshot = value;
+    this.hydrated = true;
     for (const listener of this.listeners) listener();
   }
 
@@ -71,6 +75,17 @@ export function getStorageExternalStore<T>(key: string, fallback: T): StorageExt
 export function useStorageValue<T>(key: string, fallback: T): T {
   const store = getStorageExternalStore(key, fallback);
   return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+}
+
+export function useStorageValueState<T>(key: string, fallback: T): { value: T; hydrated: boolean } {
+  const store = getStorageExternalStore(key, fallback);
+  const value = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+  const hydrated = useSyncExternalStore(
+    store.subscribe,
+    store.getHydratedSnapshot,
+    store.getHydratedSnapshot,
+  );
+  return { value, hydrated };
 }
 
 export function resetStorageExternalStoresForTests(): void {

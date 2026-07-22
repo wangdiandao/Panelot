@@ -113,6 +113,21 @@ const PRESENTATION_BY_APP_KIND: Record<string, PresentationPolicy> = {
   },
 };
 
+const REASONING_PASSBACK_POLICY: PresentationPolicy = {
+  summaryKey: 'error.reason.reasoning_passback',
+  guidanceKey: 'error.guidance.reasoning_passback',
+  opensSettings: true,
+};
+
+function isReasoningPassbackError(details?: ProviderErrorDetails): boolean {
+  if (!details) return false;
+  const upstream = [details.upstreamCode, details.upstreamMessage, details.raw]
+    .filter((part): part is string => Boolean(part))
+    .join(' ')
+    .toLowerCase();
+  return upstream.includes('reasoning_content') && /pass(?:ed)? back|return/.test(upstream);
+}
+
 function findOwnPolicy<Key extends string>(
   policies: Record<Key, PresentationPolicy>,
   key: string | undefined,
@@ -139,7 +154,9 @@ export function buildProviderErrorPresentation(
   const reasonPolicy = findOwnPolicy(PRESENTATION_BY_REASON, input.details?.reason);
   const appKindPolicy = findOwnPolicy(PRESENTATION_BY_APP_KIND, input.kind);
   const kindPolicy = findOwnPolicy(PRESENTATION_BY_KIND, input.kind);
-  const policy = reasonPolicy ?? appKindPolicy ?? kindPolicy;
+  const policy = isReasoningPassbackError(input.details)
+    ? REASONING_PASSBACK_POLICY
+    : (reasonPolicy ?? appKindPolicy ?? kindPolicy);
   const detail = detailFrom(input.details);
 
   if (!policy) {

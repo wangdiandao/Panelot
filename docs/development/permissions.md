@@ -25,7 +25,7 @@ type PermissionPolicy =
 
 当前没有远程 MCP 服务器可信配置。MCP 服务器提供的 `readOnlyHint` 等 annotation 只作展示，所有远程 MCP 工具都以 `effects:'write'` 和 `never-retry` 注册；因此它们按写工具进入本节策略，不能靠服务器自报 annotation 获得读工具免审批待遇。
 
-`RealEngineCore.startTurn()` 在解析 Provider、Preset 和单轮 override 后，把实际 `permissionPolicy` 同步给 Gatekeeper，并写入 `ResolvedRunEnvironment`。
+`RealEngineCore.startTurn()` 在解析 Provider、Preset 和单轮 override 后，把实际 `permissionPolicy` 同步给 Gatekeeper，并写入 `ResolvedRunEnvironment`。输入框每次提交或排队新消息时都会附带当时选择的策略；排队消息启动为新 Turn 后再次同步。Gatekeeper 在每次工具派发前读取该 Thread 的当前配置并完成最终复验，不沿用新建会话时的一次性判断。
 
 三种模式的枚举定义在 `src/messaging/protocol.ts`；本文解释裁决顺序，UI 只提供对应文案。
 

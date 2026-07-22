@@ -38,7 +38,7 @@ Panelot stores the last selected valid Thread. On reopen it verifies that the Th
 
 ### 3.3 Onboarding
 
-Onboarding selects a connection template and API key, runs inline verification, selects a default permission mode, and presents a page-summary task. It can be skipped. Without a provider, using the composer opens model settings.
+Onboarding selects a connection template and API key, runs inline verification, selects a default permission mode, and presents a page-summary task. It can be skipped. Without a usable model connection, an empty chat keeps showing onboarding. Existing history remains readable, but an Add model action replaces the composer.
 
 ### 3.4 Settings
 
@@ -60,7 +60,7 @@ Reasoning, tools, intermediate text, and the final response remain in one assist
 
 ### 4.3 Approval cards
 
-Approval cards take focus above the composer. `Y`, `S`, `A`, and `N` mean allow once, browser session, always on site, and deny. `Esc` denies and stops. Several approvals show a queue position. A five-minute timeout closes as denied. Sensitive-payload and L2 flags show warnings.
+An approval action bar replaces the composer and takes focus. It keeps the target, risk summary, and primary decisions compact, while full parameters expand on demand. `Y`, `S`, `A`, and `N` mean allow once, browser session, always on site, and deny. `Esc` denies and stops. Several approvals show a queue position. A five-minute timeout closes as denied.
 
 ### 4.4 User questions
 

@@ -29,7 +29,8 @@ import { useTheme } from '../../src/ui/useTheme';
 import { t, useLanguage } from '../../src/ui/i18n';
 import { SettingsStore, type GlobalSettings } from '../../src/settings/store';
 import type { Connection } from '../../src/providers/types';
-import { useStorageValue } from '../../src/ui/useStorageValue';
+import { useStorageValue, useStorageValueState } from '../../src/ui/useStorageValue';
+import { resolveProviderConfigurationState } from '../../src/ui/providerConfiguration';
 import { SIDEBAR_DEFAULT, STREAM_MAX_W, clampSidebarWidth } from '../../src/ui/layoutTokens';
 import { PanelotDB } from '../../src/db/schema';
 import { ThreadTree } from '../../src/db/tree';
@@ -50,15 +51,12 @@ export function App() {
   useTheme();
   const session = useMemo(() => new EngineSession(), []);
   const state = useEngineState(session);
-  const storedConnections = useStorageValue<Connection[] | null>('connections', null);
+  const { value: storedConnections, hydrated: connectionsHydrated } = useStorageValueState<
+    Connection[] | null
+  >('connections', null);
   const globalSettings = useStorageValue<GlobalSettings | null>('global_settings', null);
   const providerConfigured =
-    storedConnections === null ||
-    storedConnections.some(
-      (connection) =>
-        connection.enabled &&
-        (connection.apiKeys.length > 0 || connection.baseUrl.includes('localhost')),
-    );
+    resolveProviderConfigurationState(storedConnections, connectionsHydrated) !== 'missing';
   const [threads, setThreads] = useState<ThreadMeta[]>([]);
   const [staged, setStaged] = useState<ContextBlock[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);

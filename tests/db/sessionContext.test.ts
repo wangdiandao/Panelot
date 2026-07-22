@@ -42,6 +42,21 @@ describe('buildSessionContext basics', () => {
     expect(ctx.turnContext?.turnId).toBe('turn1');
   });
 
+  it('preserves assistant reasoning for compatible follow-up requests', async () => {
+    const t = await tree.createThread({});
+    await tree.appendNode(t.id, { type: 'user_message', payload: msg('solve this') });
+    const leaf = await tree.appendNode(t.id, {
+      type: 'assistant_message',
+      payload: { ...assistant('answer'), reasoning: 'internal reasoning' },
+    });
+
+    const ctx = await buildSessionContext(tree, t.id, leaf.id);
+    expect(ctx.messages[1]).toMatchObject({
+      role: 'assistant',
+      reasoning: 'internal reasoning',
+    });
+  });
+
   it('attaches tool calls to the preceding assistant message and pairs results', async () => {
     const t = await tree.createThread({});
     await tree.appendNode(t.id, { type: 'user_message', payload: msg('click it') });

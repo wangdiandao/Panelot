@@ -60,7 +60,7 @@ afterEach(async () => {
 });
 
 describe('ApprovalCard', () => {
-  it('uses a named non-modal region with associated risks and complete params', () => {
+  it('uses a named compact region and keeps full parameters behind details', () => {
     const html = renderToStaticMarkup(
       createElement(ApprovalCard, {
         approval,
@@ -73,18 +73,32 @@ describe('ApprovalCard', () => {
     expect(html).not.toContain('role="alertdialog"');
     expect(html).toContain('aria-labelledby=');
     expect(html).toContain('aria-describedby=');
-    expect(html).not.toContain('<pre aria-label=');
-    expect(html).toMatch(/aria-describedby="[^"]*-params-label [^"]*-params"/);
-    expect(html).toContain('>Parameters</div>');
-    expect(html).toContain('&quot;ref&quot;: &quot;s4_17&quot;');
-    expect(html).toContain('&quot;confirmation&quot;: &quot;full-value&quot;');
-    expect(html).toContain('grid-cols-2');
-    expect(html).toContain('sm:grid-cols-4');
+    expect(html).toContain('Review details');
+    expect(html).toContain('More options');
     expect(html.match(/<button/g)).toHaveLength(4);
-    for (const shortcut of ['Y', 'S', 'A', 'N']) expect(html).toContain(`>${shortcut}</kbd>`);
+    for (const shortcut of ['Y', 'N']) expect(html).toContain(`>${shortcut}</kbd>`);
   });
 
-  it('keeps every button clickable and preserves Y/S/A/N keyboard decisions', async () => {
+  it('promotes a human-readable operation target without expanding raw parameters', () => {
+    const html = renderToStaticMarkup(
+      createElement(ApprovalCard, {
+        approval: {
+          ...approval,
+          request: {
+            ...approval.request,
+            preview: undefined,
+            params: { tabId: 4, element: 'Complete local task button', ref: 's1_2' },
+          },
+        },
+        onDecision: vi.fn(),
+      }),
+    );
+
+    expect(html).toContain('Complete local task button');
+    expect(html).not.toContain('&quot;tabId&quot;');
+  });
+
+  it('reveals complete parameters and preserves Y/S/A/N keyboard decisions', async () => {
     const onDecision = vi.fn();
     await act(async () => root.render(createElement(ApprovalCard, { approval, onDecision })));
     const region = container.querySelector<HTMLElement>('[role="region"]')!;
@@ -103,10 +117,19 @@ describe('ApprovalCard', () => {
     ]);
 
     onDecision.mockClear();
-    for (const button of container.querySelectorAll('button')) {
-      await act(async () => button.dispatchEvent(new MouseEvent('click', { bubbles: true })));
-    }
-    expect(onDecision).toHaveBeenCalledTimes(4);
+    const details = [...container.querySelectorAll('button')].find((button) =>
+      button.textContent?.includes('Review details'),
+    )!;
+    await act(async () => details.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(container.textContent).toContain('Parameters');
+    expect(container.textContent).toContain('s4_17');
+    expect(container.textContent).toContain('full-value');
+
+    const allowOnce = [...container.querySelectorAll('button')].find((button) =>
+      button.textContent?.includes('Allow once'),
+    )!;
+    await act(async () => allowOnce.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(onDecision).toHaveBeenCalledWith('approval-1', { kind: 'accept' });
   });
 });
 

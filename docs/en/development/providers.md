@@ -40,7 +40,7 @@ A stream succeeds only after its protocol terminates completely. OpenAI requires
 
 Panelot posts to `{baseUrl}/chat/completions`, parses SSE across chunk and line boundaries, groups partial `tool_calls` by index, and parses accumulated argument JSON at completion. Invalid arguments return a tool error to the model for correction.
 
-Usage normally uses `stream_options.include_usage`. Compatibility flags can disable it, read reasoning from `<think>` tags or `reasoning_content`, force one tool call, omit the system role, or choose the maximum-token field.
+Usage normally uses `stream_options.include_usage`. Compatibility flags can disable it, read reasoning from `<think>` tags or `reasoning_content`, force one tool call, omit the system role, or choose the maximum-token field. Native `reasoning_content` is persisted with assistant history and returned unchanged on follow-up requests after tool calls. The `thinkTagReasoning` mode does not send that native field.
 
 ### 3.2 Anthropic
 

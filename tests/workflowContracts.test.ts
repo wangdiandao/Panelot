@@ -125,7 +125,7 @@ describe('repository delivery contracts', () => {
     expect(scripts.scripts.compile).toContain('tsconfig.entrypoints.json');
     expect(scripts.scripts.compile).toContain('tsconfig.e2e.json');
     expect(scripts.scripts.compile).toContain('tsconfig.preview.json');
-    expect(scripts.scripts['docs:build']).toBe('vitepress build docs');
+    expect(scripts.scripts['docs:build']).toBe('pnpm docs:i18n:check && vitepress build docs');
     expect(scripts.scripts['format:check']).toContain('preview');
     expect(read('.github/workflows/ci.yml')).toContain('- run: pnpm compile');
     expect(read('.github/workflows/ci.yml')).toContain('- run: pnpm docs:build');

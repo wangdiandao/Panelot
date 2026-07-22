@@ -4,6 +4,8 @@ import type { DefaultTheme } from 'vitepress';
 const githubUrl = 'https://github.com/wangdiandao/Panelot';
 
 const chineseTheme: DefaultTheme.Config = {
+  logo: { src: '/icon/icon.svg', alt: 'Panelot' },
+  siteTitle: 'Panelot',
   nav: [
     { text: '首页', link: '/' },
     { text: '使用文档', link: '/guide/' },
@@ -93,6 +95,8 @@ const chineseTheme: DefaultTheme.Config = {
 };
 
 const englishTheme: DefaultTheme.Config = {
+  logo: { src: '/icon/icon.svg', alt: 'Panelot' },
+  siteTitle: 'Panelot',
   nav: [
     { text: 'Home', link: '/en/' },
     { text: 'User guide', link: '/en/guide/' },
@@ -175,8 +179,12 @@ export default defineConfig({
   lastUpdated: true,
   sitemap: { hostname: 'https://wangdiandao.github.io/Panelot/' },
   head: [
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/Panelot/icon/icon.svg' }],
+    ['link', { rel: 'icon', type: 'image/png', sizes: '32x32', href: '/Panelot/icon/32.png' }],
+    ['link', { rel: 'apple-touch-icon', href: '/Panelot/icon/128.png' }],
     ['meta', { name: 'theme-color', content: '#5b5bd6' }],
     ['meta', { name: 'color-scheme', content: 'light dark' }],
+    ['meta', { name: 'apple-mobile-web-app-title', content: 'Panelot' }],
   ],
   locales: {
     root: {

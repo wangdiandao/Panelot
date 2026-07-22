@@ -4,6 +4,8 @@ All notable changes to Panelot are documented here.
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-07-22
+
 ### Added
 
 - Added a VitePress documentation site for user guides, development references, and the privacy
@@ -13,12 +15,24 @@ All notable changes to Panelot are documented here.
 
 ### Changed
 
+- Refined the VitePress theme, added the Panelot icon to browser tabs and site navigation, and
+  introduced a branded bilingual documentation home page.
+- Replaced the composer with a compact approval action bar while a tool decision is pending, and
+  replaced disabled chat controls with a direct model-setup action when no model connection is
+  available.
 - Reorganized engineering documentation under stable semantic paths and clarified that
   user-uploaded file bytes are sent only to an approved target website, not as ordinary model
   attachments.
 - Replaced the documentation root privacy page with a product and documentation README, split the
   privacy policy into Chinese and English routes, and linked both repository READMEs to the user
   and development documentation.
+
+### Fixed
+
+- Preserved `reasoning_content` across OpenAI-compatible follow-up requests, including tool-use
+  loops that require the previous thinking payload to be returned.
+- Applied the current composer permission policy to queued messages as well as immediate turns.
+- Restored onboarding for fresh browser profiles whose local storage has no Provider connections.
 
 ## [0.4.4] - 2026-07-21
 
@@ -201,7 +215,8 @@ All notable changes to Panelot are documented here.
 - Plugin archives reject traversal, symlinks, executable payloads, and archive bombs.
 - Provider error details are sanitized before display or persistence.
 
-[Unreleased]: https://github.com/wangdiandao/Panelot/compare/v0.4.4...HEAD
+[Unreleased]: https://github.com/wangdiandao/Panelot/compare/v0.4.5...HEAD
+[0.4.5]: https://github.com/wangdiandao/Panelot/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/wangdiandao/Panelot/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/wangdiandao/Panelot/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/wangdiandao/Panelot/compare/v0.4.1...v0.4.2

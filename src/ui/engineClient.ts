@@ -484,7 +484,15 @@ export class EngineSession {
           this.send({ type: 'turn.steer', threadId, expectedTurnId: activeTurn.turnId, input }),
         );
       } else {
-        track(this.send({ type: 'turn.enqueue', threadId, input }));
+        const hasOverrides = Object.values(pendingOverrides).some((v) => v !== undefined);
+        track(
+          this.send({
+            type: 'turn.enqueue',
+            threadId,
+            input,
+            ...(hasOverrides ? { overrides: pendingOverrides } : {}),
+          }),
+        );
       }
       return true;
     }
@@ -559,13 +567,19 @@ export class EngineSession {
   }
 
   enqueue(input: UserInput, opts?: { expectedThreadId?: string | null }): boolean {
-    const { threadId } = this.store.getState();
+    const { threadId, pendingOverrides } = this.store.getState();
     if (opts && 'expectedThreadId' in opts && threadId !== opts.expectedThreadId) return false;
     if (!threadId) return false;
     const echoId = this.echoUser(input);
     // Local text echo for the queue dock (protocol carries only a count).
     this.store.setState((s) => ({ queuedTexts: [...s.queuedTexts, input.text] }));
-    const submissionId = this.send({ type: 'turn.enqueue', threadId, input });
+    const hasOverrides = Object.values(pendingOverrides).some((v) => v !== undefined);
+    const submissionId = this.send({
+      type: 'turn.enqueue',
+      threadId,
+      input,
+      ...(hasOverrides ? { overrides: pendingOverrides } : {}),
+    });
     if (echoId) this.echoOps.set(submissionId, echoId);
     return true;
   }
